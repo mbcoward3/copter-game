@@ -458,7 +458,7 @@ function canvasTex(w, h, draw) {
 // ================================================================= build
 export function createWorld(scene, renderer) {
   const rnd = mulberry(20260910);
-  const world = { time: 0, preset: PRESETS[0], nightMats: [], spawn: { sea: [], islets: ISLETS } };
+  const world = { time: 0, preset: PRESETS[0], nightMats: [], spawn: { sea: [], stacks: [], islets: ISLETS } };
   const noiseTex = noiseTexture();
 
   // ---------- sky dome
@@ -602,8 +602,11 @@ export function createWorld(scene, renderer) {
   place('World_Crates', 24, -17, { y: BASE_Y, yaw: -0.3 });
   place('World_Table', -27, 0, { y: BASE_Y, yaw: 0.2 });
   place('World_Jetty', 0, 36, { y: 0.35, scale: 1.2 });
-  place('World_Beach', 20, 43, { yaw: 0.4 });
-  keepOut.push({ x: STATION.x, z: STATION.z, r: 25 }, { x: 0, z: -6.5, r: 16 }, { x: 0, z: 40, r: 9 }, { x: 0, z: 52, r: 9 }, { x: 20, z: 43, r: 7 }, { x: 0, z: 8, r: 34 });
+  // sunshades and towels on the dry sand east of the jetty, wherever the beach turns out to be
+  let beachZ = 30;
+  while (beachZ < 60 && terrainHeight(20, beachZ + 5) > 1.5) beachZ++;
+  place('World_Beach', 20, beachZ, { yaw: 0.4 });
+  keepOut.push({ x: STATION.x, z: STATION.z, r: 25 }, { x: 0, z: -6.5, r: 16 }, { x: 0, z: 40, r: 9 }, { x: 0, z: 52, r: 9 }, { x: 20, z: beachZ, r: 7 }, { x: 0, z: 8, r: 34 });
   world.paddock = { x: 0, z: -3, r: 9 };
   const beaconMat = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff1133, emissiveIntensity: 0 });
   const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), beaconMat);
@@ -689,6 +692,9 @@ export function createWorld(scene, renderer) {
     dm.position.set(x, y - 1, z); dm.rotation.set(0, rnd() * 6.283, 0); dm.scale.set(s, s * (1.6 + rnd() * 1.4), s); dm.updateMatrix();
     rocks[pick(ROCKS)].push(dm.matrix.clone());
     OBSTACLES.push({ x, z, r: s * 1.8, top: y + s * 6 });
+    // (and a place just to seaward of it where a raft can fetch up)
+    const out = s * 1.8 + 11, sx2 = x + Math.cos(a) * out, sz2 = z + Math.sin(a) * out;
+    if (terrainHeight(sx2, sz2) < -3) world.spawn.stacks.push({ x: sx2, z: sz2 });
   }
   const lodded = [];
   let plantCount = 0;
@@ -783,6 +789,23 @@ export function createWorld(scene, renderer) {
     renderer.toneMappingExposure = p.exposure;
   };
 
+  // how hard it is blowing, 0 to 1: cloud closes in and darkens, the light flattens, the haze thickens, the sea greys
+  const grey = new THREE.Color(), tmpC = new THREE.Color();
+  const dull = (out, c, w, dim) => { const l = c.r * 0.3 + c.g * 0.5 + c.b * 0.2; return out.copy(c).lerp(grey.setRGB(l, l, l * 1.06), w * 0.75).multiplyScalar(1 - dim * w); };
+  world.blow = function (w) {
+    const p = world.preset, u = waterUniforms;
+    skyUniforms.uCloud.value = Math.min(0.98, p.cloud + w * 0.6);
+    dull(skyUniforms.uCloudLit.value, p.cloudLit, w, 0.5); dull(skyUniforms.uCloudDark.value, p.cloudDark, w, 0.45);
+    dull(skyUniforms.uZenith.value, p.zenith, w, 0.3); dull(skyUniforms.uHorizon.value, p.horizon, w, 0.25);
+    u.uZenith.value.copy(skyUniforms.uZenith.value); u.uHorizon.value.copy(skyUniforms.uHorizon.value);
+    dull(u.uDeep.value, p.deep, w * 0.6, 0.15); dull(u.uShallow.value, p.shallow, w * 0.5, 0.25);
+    dull(scene.fog.color, p.fog, w, 0.25); u.uFogColor.value.copy(scene.fog.color);
+    scene.fog.density = u.uFogDensity.value = p.fogDensity * (1 + 1.5 * w);
+    sun.intensity = p.sunLight * (1 - 0.6 * w); u.uSpec.value = p.spec * (1 - 0.7 * w);
+    hemi.intensity = p.hemi * (1 + 0.5 * w); scene.environmentIntensity = p.env * (1 - 0.3 * w);
+    gustUniform.value = 0.7 + 3.3 * w;
+  };
+
   world.update = function (dt, t) {
     world.time = t;
     waterUniforms.uTime.value = t; waterUniforms.uSwell.value = sea.swell; skyUniforms.uTime.value = t;
@@ -804,7 +827,7 @@ export function createWorld(scene, renderer) {
 // ---------------------------------------------------------------- leaves and bark for the plants
 // Leaves are lit from both sides as if they faced out of the crown (see geo() in assets.js), let a little sun through,
 // and stir in the wind; the higher up the plant, the more it moves.
-const windUniform = { value: 0 };
+const windUniform = { value: 0 }, gustUniform = { value: 1 };
 const foliageCache = new Map();
 // a spray of leaves on a twig, painted once and worn by every card of the broad-leaved trees (see CARDS in tools/pack_models.py)
 let sprayTex;
@@ -842,9 +865,9 @@ function foliage(name, cards) {
   const mat = new THREE.MeshStandardMaterial({ color: base.color.clone().multiplyScalar(cards ? 2.1 : 0.85), roughness: 0.8, side: THREE.DoubleSide, envMapIntensity: 0.35 });
   if (cards) { mat.map = leafSpray(); mat.alphaTest = 0.42; mat.alphaToCoverage = true; }
   mat.onBeforeCompile = sh => {
-    sh.uniforms.uWind = windUniform;
+    sh.uniforms.uWind = windUniform; sh.uniforms.uGust = gustUniform;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uWind; varying float vHigh;')
+      .replace('#include <common>', '#include <common>\nuniform float uWind, uGust; varying float vHigh;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         #ifdef USE_INSTANCING
           vec3 root = instanceMatrix[3].xyz;
@@ -853,8 +876,8 @@ function foliage(name, cards) {
         #endif
         float lift = max(position.y - 1.5, 0.0);
         float gust = sin(uWind * 1.3 + root.x * 0.11 + root.z * 0.07) + 0.5 * sin(uWind * 2.9 + root.x * 0.31 + position.y);
-        transformed.x += gust * lift * 0.022; transformed.z += gust * lift * 0.014;
-        transformed.y += sin(uWind * 3.7 + position.x * 2.1 + position.z * 1.7 + root.x) * 0.03 * min(lift, 2.0);
+        transformed.x += (gust + uGust * 0.6) * lift * 0.022 * uGust; transformed.z += (gust + uGust * 0.4) * lift * 0.014 * uGust;
+        transformed.y += sin(uWind * (3.7 + uGust) + position.x * 2.1 + position.z * 1.7 + root.x) * 0.03 * uGust * min(lift, 2.0);
         vHigh = clamp(position.y / 9.0, 0.0, 1.0);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying float vHigh;')

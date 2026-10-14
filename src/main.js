@@ -4,7 +4,7 @@ import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { createWorld, terrainHeight, canopyAt, waveHeight, PRESETS, WORLD_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, ISLETS } from './world.js';
+import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, ISLETS } from './world.js';
 import { buildHeli, buildBasket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
 import { model } from './assets.js';
 import { createFx } from './fx.js';
@@ -68,7 +68,8 @@ function makePlayer(idx) {
     parked: true, altOff: 0, idleT: 0, incoming: 0, shake: 0, squash: 0, camG: 1,
     cargo: [], target: null, boardCd: 0, dropCd: 0, washAcc: 0, hornCd: 0, speakCd: 0,
     camPos: new THREE.Vector3(), camYaw: 0, camLook: new THREE.Vector3(),
-    rescued: 0, hint: '', input: { f: 0, t: 0, l: 0, horn: false },
+    rescued: 0, hint: '', input: { f: 0, t: 0, l: 0, s: 0, w: 0, horn: false },
+    pro: false, tiltF: 0, tiltS: 0, winch: 0, style: 0, flash: '', flashT: 0, rateCd: 0,
     ui: { score: $('.score', pane), slots: [...pane.querySelectorAll('.slot')], hint: $('.hint', pane), alt: $('.alt', pane), radar: $('.radar', pane).getContext('2d') },
   };
   players.push(p);
@@ -101,7 +102,7 @@ function parkPlayer(p) {
   else if (p.vehicle === 'boat') { p.pos.set(pad.x, 0, pad.z); p.fs = 0; p.afloat = true; p.hoist = 0; }
   else p.pos.set(pad.x, PAD_Y + SKID, pad.z);
   p.vel.set(0, 0, 0);
-  p.yaw = 0; p.yawVel = 0; p.pitch = p.roll = 0; p.landed = p.grounded = true; p.spin = 0; p.parked = true; p.shake = p.squash = 0; p.camG = 1; p.altOff = 0; p.idleT = 0; p.incoming = 0;
+  p.yaw = 0; p.yawVel = 0; p.pitch = p.roll = 0; p.landed = p.grounded = true; p.spin = 0; p.parked = true; p.shake = p.squash = 0; p.camG = 1; p.altOff = 0; p.idleT = 0; p.incoming = 0; p.tiltF = p.tiltS = 0; p.winch = 0;
   p.surfaceY = p.vehicle === 'heli' ? PAD_Y : 0;
   p.bpos.copy(p.pos).y -= 3; p.bvel.set(0, 0, 0); p.ropeLen = 0.6; p.stow = 1;
   p.camYaw = 0; p.camPos.set(pad.x, PAD_Y + 12, pad.z - 24); p.camLook.copy(p.pos);
@@ -117,7 +118,7 @@ const maxWaiting = () => Math.min(3 + game.mission + (activePlayers().length > 1
 
 // ================================================================= input
 const keys = new Set();
-const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'KeyF', 'Space', 'ShiftLeft', 'ShiftRight', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Period', 'Comma', 'Slash', 'NumpadEnter']);
+const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'KeyF', 'KeyR', 'KeyM', 'ControlRight', 'Numpad0', 'Space', 'ShiftLeft', 'ShiftRight', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Period', 'Comma', 'Slash', 'NumpadEnter']);
 addEventListener('keydown', e => {
   if (e.target instanceof HTMLButtonElement && (e.code === 'Enter' || e.code === 'Space') && game.state === 'menu') return; // let menu buttons work
   if (GAME_KEYS.has(e.code)) { e.preventDefault(); keys.add(e.code); audio.unlock(); }
@@ -131,32 +132,65 @@ const dz = v => (Math.abs(v) < 0.18 ? 0 : v);
 
 function readInput(p) {
   const solo = activePlayers().length === 1;
-  let f = 0, t = 0, l = 0, horn = false;
+  const pro = p.pro && p.vehicle === 'heli';
+  let f = 0, t = 0, l = 0, s = 0, w = 0, horn = false;
   if (p.idx === 0 || solo) {
-    f += k('KeyW') - k('KeyS'); t += k('KeyA') - k('KeyD');
-    l += (k('KeyE') | k('Space')) - (k('KeyQ') | k('ShiftLeft')); horn = horn || !!k('KeyF');
+    f += k('KeyW') - k('KeyS'); t += k('KeyA') - k('KeyD'); horn = horn || !!k('KeyF');
+    // a pilot flying it properly: E / Q slide sideways, Space / Shift work the collective, R runs the winch out
+    if (pro) { s += k('KeyE') - k('KeyQ'); l += k('Space') - k('ShiftLeft'); w += k('KeyR'); }
+    else l += (k('KeyE') | k('Space')) - (k('KeyQ') | k('ShiftLeft'));
   }
   if (p.idx === 1 || solo) {
-    f += k('ArrowUp') - k('ArrowDown'); t += k('ArrowLeft') - k('ArrowRight');
-    l += (k('Enter') | k('NumpadEnter') | k('Period')) - (k('ShiftRight') | k('Comma')); horn = horn || !!k('Slash');
+    f += k('ArrowUp') - k('ArrowDown'); t += k('ArrowLeft') - k('ArrowRight'); horn = horn || !!k('Slash');
+    if (pro) { s += k('Period') - k('Comma'); l += (k('Enter') | k('NumpadEnter')) - k('ShiftRight'); w += k('ControlRight') | k('Numpad0') | k('KeyM'); }
+    else l += (k('Enter') | k('NumpadEnter') | k('Period')) - (k('ShiftRight') | k('Comma'));
   }
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   const list = []; for (const g of pads) if (g && g.connected) list.push(g);
   const gp = list[solo ? 0 : p.idx];
   if (gp) {
     const b = i => (gp.buttons[i] ? gp.buttons[i].value : 0);
-    f += -dz(gp.axes[1] || 0) + b(12) - b(13); t += -dz(gp.axes[0] || 0) + b(14) - b(15);
-    l += b(7) - b(6) + b(0) - b(1) - dz(gp.axes[3] || 0);
+    if (pro) {
+      // left stick tilts the disc, right stick turns the nose, triggers are the collective, A runs the winch out
+      f += -dz(gp.axes[1] || 0) + b(12) - b(13); s += dz(gp.axes[0] || 0) + b(15) - b(14); t += -dz(gp.axes[2] || 0);
+      l += b(7) - b(6); w += b(0);
+    } else {
+      f += -dz(gp.axes[1] || 0) + b(12) - b(13); t += -dz(gp.axes[0] || 0) + b(14) - b(15);
+      l += b(7) - b(6) + b(0) - b(1) - dz(gp.axes[3] || 0);
+    }
     horn = horn || b(2) > 0.5;
     if (Math.abs(f) + Math.abs(l) > 0.3) audio.unlock();
   }
-  p.input.f = clamp(f, -1, 1); p.input.t = clamp(t, -1, 1); p.input.l = clamp(l, -1, 1); p.input.horn = horn;
+  const inp = p.input;
+  inp.f = clamp(f, -1, 1); inp.t = clamp(t, -1, 1); inp.l = clamp(l, -1, 1); inp.s = clamp(s, -1, 1); inp.w = w > 0.4 ? 1 : 0; inp.horn = horn;
+}
+
+// ================================================================= weather
+// How hard it is blowing, 0 (calm) to 1 (storm). It raises the swell, darkens the sky, tosses the trees and pushes on
+// anything flying; a pilot flying it properly feels all of it, the easy helicopter only a nudge.
+const WEATHERS = [{ name: 'Calm', icon: '\u{1F343}', wind: 0.1 }, { name: 'Breezy', icon: '\u{1F32C}\uFE0F', wind: 0.5 }, { name: 'Stormy', icon: '\u26C8\uFE0F', wind: 1 }];
+const weather = { idx: 0, now: 0.1, dir: 0.9 };
+function setWeather(i) { weather.idx = i; $('#bWx').textContent = WEATHERS[i].icon; }
+function cycleWeather() { setWeather((weather.idx + 1) % WEATHERS.length); banner(WEATHERS[weather.idx].icon + ' ' + WEATHERS[weather.idx].name, '', 1.6); }
+const WIND = new THREE.Vector3();
+// the air's own velocity at a place and time, metres a second: a steady wind with gusts rolling through it
+function windAt(x, z, t, out) {
+  const along = x * Math.sin(weather.dir) + z * Math.cos(weather.dir);
+  const gust = 0.6 + 0.4 * Math.sin(t * 0.43 + along * 0.021) + 0.3 * Math.sin(t * 1.31 + along * 0.05 + x * 0.013);
+  const sp = Math.max(0, weather.now - 0.15) * 8.8 * gust, veer = weather.dir + 0.35 * Math.sin(t * 0.21 + z * 0.01);
+  return out.set(Math.sin(veer) * sp, Math.max(0, weather.now - 0.15) * 1.3 * Math.sin(t * 1.9 + along * 0.04), Math.cos(veer) * sp);
 }
 
 // ================================================================= flight
 const MAX_SPEED = 26, CEILING = 95, CRUISE = 13;
 const V = new THREE.Vector3(), V2 = new THREE.Vector3();
 
+// a word and some stars for a piece of flying done well (only pilots flying it properly are marked)
+function rate(p, stars, words) {
+  if (p.rateCd > 0) return;
+  p.rateCd = 4; p.style += stars; p.flash = '\u2605'.repeat(stars) + ' ' + words; p.flashT = 2.8;
+  syncHud();
+}
 function surfaceAt(x, z, t, out) {
   let g = terrainHeight(x, z);
   for (const pad of PADS) if ((x - pad.x) ** 2 + (z - pad.z) ** 2 < 72) g = Math.max(g, PAD_Y);
@@ -173,9 +207,13 @@ function updatePlayer(p, dt, t) {
   // A friend waiting at a landing site: once the helicopter is overhead it sets itself down beside them, they climb
   // aboard, and then it sits there until the pilot presses go again.
   if (p.pickup && p.pickup.state !== 'waiting') p.pickup = null;
-  if (!p.pickup && !p.grounded && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
+  if (!p.pro && !p.pickup && !p.grounded && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
     if (an.kind !== 'camp' || (an.claimed && an.claimed !== p)) continue;
     if (Math.hypot(an.site.x - p.pos.x, an.site.z - p.pos.z) < 8) { p.pickup = an; an.claimed = p; p.parked = true; sfx.winch(); break; }
+  }
+  // (a pilot flying it properly has to put it down at the site themselves)
+  if (p.pro && p.grounded && Math.hypot(p.vel.x, p.vel.z) < 1.5 && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
+    if (an.kind === 'camp' && Math.hypot(an.site.x - p.pos.x, an.site.z - p.pos.z) < an.site.r + 1) { board(an, p); break; }
   }
   const held = p.pickup || (p.grounded && p.incoming > 0);
   const inp = held ? HANDS_OFF : p.input;
@@ -184,44 +222,80 @@ function updatePlayer(p, dt, t) {
     p.vel.x += ((s.x - p.pos.x) * 0.9 - p.vel.x) * pull; p.vel.z += ((s.z - p.pos.z) * 0.9 - p.vel.z) * pull;
     if (p.grounded) board(p.pickup, p);
   }
-  // The helicopter looks after its own height: it cruises a little above whatever is below,
-  // takes off when you steer and settles back onto a helipad when left alone above one.
-  const busy = inp.f !== 0 || inp.t !== 0 || inp.l !== 0;
-  if (busy) { p.idleT = 0; if (p.parked && (inp.f !== 0 || inp.t !== 0 || inp.l > 0)) { p.parked = false; p.altOff = 0; if (p.grounded && p.spin < 0.6) sfx.engineStart(p.spin); } }
-  else p.idleT += dt;
-  if (!p.parked) {
-    p.altOff = clamp(p.altOff + inp.l * 16 * dt, -CRUISE, 70);
-    const overPad = PADS.some(pad => Math.hypot(p.pos.x - pad.x, p.pos.z - pad.z) < 7);
-    if ((overPad && p.idleT > 2.2 && Math.hypot(p.vel.x, p.vel.z) < 3 && !p.cargo.length) || (p.grounded && p.altOff <= -CRUISE + 0.5 && !busy)) p.parked = true;
-  }
-  // (over the sea, hold height against the calm water line so the swell does not make it bob)
-  // (and over forest, against the treetops)
-  let ahead = p.overLand ? p.surfaceY + Math.max(0, canopyAt(p.pos.x, p.pos.z) - 4) : 0;
-  for (const sec of [0.6, 1.3, 2.2]) {
-    const ax = p.pos.x + p.vel.x * sec, az = p.pos.z + p.vel.z * sec;
-    surfaceAt(ax, az, t, SURF);
-    if (SURF.land) ahead = Math.max(ahead, SURF.y + Math.max(0, canopyAt(ax, az) - 4));
-  }
-  const wantY = p.parked ? p.surfaceY + SKID - 0.5 : ahead + SKID + CRUISE + p.altOff;
-  // start-up: the rotor has to wind all the way up before the skids leave the ground
-  const spooling = !p.parked && p.grounded && p.spin < 0.93;
-  let lift = p.parked ? -0.5 : clamp((wantY - p.pos.y) * 0.16, -0.8, 1);
-  if (p.parked && p.clearance < 4) lift = Math.max(lift, -0.16);      // flare: the last few metres are slow and gentle
-  if (spooling) lift = Math.min(lift, 0);
+  let fx_, fz_, tgt = 0;
+  windAt(p.pos.x, p.pos.z, t, WIND);
+  if (p.pro) {
+    // ---- flown properly: tilt pushes, the machine has weight, height is the pilot's, and the wind is felt in full
+    const busy = inp.f !== 0 || inp.s !== 0 || inp.t !== 0 || inp.l !== 0;
+    if (busy) p.idleT = 0; else p.idleT += dt;
+    if (p.parked && inp.l > 0) { p.parked = false; if (p.grounded && p.spin < 0.6) sfx.engineStart(p.spin); }
+    if (!p.parked && p.grounded && p.idleT > 3.5) { p.parked = true; sfx.engineStop(); }
+    const spooling = !p.parked && p.grounded && p.spin < 0.93, live = !p.parked && !spooling && !p.grounded;
+    p.yawVel += (inp.t * (p.grounded ? 0 : 1.55) - p.yawVel) * damp(4, dt);
+    p.yaw += p.yawVel * dt;
+    fx_ = Math.sin(p.yaw); fz_ = Math.cos(p.yaw);
+    const rx = -fz_, rz = fx_;                                   // the pilot's right
+    p.tiltF += ((live ? inp.f : 0) - p.tiltF) * damp(3.2, dt);
+    p.tiltS += ((live ? inp.s : 0) - p.tiltS) * damp(3.2, dt);
+    if (p.grounded) { const grip = damp(6, dt); p.vel.x -= p.vel.x * grip; p.vel.z -= p.vel.z * grip; }
+    else {
+      // speeds through the air, not over the ground: a headwind slows it and a crosswind carries it off
+      const vf = (p.vel.x - WIND.x) * fx_ + (p.vel.z - WIND.z) * fz_, vs = (p.vel.x - WIND.x) * rx + (p.vel.z - WIND.z) * rz;
+      let af = p.tiltF * (p.tiltF > 0 ? 9.5 : 7) - vf * (inp.f === 0 ? 0.42 : 0.27);
+      let as = p.tiltS * 7 - vs * (inp.s === 0 ? 0.85 : 0.5);
+      as -= vf * p.yawVel * 0.85;                                // the nose leads the turn: most of the slip follows it round
+      p.vel.x += (fx_ * af + rx * as) * dt; p.vel.z += (fz_ * af + rz * as) * dt;
+    }
+    // collective: a rate of climb. Hands off, it holds its height; near the ground the air under the disc cushions it
+    let climb = inp.l > 0 ? inp.l * 9 : inp.l * 7;
+    if (spooling || p.parked) climb = Math.min(climb, 0);
+    if (climb < 0) climb = Math.max(climb, -(1.1 + Math.max(p.clearance, 0) * 0.9));
+    p.vel.y += (climb + (p.grounded ? 0 : WIND.y) - p.vel.y) * damp(2.6, dt);
+    // treetops are springy: they push back up and slow it, they do not stop it dead
+    const tops = p.surfaceY + canopyAt(p.pos.x, p.pos.z) - 2;
+    if (!p.grounded && p.overLand && p.pos.y - SKID < tops) { p.vel.y += 16 * dt; const snag = damp(1.2, dt); p.vel.x -= p.vel.x * snag; p.vel.z -= p.vel.z * snag; p.shake = Math.max(p.shake, 0.3); }
+  } else {
+    // The helicopter looks after its own height: it cruises a little above whatever is below,
+    // takes off when you steer and settles back onto a helipad when left alone above one.
+    const busy = inp.f !== 0 || inp.t !== 0 || inp.l !== 0;
+    if (busy) { p.idleT = 0; if (p.parked && (inp.f !== 0 || inp.t !== 0 || inp.l > 0)) { p.parked = false; p.altOff = 0; if (p.grounded && p.spin < 0.6) sfx.engineStart(p.spin); } }
+    else p.idleT += dt;
+    if (!p.parked) {
+      p.altOff = clamp(p.altOff + inp.l * 16 * dt, -CRUISE, 70);
+      const overPad = PADS.some(pad => Math.hypot(p.pos.x - pad.x, p.pos.z - pad.z) < 7);
+      if ((overPad && p.idleT > 2.2 && Math.hypot(p.vel.x, p.vel.z) < 3 && !p.cargo.length) || (p.grounded && p.altOff <= -CRUISE + 0.5 && !busy)) p.parked = true;
+    }
+    // (over the sea, hold height against the calm water line so the swell does not make it bob)
+    // (and over forest, against the treetops)
+    let ahead = p.overLand ? p.surfaceY + Math.max(0, canopyAt(p.pos.x, p.pos.z) - 4) : 0;
+    for (const sec of [0.6, 1.3, 2.2]) {
+      const ax = p.pos.x + p.vel.x * sec, az = p.pos.z + p.vel.z * sec;
+      surfaceAt(ax, az, t, SURF);
+      if (SURF.land) ahead = Math.max(ahead, SURF.y + Math.max(0, canopyAt(ax, az) - 4));
+    }
+    const wantY = p.parked ? p.surfaceY + SKID - 0.5 : ahead + SKID + CRUISE + p.altOff;
+    // start-up: the rotor has to wind all the way up before the skids leave the ground
+    const spooling = !p.parked && p.grounded && p.spin < 0.93;
+    let lift = p.parked ? -0.5 : clamp((wantY - p.pos.y) * 0.16, -0.8, 1);
+    if (p.parked && p.clearance < 4) lift = Math.max(lift, -0.16);      // flare: the last few metres are slow and gentle
+    if (spooling) lift = Math.min(lift, 0);
 
-  p.yawVel += (inp.t * (p.grounded ? 0 : 1.75) - p.yawVel) * damp(5, dt);
-  p.yaw += p.yawVel * dt;
-  const fx_ = Math.sin(p.yaw), fz_ = Math.cos(p.yaw);
-  // ease off by itself near a friend who needs a lift, so the basket can reach
-  let top = MAX_SPEED;
-  if (p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
-    const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
-    if (d < 34) top = Math.min(top, 6 + d * 0.6);
+    p.yawVel += (inp.t * (p.grounded ? 0 : 1.75) - p.yawVel) * damp(5, dt);
+    p.yaw += p.yawVel * dt;
+    fx_ = Math.sin(p.yaw); fz_ = Math.cos(p.yaw);
+    // ease off by itself near a friend who needs a lift, so the basket can reach
+    let top = MAX_SPEED;
+    if (p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
+      const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
+      if (d < 34) top = Math.min(top, 6 + d * 0.6);
+    }
+    tgt = p.parked || spooling ? 0 : inp.f * (inp.f > 0 ? top : 12);
+    const a = damp(p.grounded ? 5 : (inp.f === 0 ? 0.9 : 1.5), dt);
+    p.vel.x += (fx_ * tgt - p.vel.x) * a; p.vel.z += (fz_ * tgt - p.vel.z) * a;
+    p.vel.y += (lift * 11 - p.vel.y) * damp(4, dt);
+    // a breath of the weather, no more: enough to feel the day, never enough to carry a small pilot off
+    if (!p.grounded) { p.vel.x += WIND.x * 0.12 * dt; p.vel.z += WIND.z * 0.12 * dt; }
   }
-  const tgt = p.parked || spooling ? 0 : inp.f * (inp.f > 0 ? top : 12);
-  const a = damp(p.grounded ? 5 : (inp.f === 0 ? 0.9 : 1.5), dt);
-  p.vel.x += (fx_ * tgt - p.vel.x) * a; p.vel.z += (fz_ * tgt - p.vel.z) * a;
-  p.vel.y += (lift * 11 - p.vel.y) * damp(4, dt);
 
   // world edge: a soft invisible wall of wind
   const rr = Math.hypot(p.pos.x, p.pos.z);
@@ -250,6 +324,9 @@ function updatePlayer(p, dt, t) {
       fx.dust(p.pos.x, SURF.y, p.pos.z, 60); sfx.touchdown();
       p.shake = 1; p.squash = 1;
       if (p.parked) sfx.engineStop();
+      if (p.pro && (PADS.some(pad => Math.hypot(p.pos.x - pad.x, p.pos.z - pad.z) < 8.5) || SITES.some(q => Math.hypot(p.pos.x - q.x, p.pos.z - q.z) < q.r))) {
+        if (p.vel.y > -1.5) rate(p, 3, 'Greased it'); else if (p.vel.y > -3) rate(p, 2, 'Good landing'); else rate(p, 1, 'Firm one!');
+      }
     }
     p.pos.y = floor; p.vel.y = Math.max(p.vel.y, 0);
     p.grounded = SURF.land;
@@ -271,8 +348,9 @@ function updatePlayer(p, dt, t) {
 
   // attitude
   const fwdSpeed = p.vel.x * fx_ + p.vel.z * fz_;
-  const pt = p.grounded ? 0 : p.parked && p.clearance < 7 ? -0.09 : clamp(fwdSpeed / MAX_SPEED * 0.3 + (tgt - fwdSpeed) / MAX_SPEED * 0.12, -0.3, 0.42);
-  const rt = p.grounded ? 0 : clamp(-p.yawVel * (0.1 + 0.2 * Math.abs(fwdSpeed) / MAX_SPEED), -0.5, 0.5);
+  const sway = p.grounded ? 0 : weather.now * 0.05 * Math.sin(t * 2.3 + p.idx * 1.7 + p.pos.x * 0.05);      // the gusts rock it
+  const pt = p.grounded ? 0 : p.pro ? p.tiltF * 0.36 + sway * 0.6 : p.parked && p.clearance < 7 ? -0.09 : clamp(fwdSpeed / MAX_SPEED * 0.3 + (tgt - fwdSpeed) / MAX_SPEED * 0.12, -0.3, 0.42);
+  const rt = p.grounded ? 0 : (p.pro ? p.tiltS * 0.34 : 0) + sway + clamp(-p.yawVel * (0.1 + 0.2 * Math.abs(fwdSpeed) / MAX_SPEED), -0.5, 0.5);
   p.pitch += (pt - p.pitch) * damp(3.5, dt); p.roll += (rt - p.roll) * damp(3.5, dt);
   const bob = p.grounded ? 0 : Math.sin(t * 1.9 + p.idx * 2) * 0.16;
   // rumble on the skids while the rotor winds up or down, and a springy bounce on touchdown
@@ -627,7 +705,7 @@ function updateBoat(p, dt, t) {
 function updateWinch(p, dt, t) {
   p.dropCd -= dt;
   // door slides open and the boom swings out whenever there is someone to fetch or carry
-  const needHoist = !p.grounded && (p.target || p.incoming > 0 || p.cargo.length > 0);
+  const needHoist = !p.grounded && (p.target || p.incoming > 0 || p.cargo.length > 0 || (p.pro && (p.input.w || p.winch > 0.1)));
   const was = p.hoist;
   p.hoist = clamp(p.hoist + (needHoist ? dt / 0.55 : -dt / 0.9), 0, 1);
   if (needHoist && was === 0) sfx.door();
@@ -646,7 +724,8 @@ function updateWinch(p, dt, t) {
 
   // choose who to help: the nearest friend in reach. Once chosen we stick with them until they're aboard.
   if (p.target && (p.target.state !== 'waiting' || Math.hypot(p.target.pos.x - p.pos.x, p.target.pos.z - p.pos.z) > 48)) { if (p.target.claimed === p) p.target.claimed = null; p.target = null; }
-  if (!p.target && !p.parked && p.cargo.length + p.incoming < MAX_CARGO) {
+  if (p.pro) { if (p.target) { p.target.claimed = null; p.target = null; } }
+  else if (!p.target && !p.parked && p.cargo.length + p.incoming < MAX_CARGO) {
     let bd = 20;
     for (const an of waiting) {
       if (an.kind === 'camp' || (an.claimed && an.claimed !== p)) continue;      // (campers are fetched by landing, not by basket)
@@ -659,7 +738,13 @@ function updateWinch(p, dt, t) {
   // where the basket wants to be
   const b = p.bpos, bv = p.bvel;
   let tx = p.hook.x, ty = hookY - 0.6 - BASKET_TOP, tz = p.hook.z, om = 12;
-  if (p.target && ready) {
+  if (p.pro) {
+    // the pilot's own winch: hold the button and the cable runs out straight down; let go and it winds back in.
+    // The longer the cable, the more the basket trails behind the helicopter, so a steady hover is what lands it
+    if (p.incoming === 0) p.winch = clamp(p.winch + (p.input.w && ready ? 7 : -9) * dt, 0, 60);
+    if (p.incoming > 0) om = 0;
+    else { ty -= p.winch; om = 12 / (1 + p.winch * 0.13); if (p.input.w) mode = 'pickup'; }
+  } else if (p.target && ready) {
     mode = 'pickup'; om = 5.5;
     tx = p.target.pos.x; ty = p.target.pos.y + 0.1; tz = p.target.pos.z;
   } else if (p.incoming > 0) {
@@ -676,7 +761,7 @@ function updateWinch(p, dt, t) {
   } else bv.set(0, 0, 0);
   const bs = surfaceAt(b.x, b.z, t, SURF2);
   const bFloor = bs.y + (bs.land ? 0.05 : -0.3);
-  if (b.y < bFloor) { b.y = bFloor; bv.y = Math.max(bv.y, 0); }
+  if (b.y < bFloor) { b.y = bFloor; bv.y = Math.max(bv.y, 0); if (p.pro) p.winch = Math.min(p.winch, hookY - 0.6 - BASKET_TOP - bFloor + 0.4); }
   if (b.y > hookY - 0.6 - BASKET_TOP) b.y = hookY - 0.6 - BASKET_TOP;
   p.ropeLen = Math.max(0.6, hookY - b.y - BASKET_TOP);
 
@@ -696,11 +781,18 @@ function updateWinch(p, dt, t) {
 
   // friend hops aboard as soon as the basket is close
   if (p.target && Math.hypot(b.x - p.target.pos.x, b.z - p.target.pos.z) < 3.2 && Math.abs(b.y - p.target.pos.y) < 2.6) { board(p.target, p); p.target = null; }
+  if (p.pro && p.winch > 1 && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
+    if (an.kind === 'camp' || Math.hypot(b.x - an.pos.x, b.z - an.pos.z) > 3.2 || Math.abs(b.y - an.pos.y) > 2.6) continue;
+    const sp = Math.hypot(p.vel.x, p.vel.z);
+    board(an, p);
+    if (sp < 1.5) rate(p, 3, 'Rock-steady hover'); else if (sp < 4) rate(p, 2, 'Nice pickup'); else rate(p, 1, 'Snatched it!');
+    break;
+  }
 
   // set down at the base
   if (p.cargo.length && p.dropCd <= 0) {
-    if (p.grounded && nearBase && p.parked) { deliverOne(p); p.dropCd = 0.4; }
-    else if (mode === 'deliver' && b.y < BASE_Y + 1.6) { deliverOne(p); p.dropCd = 0.4; }
+    if (p.grounded && nearBase && (p.parked || p.pro)) { deliverOne(p); p.dropCd = 0.4; }
+    else if ((mode === 'deliver' || (p.pro && nearBase && p.winch > 1)) && b.y < BASE_Y + 1.6) { deliverOne(p); p.dropCd = 0.4; }
   }
   p.mode = mode;
 
@@ -712,13 +804,17 @@ const UP = new THREE.Vector3(0, 1, 0);
 
 // ================================================================= camera
 function updateCamera(p, dt, t) {
-  p.camYaw += angDiff(p.yaw, p.camYaw) * damp(p.vehicle === 'plane' ? 2.0 : 2.6, dt);
+  const pro = p.pro && p.vehicle === 'heli', sp = Math.hypot(p.vel.x, p.vel.z);
+  p.camYaw += angDiff(p.yaw, p.camYaw) * damp(p.vehicle === 'plane' ? 2.0 : pro ? 1.9 : 2.6, dt);
   const ext = Math.max(0, p.ropeLen - 0.6);
   p.camG += ((p.grounded ? 1 : 0) - p.camG) * damp(p.grounded ? 1.3 : 0.9, dt);
   const pl = p.vehicle === 'plane', bt = p.vehicle === 'boat';
   const dist = lerp((pl ? 27 : bt ? 17 : 19) + ext * 0.42, pl ? 17 : bt ? 11.5 : 12.5, p.camG), height = lerp((pl ? 9 : bt ? 6 : 7.5) + ext * 0.3, pl ? 4.6 : bt ? 4 : 3.4, p.camG);
-  const cx = p.pos.x - Math.sin(p.camYaw) * dist, cz = p.pos.z - Math.cos(p.camYaw) * dist;
-  let cy = p.pos.y + height;
+  const back = dist + (pro ? sp * 0.2 : 0);
+  const cx = p.pos.x - Math.sin(p.camYaw) * back, cz = p.pos.z - Math.cos(p.camYaw) * back;
+  let cy = p.pos.y + height + (pro ? sp * 0.04 : 0);
+  const fov = (activePlayers().length > 1 ? 66 : 58) + (pro ? sp * 0.36 : 0);
+  if (Math.abs(p.cam.fov - fov) > 0.05) { p.cam.fov += (fov - p.cam.fov) * damp(3, dt); p.cam.updateProjectionMatrix(); }
   const minY = Math.max(terrainHeight(cx, cz), 0.8) + 2.2;
   if (cy < minY) cy = minY;
   V.set(cx, cy, cz);
@@ -759,6 +855,7 @@ function spawnAnimal(near) {
       c = { x: site.x + Math.cos(a) * (site.r - 2.5), z: site.z + Math.sin(a) * (site.r - 2.5) };
     }
     else if (r < 0.45) { c = ISLETS[(Math.random() * ISLETS.length) | 0]; kind = 'islet'; }
+    else if (r < 0.56 && game.mission > 1 && world.spawn.stacks.length) { c = world.spawn.stacks[(Math.random() * world.spawn.stacks.length) | 0]; kind = 'raft'; }
     else { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = r < 0.7 ? 'raft' : 'ring'; }
     if (Math.hypot(c.x, c.z) > maxD) continue;
     if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 45)) continue;
@@ -805,6 +902,10 @@ function updateBoatRescue(dt, t) {
     if (Math.random() < dt * sp * 2) fx.emit(B.x - Math.sin(B.yaw) * 10, 0.3, B.z - Math.cos(B.yaw) * 10, (Math.random() - 0.5) * 2, 1.2, (Math.random() - 0.5) * 2, 0.92, 0.97, 1, 0.5, 0.9, 1.2, 2, 1);
     if (B.leaving > 45 || Math.hypot(B.x, B.z) > WORLD_R + 260) { scene.remove(B.mesh); game.boat = null; return; }
   } else {
+    // she drifts downwind while she waits (never onto the shallows)
+    windAt(B.x, B.z, t, WIND);
+    const nx = B.x + WIND.x * 0.1 * dt, nz = B.z + WIND.z * 0.1 * dt;
+    if (terrainHeight(nx + Math.sign(WIND.x) * 22, nz + Math.sign(WIND.z) * 22) < -6 && Math.hypot(nx, nz) < WORLD_R - 40) { B.x = nx; B.z = nz; }
     // smoke from the engine hatch, so she can be found from far off
     B.puff -= dt;
     if (B.puff <= 0) {
@@ -1025,8 +1126,9 @@ function nextMission() {
   fade.style.opacity = 1;
   setTimeout(() => {
     setPreset((game.presetIdx + 1) % PRESETS.length);
+    setWeather([0, 1, 0, 2][(game.mission - 1) % 4]);
     fade.style.opacity = 0;
-    banner('Mission ' + game.mission, world.preset.icon + ' ' + world.preset.name + ' — rescue ' + game.goal + ' friends');
+    banner('Mission ' + game.mission, world.preset.icon + WEATHERS[weather.idx].icon + ' ' + world.preset.name + ', ' + WEATHERS[weather.idx].name.toLowerCase() + ' — rescue ' + game.goal + ' friends');
     syncHud();
   }, 750);
 }
@@ -1051,7 +1153,7 @@ function syncHud() {
   $('#mCount').textContent = Math.min(game.rescued, game.goal) + ' / ' + game.goal;
   $('#mBar').style.width = Math.min(100, (game.rescued / game.goal) * 100) + '%';
   for (const p of players) {
-    p.ui.score.textContent = '🐾 ' + p.rescued;
+    p.ui.score.textContent = '🐾 ' + p.rescued + (p.pro ? '  \u2605 ' + p.style : '');
     p.ui.slots.forEach((el, i) => { const a = p.cargo[i]; el.textContent = a ? a.type.e : ''; el.classList.toggle('full', !!a); });
   }
 }
@@ -1071,6 +1173,7 @@ function layoutHud() {
 const spoolHint = p => !p.parked && p.grounded && p.spin < 0.93;
 function hintFor(p) {
   const solo = activePlayers().length === 1;
+  if (p.flashT > 0) return p.flash;
   if (game.celebrate > 0) return '🎆 Hooray!';
   if (Math.hypot(p.pos.x, p.pos.z) > WORLD_R - 10) return '↩️ Heading back to the islands';
   if (p.pickup || (p.grounded && p.incoming > 0)) return '\u{1F6EC} Landing to pick up a friend';
@@ -1078,6 +1181,11 @@ function hintFor(p) {
   if (p.mode === 'deliver') return p.vehicle !== 'heli' ? '🏠 Heading for the dock…' : '🏠 Lowering them home…';
   if (p.cargo.length >= MAX_CARGO) return '🏠 Basket full — fly home!';
   if (spoolHint(p)) return '🔊 Engine starting…';
+  if (p.pro && p.vehicle === 'heli') {
+    if (p.grounded) return '\u{1F681} Hold ' + (p.idx && !solo ? 'Enter' : 'Space') + ' to lift off';
+    if (p.cargo.length >= MAX_CARGO) return '\u{1F3E0} Full \u2014 take them home';
+    return p.cargo.length ? '\u{1F3E0} Land at base, or winch them down' : '\u{1FA9D} Hover over a friend and hold ' + (p.idx && !solo ? 'Ctrl' : 'R') + ' to winch';
+  }
   if (p.landed) return '🚁 Press ' + (solo ? '↑ or W' : p.idx ? '↑' : 'W') + ' to fly!';
   if (p.cargo.length && !waiting.length) return '🏠 Bring them home to base';
   if (p.cargo.length) return '✨ More friends, or fly home';
@@ -1117,6 +1225,7 @@ function updateHud(dt) {
   const slow = hudAcc > 0.2; if (slow) hudAcc = 0;
   for (const p of activePlayers()) {
     drawRadar(p);
+    p.flashT -= dt; p.rateCd -= dt;
     if (slow) {
       const h = hintFor(p);
       if (h !== p.hint) { p.hint = h; p.ui.hint.textContent = h; }
@@ -1131,6 +1240,13 @@ const vehicleChoice = ['heli', 'heli'];
 for (const b of document.querySelectorAll('.veh')) b.addEventListener('click', () => {
   const i = +b.dataset.p; vehicleChoice[i] = b.dataset.v;
   for (const o of document.querySelectorAll('.veh[data-p="' + i + '"]')) o.classList.toggle('on', o === b);
+});
+for (const b of document.querySelectorAll('.flt')) b.addEventListener('click', () => {
+  const i = +b.dataset.p; players[i].pro = b.dataset.m === 'pro';
+  for (const o of document.querySelectorAll('.flt[data-p="' + i + '"]')) o.classList.toggle('on', o === b);
+  b.closest('.card').classList.toggle('pro', players[i].pro);
+  players[i].tiltF = players[i].tiltS = 0; players[i].winch = 0; players[i].altOff = 0;
+  syncHud();
 });
 function applyVehicleChoices() { for (const p of players) if (p.vehicle !== vehicleChoice[p.idx]) setVehicle(p, vehicleChoice[p.idx]); }
 function startGame(n) {
@@ -1183,6 +1299,7 @@ $('#start2').addEventListener('click', () => startGame(2));
 $('#resume').addEventListener('click', resume);
 $('#bP2').addEventListener('click', e => { toggleP2(); e.currentTarget.blur(); });
 $('#bTime').addEventListener('click', e => { cyclePreset(); e.currentTarget.blur(); });
+$('#bWx').addEventListener('click', e => { cycleWeather(); e.currentTarget.blur(); });
 $('#bGfx').addEventListener('click', e => { toggleGfx(); e.currentTarget.blur(); });
 $('#bMute').addEventListener('click', e => { toggleMute(); e.currentTarget.blur(); });
 $('#bPause').addEventListener('click', e => { togglePause(); e.currentTarget.blur(); });
@@ -1330,6 +1447,9 @@ function tick(now) {
   const t = simT; game.t = t;
 
   if (!game.paused) {
+    weather.now += (WEATHERS[weather.idx].wind - weather.now) * damp(0.35, dt); weather.dir += dt * 0.004;
+    sea.swell = 0.75 + weather.now * 1.2;
+    world.blow(weather.now);
     world.update(dt, t);
     for (const p of players) {
       if (!p.active) continue;
@@ -1406,4 +1526,4 @@ function tick(now) {
 requestAnimationFrame(frame);
 
 // tiny debug handle (also handy for automated checks)
-window.__game = { gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };
+window.__game = { weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };

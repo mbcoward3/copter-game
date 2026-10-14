@@ -33,7 +33,8 @@
   .btn:focus-visible{outline:3px solid #ffd23c;outline-offset:2px;}
   #fade{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .7s;}
 
-  #menu{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:radial-gradient(ellipse at center,rgba(8,18,32,.25),rgba(8,18,32,.78));transition:opacity .5s;padding:20px;}
+  #menu{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;overflow-y:auto;gap:22px;background:radial-gradient(ellipse at center,rgba(8,18,32,.25),rgba(8,18,32,.78));transition:opacity .5s;padding:20px;}
+  @media (max-height:780px){#menu{gap:12px;}#menu .tip{font-size:12.5px;}}
   #menu.hidden{opacity:0;pointer-events:none;}
   #menu h1{font-size:clamp(40px,7.5vw,96px);font-weight:900;line-height:1;text-align:center;text-shadow:0 6px 30px rgba(0,0,0,.5);}
   #menu h1 span{display:block;font-size:.3em;font-weight:700;letter-spacing:.35em;color:#ffd23c;margin-bottom:.5em;}
@@ -48,9 +49,12 @@
   .card table{border-collapse:collapse;font-size:15px;}
   .card td{padding:3px 10px 3px 0;}
   .pick{display:flex;gap:8px;margin-bottom:10px;}
-  .veh{pointer-events:auto;flex:1;padding:8px 6px;white-space:nowrap;border-radius:12px;border:2px solid rgba(255,255,255,.3);background:rgba(255,255,255,.08);color:#fff;font:700 15px "Segoe UI",system-ui,sans-serif;cursor:pointer;}
-  .veh.on{background:var(--c);border-color:#fff;}
-  .veh:focus-visible{outline:3px solid #ffd23c;outline-offset:2px;}
+  .veh,.flt{pointer-events:auto;flex:1;padding:8px 6px;white-space:nowrap;border-radius:12px;border:2px solid rgba(255,255,255,.3);background:rgba(255,255,255,.08);color:#fff;font:700 15px "Segoe UI",system-ui,sans-serif;cursor:pointer;}
+  .veh.on,.flt.on{background:var(--c);border-color:#fff;}
+  .flt{font-size:13px;padding:5px 6px;}
+  .card .keysPro,.card.pro .keysEasy{display:none;}
+  .card.pro .keysPro{display:table;}
+  .veh:focus-visible,.flt:focus-visible{outline:3px solid #ffd23c;outline-offset:2px;}
   .card tr.extra td{padding-top:8px;font-size:12.5px;opacity:.75;}
   kbd{display:inline-block;min-width:28px;padding:3px 7px;border-radius:7px;background:#fff;color:var(--ink);font:700 13px "Segoe UI",system-ui,sans-serif;text-align:center;box-shadow:0 2px 0 #9fb0c4;margin:1px;}
   #menu .tip{font-size:16px;opacity:.9;text-align:center;max-width:720px;line-height:1.5;}
@@ -81,6 +85,7 @@
   <div id="buttons">
     <button class="btn" id="bP2" title="Add or remove player 2">+ Player 2</button>
     <button class="btn" id="bTime" title="Change time of day">☀️</button>
+    <button class="btn" id="bWx" title="Change the weather">🍃</button>
     <button class="btn" id="bGfx" title="Graphics quality">💎</button>
     <button class="btn" id="bMute" title="Sound on/off">🔊</button>
     <button class="btn" id="bPause" title="Pause (key: Esc)">⏸</button>
@@ -99,25 +104,29 @@
     <div class="card" style="--c:var(--p1)">
       <h3>🔴 Red pilot</h3>
       <div class="pick"><button class="veh on" data-p="0" data-v="heli">🚁 Helicopter</button><button class="veh" data-p="0" data-v="plane">🛩️ Seaplane</button><button class="veh" data-p="0" data-v="boat">🚤 Boat</button></div>
-      <table>
+      <div class="pick"><button class="flt on" data-p="0" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="0" data-m="pro">🎖️ Pilot (helicopter)</button></div>
+      <table class="keysEasy">
         <tr><td><kbd>W</kbd></td><td>go!</td></tr>
         <tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn</td></tr>
         <tr><td><kbd>S</kbd></td><td>back up</td></tr>
         <tr class="extra"><td><kbd>F</kbd> honk</td><td><kbd>E</kbd><kbd>Q</kbd> higher / lower</td></tr>
       </table>
+      <table class="keysPro"><tr><td><kbd>W</kbd><kbd>S</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn the nose</td></tr><tr><td><kbd>Q</kbd><kbd>E</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Space</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>R</kbd></td><td>hold: winch down</td></tr><tr class="extra"><td colspan="2">Gamepad: left stick tilt, right stick turn, triggers climb / descend, A winch</td></tr></table>
     </div>
     <div class="card" style="--c:var(--p2)">
       <h3>🔵 Blue pilot</h3>
       <div class="pick"><button class="veh on" data-p="1" data-v="heli">🚁 Helicopter</button><button class="veh" data-p="1" data-v="plane">🛩️ Seaplane</button><button class="veh" data-p="1" data-v="boat">🚤 Boat</button></div>
-      <table>
+      <div class="pick"><button class="flt on" data-p="1" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="1" data-m="pro">🎖️ Pilot (helicopter)</button></div>
+      <table class="keysEasy">
         <tr><td><kbd>↑</kbd></td><td>go!</td></tr>
         <tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn</td></tr>
         <tr><td><kbd>↓</kbd></td><td>back up</td></tr>
         <tr class="extra"><td><kbd>/</kbd> honk</td><td><kbd>Enter</kbd><kbd>Shift</kbd> higher / lower</td></tr>
       </table>
+      <table class="keysPro"><tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn the nose</td></tr><tr><td><kbd>,</kbd><kbd>.</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Enter</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>Ctrl</kbd></td><td>hold: winch down</td></tr><tr class="extra"><td colspan="2">Gamepad: left stick tilt, right stick turn, triggers climb / descend, A winch</td></tr></table>
     </div>
   </div>
-  <p class="tip">Just fly! Everything stays up by itself. Fly to a golden light beam: the helicopter lowers its rescue basket,<br>the seaplane skims past and the boat pulls up alongside, and friends hop aboard. Then fly home and they hop out. Higher / lower keys work on both machines if you want them. Nothing can go wrong — explore anywhere.</p>
+  <p class="tip">Just fly! Everything stays up by itself. Fly to a golden light beam: the helicopter lowers its rescue basket,<br>the seaplane skims past and the boat pulls up alongside, and friends hop aboard. Then fly home and they hop out. Higher / lower keys work on both machines if you want them. Nothing can go wrong — explore anywhere.<br>Grown-ups: pick 🎖️ Pilot to fly the helicopter properly — your own height, your own hover, your own winch, and the wind to argue with.</p>
 </div>
 <div id="err"></div>
 
