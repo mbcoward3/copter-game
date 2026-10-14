@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: production
@@ -16,29 +15,17 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - uses: actions/setup-node@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          node-version: 22
+          cache: npm
 
-      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/mbcoward3/copter-game:latest
-            ghcr.io/mbcoward3/copter-game:sha-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
+      - run: npm ci
+      - run: npm run build
 
       - name: Configure GitOps deploy key
         env:
@@ -49,34 +36,20 @@ jobs:
           chmod 0600 ~/.ssh/copter-game-gitops
           ssh-keyscan -H github.com > ~/.ssh/known_hosts
 
-      - name: Deploy production image
+      - name: Deploy production build
         env:
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           GIT_SSH_COMMAND: ssh -i ~/.ssh/copter-game-gitops -o IdentitiesOnly=yes
         run: |
           git clone git@github.com:mbcoward3/talos-cluster.git gitops
+          cp rescue-squad-3d.html gitops/apps/copter-game/prod/site/index.html
           cd gitops
-          python3 - "$IMAGE_DIGEST" <<'PY'
-          import pathlib, re, sys
-          path = pathlib.Path('apps/copter-game/prod/deployment.yaml')
-          text = path.read_text()
-          image = f'ghcr.io/mbcoward3/copter-game@{sys.argv[1]}'
-          updated, count = re.subn(
-              r'ghcr\.io/mbcoward3/copter-game(?:@sha256:[0-9a-f]{64}|:[^\s]+)',
-              image,
-              text,
-          )
-          if count != 1:
-              raise SystemExit(f'expected one production image, replaced {count}')
-          path.write_text(updated)
-          PY
           if git diff --quiet; then
-            echo 'Production already uses this image'
+            echo 'Production already has this build'
             exit 0
           fi
           git config user.name 'copter-game-deploy-bot'
           git config user.email 'copter-game-deploy-bot@users.noreply.github.com'
-          git add apps/copter-game/prod/deployment.yaml
+          git add apps/copter-game/prod/site/index.html
           git commit -m "chore: deploy Copter Game ${GITHUB_SHA::12}"
           git pull --rebase origin main
           git push origin main

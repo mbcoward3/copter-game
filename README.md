@@ -24,4 +24,4 @@ Source is in `src/`. After editing:
     npm run build      # rebuilds rescue-squad-3d.html
     npm run serve      # optional dev server on http://localhost:5173
 
-Pushing `main` publishes the production container and updates the deployment in the private `talos-cluster` GitOps repository.
+Pushing `main` builds the game and updates the production content in the private `talos-cluster` GitOps repository.
