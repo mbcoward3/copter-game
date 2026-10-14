@@ -35,6 +35,10 @@ function ridged(x, z) {
 const smooth = t => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 // ---------------------------------------------------------------- layout
+// cameras that see the scene directly also see this layer; the water's mirror camera does not
+export const PLANT_LAYER = 1;
+// and only the water's mirror sees this one (a lighter copy of the land)
+export const MIRROR_LAYER = 2;
 export const WORLD_R = 330;        // soft flight boundary
 export const SEA_FLOOR = -14;
 export const BASE_Y = 5;           // height of the rescue base plateau
@@ -42,6 +46,14 @@ export const PAD_Y = BASE_Y + 0.3;
 export const PADS = [{ x: -15, z: 12 }, { x: 15, z: 12 }];
 export const STATION = { x: 0, z: -30 };
 export const LIGHTHOUSE = { x: -98, z: 74 };
+// a sea arch between the base and the lighthouse: tall enough to fly through, and the boat fits under it too
+export const ARCH = { x: -59, z: 54, yaw: 3.97 };
+// the fishermen's huts on stilts round the atoll's lagoon
+// (each faces the middle of the lagoon; porch is where someone waits on its front step, floor its height)
+export const HUTS = [0.4, 1.9, 3.3, 4.6].map(a => {
+  const x = -165 + Math.cos(a) * 15, z = 200 + Math.sin(a) * 15, yaw = Math.atan2(x + 165, z - 200);
+  return { x, z, yaw, porch: { x: x - Math.sin(yaw) * 3.4, z: z - Math.cos(yaw) * 3.4 }, floor: 4.7 };
+});
 
 // Each island is a lobe of land: r is the mean radius of its shore, h how high its hills stand, coast how far
 // headlands and coves wander from a circle. flats are levelled places (a site names one a helicopter can land on),
@@ -57,7 +69,7 @@ export const ISLANDS = [
     dents: [{ x: -168, z: -100, r: 20, y: -3.5 }], flats: [{ x: -214, z: -134, r: 11, site: 'Forest meadow', pad: true }] }),
   lobe(210, -150, 44, 19, { forest: 0.7, cliff: 8, cliffDir: [1, -0.2] }),                             // twin hills joined by a sand spit
   lobe(160, -196, 34, 12, { forest: 0.6, flats: [{ x: 186, z: -176, r: 9, site: 'Sand spit' }] }),
-  lobe(-165, 200, 58, 2.6, { coast: 0.14, forest: 0, palms: 0.4, dents: [{ x: -165, z: 200, r: 25, y: -4 }] }),      // the atoll
+  lobe(-165, 200, 58, 2.6, { coast: 0.14, forest: 0, palms: 0.4, dents: [{ x: -165, z: 200, r: 25, y: -4 }, { x: -142, z: 172, r: 7, y: -4 }, { x: -133, z: 161, r: 7, y: -4 }] }),      // the atoll, with a channel through its reef
   lobe(30, -255, 46, 8, { coast: 0.2, cliff: 15, forest: 0.35, flats: [{ x: 30, z: -255, r: 10, site: 'Table rock', pad: true }] }),      // the mesa
   lobe(-285, 45, 40, 14, { ridge: 22, pow: 1.5, cliff: 11, forest: 0.3, palms: 0.05, flats: [{ x: -268, z: 62, r: 9, site: 'Crag shelf' }] }),
   lobe(290, 20, 42, 2.4, { coast: 0.3, forest: 0, palms: 0.45, flats: [{ x: 290, z: 20, r: 9, site: 'Palm cay' }] }),
@@ -74,6 +86,10 @@ for (const s of ISLETS) ISLANDS.push({ x: s.x, z: s.z, r: 17, h: 3.2, islet: tru
 export const OBSTACLES = [
   { x: LIGHTHOUSE.x, z: LIGHTHOUSE.z, r: 6.5, top: 42 },
   { x: STATION.x, z: STATION.z, r: 15, top: 24 },
+  // the arch's two feet; and, for the easy helicopter only, the whole arch, which it flies round rather than through
+  ...[-1, 1].map(k => ({ x: ARCH.x + k * 12.5 * Math.cos(ARCH.yaw), z: ARCH.z + k * 12.5 * Math.sin(ARCH.yaw), r: 6, top: 24 })),
+  { x: ARCH.x, z: ARCH.z, r: 19, top: 25, easy: true },
+  ...HUTS.map(h => ({ x: h.x, z: h.z, r: 6, top: 13 })),
 ];
 
 function islandHeight(I, x, z, natural) {
@@ -495,6 +511,7 @@ export function createWorld(scene, renderer) {
   // ---------- lights
   const sun = new THREE.DirectionalLight(0xffffff, 3);
   sun.castShadow = true;
+  sun.shadow.camera.layers.enable(PLANT_LAYER);
   sun.shadow.mapSize.set(4096, 4096);
   const sc = sun.shadow.camera;
   sc.left = -90; sc.right = 90; sc.top = 90; sc.bottom = -90; sc.near = 1; sc.far = 520;
@@ -515,6 +532,15 @@ export function createWorld(scene, renderer) {
   const groundMat = groundMaterial(noiseTex, false), rockMat = groundMaterial(noiseTex, true);
   const terrain = new THREE.Mesh(tgeo, groundMat);
   terrain.receiveShadow = true; terrain.castShadow = true;
+  terrain.layers.set(PLANT_LAYER);
+  // the mirror in the water only needs the land's shape above the waterline, seen softly: a copy a tenth as dense
+  const mgeo = new THREE.PlaneGeometry(TSIZE, TSIZE, 150, 150);
+  mgeo.rotateX(-Math.PI / 2);
+  { const mp = mgeo.attributes.position; for (let i = 0; i < mp.count; i++) mp.setY(i, terrainHeight(mp.getX(i), mp.getZ(i))); }
+  mgeo.computeVertexNormals();
+  const mirrorLand = new THREE.Mesh(mgeo, groundMat);
+  mirrorLand.layers.set(MIRROR_LAYER); mirrorLand.receiveShadow = true;
+  scene.add(mirrorLand);
   world.terrain = terrain;
   scene.add(terrain);
 
@@ -632,13 +658,17 @@ export function createWorld(scene, renderer) {
   scene.add(lh);
   keepOut.push({ x: LIGHTHOUSE.x, z: LIGHTHOUSE.z, r: 8 });
 
+  // the sea arch, and the huts in the lagoon
+  { const a = model('World_Arch', { shadow: true }); a.material = rockMat; a.position.set(ARCH.x, -1.5, ARCH.z); a.rotation.y = -ARCH.yaw; scene.add(a); }
+  for (const h of HUTS) { place('World_Hut', h.x, h.z, { y: 0, yaw: h.yaw, scale: 2 }); keepOut.push({ x: h.x, z: h.z, r: 9 }); }
+
   // a camp in the forest meadow, for whoever waits there to be fetched
   { const s = SITES.find(q => q.name === 'Forest meadow'); place('World_Camp', s.x + 13, s.z + 4, { yaw: 1.2 }); keepOut.push({ x: s.x + 13, z: s.z + 4, r: 6 }); }
 
   // ---------- forest, palms, scrub and rocks
   // Every plant is one of a handful of models drawn many times. Near ones are the full model, those across the bay a
   // sparser copy, and the far hills' are single soft shapes; world.focus() sorts them by distance.
-  const NEAR = 105, FAR = 400;
+  let NEAR = 105, FAR = 400;
   const dm = new THREE.Object3D();
   const species = new Map();        // model name -> [{ m: Matrix4, x, z, s }]
   const plant = (name, x, y, z, s, tilt = 0.12) => {
@@ -704,6 +734,7 @@ export function createWorld(scene, renderer) {
       const g = geo(n);
       const mesh = new THREE.InstancedMesh(g, g.userData.mats.map(mn => foliage(mn, /Tree[345]/.test(name))), list.length);
       mesh.castShadow = !far; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.count = 0;
+      if (!far) mesh.layers.set(PLANT_LAYER);      // (the near trees stay out of the water's mirror: it is the costliest thing in it)
       scene.add(mesh);
       return mesh;
     });
@@ -729,6 +760,7 @@ export function createWorld(scene, renderer) {
 
   const lodAt = [new THREE.Vector3(1e9, 0, 0)], lumpCol = new THREE.Color();
   let lodDirty = true;
+  world.setDetail = (near, far) => { NEAR = near; FAR = far; lodDirty = true; };
   // call with the positions the scene is being watched from; re-sorts the plants when a viewer has moved far enough
   world.focus = function (points) {
     let moved = lodDirty || points.length !== lodAt.length;
@@ -758,6 +790,17 @@ export function createWorld(scene, renderer) {
     lumps.count = nl; lumps.instanceMatrix.needsUpdate = true;
     if (lumps.instanceColor) lumps.instanceColor.needsUpdate = true;
   };
+
+  // ---------- ledges on the sea cliffs, where only the helicopter's basket can reach
+  world.spawn.ledges = [];
+  for (const I of ISLANDS) if (I.cliff) for (let k = 0; k < 64; k++) {
+    const a = (k / 64) * 6.283;
+    for (let d = I.r * 0.6; d < I.r * 1.4; d += 1.5) {
+      const x = I.x + Math.cos(a) * d, z = I.z + Math.sin(a) * d, y = terrainHeight(x, z);
+      const steep = Math.hypot(terrainHeight(x + 1.5, z) - terrainHeight(x - 1.5, z), terrainHeight(x, z + 1.5) - terrainHeight(x, z - 1.5)) / 3;
+      if (y > 5 && y < 15 && steep > 0.9 && terrainHeight(x + Math.cos(a) * 6, z + Math.sin(a) * 6) < y - 3) { world.spawn.ledges.push({ x, z }); break; }
+    }
+  }
 
   // ---------- open-sea spawn points
   let guard = 0;

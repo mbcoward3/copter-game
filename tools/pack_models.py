@@ -17,7 +17,8 @@ import numpy as np
 import random
 from mathutils import Vector
 
-SRC, OUT = (os.path.abspath(p) for p in sys.argv[sys.argv.index('--') + 1:][:2])
+# (more source folders may follow the output folder: tools/build_vehicles.py writes the game's own models to another)
+SRC, OUT, *MORE = (os.path.abspath(p) for p in sys.argv[sys.argv.index('--') + 1:])
 AO_SIZE = {'Jayhawk_Body': 1024}       # the rest are 512
 # The plants were modelled leaf by leaf for an engine that draws unlimited triangles. Here each keeps one leaf in N,
 # grown to cover the gap, and gets a second, sparser copy (<name>_far) for the far side of the bay.
@@ -115,7 +116,7 @@ def thin(me, every, seed, far, card=0):
     return total, kept
 
 
-def pack(name, ob, out_name, every=0):
+def pack(name, ob, out_name, every, folder):
     me = ob.data
     note = ''
     if every:
@@ -186,7 +187,7 @@ def pack(name, ob, out_name, every=0):
     print('PACK %-20s %6d tris %6d verts  size %s  mats %s%s' % (
         name, nt, nv, ' x '.join('%.2f' % v for v in span), ','.join(g['mat'] for g in groups), note))
 
-    bake = os.path.join(SRC, 'B_%s.png' % name)
+    bake = os.path.join(folder, 'B_%s.png' % name)
     if os.path.exists(bake) and not every:
         img = bpy.data.images.load(bake)
         size = AO_SIZE.get(name, 512)
@@ -199,17 +200,18 @@ def pack(name, ob, out_name, every=0):
 
 
 
-for fname in sorted(os.listdir(SRC)):
-    stem, ext = os.path.splitext(fname)
-    if ext != '.fbx' or stem in SKIP:
-        continue
-    for far in (False, True):
-        every = THIN.get(stem, (0, 0))[far]
-        if far and not every:
+for folder in [SRC] + MORE:
+    for fname in sorted(os.listdir(folder)):
+        stem, ext = os.path.splitext(fname)
+        if ext != '.fbx' or stem in SKIP:
             continue
-        bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.wm.fbx_import(filepath=os.path.join(SRC, fname))
-        pack(stem, next(o for o in bpy.context.scene.objects if o.type == 'MESH'), stem + ('_far' if far else ''), every)
+        for far in (False, True):
+            every = THIN.get(stem, (0, 0))[far]
+            if far and not every:
+                continue
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+            bpy.ops.wm.fbx_import(filepath=os.path.join(folder, fname))
+            pack(stem, next(o for o in bpy.context.scene.objects if o.type == 'MESH'), stem + ('_far' if far else ''), every, folder)
 
 head = json.dumps(index, separators=(',', ':')).encode()
 while len(head) % 4:

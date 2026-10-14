@@ -1,4 +1,4 @@
-// Ambient life: patrol boat, seagulls, dolphins.
+// Ambient life: patrol boat, seagulls, dolphins, and now and then a whale.
 import * as THREE from 'three';
 import { waveHeight, terrainHeight } from './world.js';
 import { model } from './assets.js';
@@ -50,6 +50,14 @@ export function createLife(scene, world, fx) {
   }
   let podTimer = 5;
 
+  // ------------------------------------------------ the whale
+  // Every minute or so, out in deep water somewhere a pilot can see it: a blow, a long slow roll along the surface,
+  // and sometimes a breach that throws spray everywhere. She never surfaces under anybody.
+  const whale = { g: new THREE.Group(), t: -1, timer: 30 };
+  whale.g.add(model('World_Whale')); whale.g.scale.setScalar(1.15); whale.g.visible = false; whale.g.rotation.order = 'YXZ';
+  scene.add(whale.g);
+  life.whale = whale;
+
   // ------------------------------------------------ update
   life.update = function (dt, t, players) {
     // boat
@@ -91,6 +99,43 @@ export function createLife(scene, world, fx) {
           break;
         }
       }
+    }
+
+    // the whale
+    whale.timer -= dt;
+    if (whale.t < 0 && whale.timer <= 0 && players.length) {
+      whale.timer = 50 + Math.random() * 40;
+      const p = players[(Math.random() * players.length) | 0];
+      const a = p.yaw + (Math.random() < 0.5 ? -1 : 1) * (0.35 + Math.random() * 0.5), d = 70 + Math.random() * 40;
+      const cx = p.pos.x + Math.sin(a) * d, cz = p.pos.z + Math.cos(a) * d;
+      let deep = true;
+      for (let k = 0; k < 8 && deep; k++) if (terrainHeight(cx + Math.cos(k * 0.785) * 30, cz + Math.sin(k * 0.785) * 30) > -8) deep = false;
+      if (deep && !players.some(q => Math.hypot(q.pos.x - cx, q.pos.z - cz) < 30)) {
+        whale.t = 0; whale.x = cx; whale.z = cz; whale.h = Math.random() * 6.283; whale.breach = Math.random() < 0.45; whale.blown = 0;
+      }
+    }
+    if (whale.t >= 0) {
+      whale.t += dt;
+      const T = whale.breach ? 9 : 12, k = whale.t / T;
+      const dx = Math.sin(whale.h), dz = Math.cos(whale.h);
+      const x = whale.x + dx * k * 40, z = whale.z + dz * k * 40, w = waveHeight(x, z, t);
+      let y, pitch;
+      if (whale.breach && k > 0.4 && k < 0.62) {
+        // up and out of the water nose first, over on her side, and down with a crash
+        const b = (k - 0.4) / 0.22;
+        y = w - 2 + Math.sin(b * Math.PI) * 9; pitch = -1.1 + b * 2.0;
+        whale.g.rotation.z = b * 1.6;
+        if (b > 0.8 && whale.blown < 2) { whale.blown = 2; fx.splash(x, w, z, 120, 2.6); sfx.splash(); }
+      } else {
+        // a long, slow roll: the back breaks the surface, then the tail lifts as she dives
+        y = w - 4 + Math.sin(Math.min(k / 0.9, 1) * Math.PI) * 3.6; pitch = Math.cos(Math.min(k / 0.9, 1) * Math.PI) * 0.25;
+        whale.g.rotation.z = 0;
+      }
+      if (k > 0.12 && whale.blown < 1) { whale.blown = 1; for (let i = 0; i < 60; i++) fx.emit(x + dx * 5, w + 1.5, z + dz * 5, (Math.random() - 0.5) * 1.5, 7 + Math.random() * 5, (Math.random() - 0.5) * 1.5, 0.95, 0.98, 1, 0.55, 0.7 + Math.random() * 0.6, 1.4 + Math.random(), 4, 0.8); }
+      whale.g.visible = true;
+      whale.g.position.set(x, y, z);
+      whale.g.rotation.x = pitch; whale.g.rotation.y = whale.h;
+      if (k >= 1) { whale.t = -1; whale.g.visible = false; }
     }
 
     // dolphins: a pod leaps near one of the players every so often

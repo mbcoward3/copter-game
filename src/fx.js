@@ -19,7 +19,7 @@ export function createFx(scene) {
         gl_PointSize = aSize * uScale / max(-mv.z, 0.1); gl_Position = projectionMatrix * mv; }`,
     fragmentShader: /* glsl */`
       varying vec4 vColor;
-      void main(){ float d = length(gl_PointCoord - 0.5); float a = smoothstep(0.5, 0.3, d) * vColor.a;
+      void main(){ float d = length(gl_PointCoord - 0.5); float a = exp(-d * d * 14.0) * smoothstep(0.5, 0.42, d) * vColor.a * 1.15;      // soft-edged, so spray reads as spray
         if (a < 0.01) discard; gl_FragColor = vec4(vColor.rgb, a); }`,
     transparent: true, depthWrite: false,
   });

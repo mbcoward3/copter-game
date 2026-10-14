@@ -126,110 +126,49 @@ export function buildBeam() {
 
 
 // ================================================================= rescue seaplane
-// Model space: nose toward +Z. The floats touch the water at y = -PLANE_FLOAT.
+// A Coast Guard Beaver on floats (tools/build_vehicles.py). Nose toward +Z; the floats touch the water at
+// y = -PLANE_FLOAT. Friends ride home in the open rear cockpit.
 export const PLANE_FLOAT = 1.85;
 export function buildPlane(accent) {
   const g = new THREE.Group();
-  const paint = new THREE.MeshPhysicalMaterial({ color: 0xf7f7f4, roughness: 0.28, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.08 });
-  const livery = new THREE.MeshPhysicalMaterial({ color: accent, roughness: 0.3, metalness: 0.2, clearcoat: 1, clearcoatRoughness: 0.1 });
-  const dark = std(0x2a3038, { roughness: 0.45, metalness: 0.6 });
-  const metal = std(0x9aa4ae, { roughness: 0.3, metalness: 0.9 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x0d2233, roughness: 0.04, metalness: 0.9, transparent: true, opacity: 0.78, envMapIntensity: 1.8 });
-
-  const prof = [[0.03, -4.7], [0.3, -4.4], [0.6, -3.0], [0.9, -1.2], [1.02, 0.6], [1.0, 2.2], [0.86, 3.2], [0.74, 3.7]].map(q => new THREE.Vector2(q[0], q[1]));
-  const bodyGeo = new THREE.LatheGeometry(prof, 26); bodyGeo.rotateX(Math.PI / 2);
-  mesh(bodyGeo, paint, 0, 0, 0, g).scale.set(1, 0.95, 1);
-  const bellyGeo = new THREE.LatheGeometry(prof.map(q => new THREE.Vector2(q.x * 1.012, q.y)), 26, -Math.PI * 0.3, Math.PI * 0.6); bellyGeo.rotateX(Math.PI / 2);
-  mesh(bellyGeo, livery, 0, 0, 0, g).scale.set(1, 0.95, 1);
-  const cowl = mesh(new THREE.CylinderGeometry(0.76, 0.72, 1.0, 22), livery, 0, 0, 4.1, g); cowl.rotation.x = Math.PI / 2;
-  const cabin = mesh(new THREE.BoxGeometry(1.5, 0.85, 2.1), glass, 0, 0.8, 1.9, g); cabin.castShadow = false;
-  mesh(new THREE.BoxGeometry(1.56, 0.1, 2.2), paint, 0, 1.25, 1.9, g);
-
-  // propeller
+  g.add(model('Vehicle_Plane', { tints: { Accent: new THREE.Color(accent) } }));
   const prop = new THREE.Group(); prop.position.set(0, 0, 4.72); g.add(prop);
-  const bladeMat = new THREE.MeshStandardMaterial({ color: 0x23272c, roughness: 0.5, transparent: true, opacity: 1 });
-  for (let i = 0; i < 3; i++) { const b = mesh(new THREE.BoxGeometry(0.3, 1.9, 0.07), bladeMat, 0, 0, 0, prop); b.geometry.translate(0, 0.95, 0); b.rotation.z = (i / 3) * Math.PI * 2; }
-  const spinner = mesh(new THREE.ConeGeometry(0.3, 0.6, 14), metal, 0, 0, 0.25, prop); spinner.rotation.x = Math.PI / 2;
+  const blades = model('Vehicle_PlaneProp', { own: ['Dark', 'Tip'] });
+  const bladeMat = blades.userData.mat('Dark');
+  bladeMat.transparent = blades.userData.mat('Tip').transparent = true;
+  prop.add(blades);
   const discMat = new THREE.MeshBasicMaterial({ color: 0x1b1f24, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(1.95, 32), discMat); disc.position.set(0, 0, 4.74); g.add(disc);
-
-  // high wing, struts, tail
-  mesh(new THREE.BoxGeometry(14, 0.22, 2.1), paint, 0, 1.42, 1.3, g);
-  for (const sx of [-1, 1]) {
-    mesh(new THREE.BoxGeometry(1.5, 0.24, 2.12), livery, sx * 6.3, 1.42, 1.3, g);
-    const st = mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.1, 6), metal, sx * 2.25, 0.45, 1.3, g); st.rotation.z = -sx * 0.98;
-  }
-  mesh(new THREE.BoxGeometry(4.8, 0.13, 1.25), livery, 0, 0.3, -4.1, g);
-  const finShape = new THREE.Shape();
-  finShape.moveTo(0.9, 0); finShape.lineTo(-0.7, 2.2); finShape.lineTo(-1.3, 2.2); finShape.lineTo(-1.1, 0); finShape.closePath();
-  const finGeo = new THREE.ExtrudeGeometry(finShape, { depth: 0.14, bevelEnabled: false }); finGeo.translate(0, 0, -0.07); finGeo.rotateY(-Math.PI / 2);
-  mesh(finGeo, livery, 0, 0.3, -3.6, g);
-
-  // floats
-  for (const sx of [-1, 1]) {
-    const f = mesh(new THREE.CapsuleGeometry(0.46, 6.4, 6, 14), paint, sx * 1.8, -PLANE_FLOAT + 0.46, 0.5, g); f.rotation.x = Math.PI / 2;
-    const keel = mesh(new THREE.BoxGeometry(0.5, 0.12, 6.2), livery, sx * 1.8, -PLANE_FLOAT + 0.1, 0.5, g);
-    for (const sz of [-0.9, 2.0]) { const st = mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.5, 6), metal, sx * 1.3, -0.85, sz, g); st.rotation.z = sx * 0.78; }
-  }
-  // open back seat for rescued friends
-  mesh(new THREE.TorusGeometry(0.95, 0.12, 8, 20), livery, 0, 0.82, -1.3, g).rotation.x = Math.PI / 2;
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(1.45, 32), discMat); disc.position.set(0, 0, 4.8); g.add(disc);
   const seat = new THREE.Group(); seat.position.set(0, 0.55, -1.3); g.add(seat);
 
   const lightMat = (c) => new THREE.MeshStandardMaterial({ color: 0x111111, emissive: c, emissiveIntensity: 3 });
-  mesh(new THREE.SphereGeometry(0.11, 8, 6), lightMat(0xff2020), 7.05, 1.42, 1.3, g).castShadow = false;
-  mesh(new THREE.SphereGeometry(0.11, 8, 6), lightMat(0x20ff40), -7.05, 1.42, 1.3, g).castShadow = false;
-  const strobe = mesh(new THREE.SphereGeometry(0.13, 8, 6), lightMat(0xffffff), 0, 2.6, -4.7, g); strobe.castShadow = false;
-  const beacon = mesh(new THREE.SphereGeometry(0.14, 8, 6), lightMat(0xff2030), 0, -0.98, 0, g); beacon.castShadow = false;
+  mesh(new THREE.SphereGeometry(0.1, 8, 6), lightMat(0xff2020), 7.25, 1.26, 2.3, g).castShadow = false;
+  mesh(new THREE.SphereGeometry(0.1, 8, 6), lightMat(0x20ff40), -7.25, 1.26, 2.3, g).castShadow = false;
+  const strobe = mesh(new THREE.SphereGeometry(0.11, 8, 6), lightMat(0xffffff), 0, 2.32, -4.62, g); strobe.castShadow = false;
+  const beacon = mesh(new THREE.SphereGeometry(0.12, 8, 6), lightMat(0xff2030), 0, -0.78, 0.5, g); beacon.castShadow = false;
   const lampMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xdcecff, emissiveIntensity: 0 });
-  mesh(new THREE.SphereGeometry(0.2, 10, 8), lampMat, 0, -0.55, 3.9, g).castShadow = false;
+  mesh(new THREE.SphereGeometry(0.16, 10, 8), lampMat, 2.2, 1.1, 2.6, g).castShadow = false;
   return { group: g, prop, discMat, bladeMat, strobe, beacon, lampMat, seat };
 }
 
 
 // ================================================================= fast rescue boat
-// Model space: bow toward +Z, origin on the waterline.
+// A Coast Guard response boat (tools/build_vehicles.py): foam collar in the pilot's colour, cabin amidships, twin
+// outboards. Bow toward +Z, origin on the waterline; friends ride on the open aft deck.
 export function buildBoat(accent) {
   const g = new THREE.Group();
-  const hullM = new THREE.MeshPhysicalMaterial({ color: 0xf7f7f4, roughness: 0.3, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.1 });
-  const tubeM = new THREE.MeshPhysicalMaterial({ color: accent, roughness: 0.45, clearcoat: 0.6, clearcoatRoughness: 0.3 });
-  const dark = std(0x2a3038, { roughness: 0.45, metalness: 0.6 });
-  const metal = std(0x9aa4ae, { roughness: 0.3, metalness: 0.9 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x0d2233, roughness: 0.04, metalness: 0.9, transparent: true, opacity: 0.6, envMapIntensity: 1.8 });
-
-  // V hull
-  const sh = new THREE.Shape();
-  sh.moveTo(-1.35, -3.6); sh.lineTo(1.35, -3.6); sh.lineTo(1.45, 1.0); sh.quadraticCurveTo(1.1, 3.4, 0, 4.6); sh.quadraticCurveTo(-1.1, 3.4, -1.45, 1.0); sh.closePath();
-  const hullGeo = new THREE.ExtrudeGeometry(sh, { depth: 0.9, bevelEnabled: true, bevelSize: 0.18, bevelThickness: 0.3, bevelSegments: 2 });
-  hullGeo.rotateX(Math.PI / 2);                       // shape y -> +z (bow forward), depth -> down
-  mesh(hullGeo, hullM, 0, 0.55, 0, g);
-  mesh(new THREE.BoxGeometry(2.5, 0.08, 6.6), std(0x7d8791, { roughness: 0.8 }), 0, 0.5, -0.2, g);   // deck
-  // inflatable collar
-  for (const sx of [-1, 1]) {
-    const t1 = mesh(new THREE.CapsuleGeometry(0.42, 4.6, 6, 14), tubeM, sx * 1.5, 0.72, -1.2, g); t1.rotation.x = Math.PI / 2;
-    const t2 = mesh(new THREE.CapsuleGeometry(0.4, 2.9, 6, 14), tubeM, sx * 0.86, 0.76, 2.75, g); t2.rotation.x = Math.PI / 2; t2.rotation.z = sx * 0.47; t2.rotation.order = 'YXZ'; t2.rotation.set(Math.PI / 2, -sx * 0.47, 0);
-  }
-  mesh(new THREE.SphereGeometry(0.44, 12, 10), tubeM, 0, 0.78, 4.15, g);
-  // console, windshield, wheel, light bar on a roll arch
-  mesh(new THREE.BoxGeometry(1.3, 1.05, 1.0), hullM, 0, 1.05, 0.9, g);
-  const ws = mesh(new THREE.BoxGeometry(1.4, 0.7, 0.06), glass, 0, 1.85, 1.3, g); ws.rotation.x = -0.35; ws.castShadow = false;
-  const wheel = mesh(new THREE.TorusGeometry(0.22, 0.035, 6, 14), dark, 0, 1.5, 0.36, g); wheel.rotation.x = -0.5;
-  for (const sx of [-1, 1]) mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.1, 6), metal, sx * 1.05, 1.75, -2.5, g);
-  mesh(new THREE.BoxGeometry(2.2, 0.1, 0.5), metal, 0, 2.8, -2.5, g);
+  g.add(model('Vehicle_Boat', { tints: { Accent: new THREE.Color(accent) } }));
   const lightMat = (c) => new THREE.MeshStandardMaterial({ color: 0x111111, emissive: c, emissiveIntensity: 3 });
-  const strobe = mesh(new THREE.BoxGeometry(0.5, 0.16, 0.22), lightMat(0x3b7bff), -0.5, 2.94, -2.5, g); strobe.castShadow = false;
-  const beacon = mesh(new THREE.BoxGeometry(0.5, 0.16, 0.22), lightMat(0xff2030), 0.5, 2.94, -2.5, g); beacon.castShadow = false;
+  const strobe = mesh(new THREE.BoxGeometry(0.5, 0.12, 0.2), lightMat(0x3b7bff), -0.42, 3.22, -0.35, g); strobe.castShadow = false;
+  const beacon = mesh(new THREE.BoxGeometry(0.5, 0.12, 0.2), lightMat(0xff2030), 0.42, 3.22, -0.35, g); beacon.castShadow = false;
   const lampMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xdcecff, emissiveIntensity: 0 });
-  mesh(new THREE.SphereGeometry(0.16, 10, 8), lampMat, 0, 2.95, -2.3, g).castShadow = false;
-  // twin outboards
+  mesh(new THREE.SphereGeometry(0.12, 10, 8), lampMat, 0, 2.42, 1.42, g).castShadow = false;
   const motors = [];
   for (const sx of [-0.55, 0.55]) {
-    const mo = new THREE.Group(); mo.position.set(sx, 0.9, -3.85); g.add(mo);
-    mesh(new THREE.BoxGeometry(0.5, 0.75, 0.75), dark, 0, 0.3, 0, mo);
-    mesh(new THREE.BoxGeometry(0.52, 0.12, 0.77), tubeM, 0, 0.5, 0, mo);
-    mesh(new THREE.BoxGeometry(0.16, 1.2, 0.3), metal, 0, -0.6, -0.05, mo);
+    const mo = new THREE.Group(); mo.position.set(sx, 0.85, -4.12); g.add(mo);
+    mo.add(model('Vehicle_BoatMotor'));
     motors.push(mo);
   }
-  // open aft deck for rescued friends
-  const seat = new THREE.Group(); seat.position.set(0, 0.5, -1.3); g.add(seat);
+  const seat = new THREE.Group(); seat.position.set(0, 0.66, -2.5); g.add(seat);
   return { group: g, seat, strobe, beacon, lampMat, motors };
 }

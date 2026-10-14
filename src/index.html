@@ -86,7 +86,7 @@
     <button class="btn" id="bP2" title="Add or remove player 2">+ Player 2</button>
     <button class="btn" id="bTime" title="Change time of day">☀️</button>
     <button class="btn" id="bWx" title="Change the weather">🍃</button>
-    <button class="btn" id="bGfx" title="Graphics quality">💎</button>
+    <button class="btn" id="bGfx" title="Graphics quality (automatic / best / fast)">✨</button>
     <button class="btn" id="bMute" title="Sound on/off">🔊</button>
     <button class="btn" id="bPause" title="Pause (key: Esc)">⏸</button>
   </div>
@@ -104,26 +104,26 @@
     <div class="card" style="--c:var(--p1)">
       <h3>🔴 Red pilot</h3>
       <div class="pick"><button class="veh on" data-p="0" data-v="heli">🚁 Helicopter</button><button class="veh" data-p="0" data-v="plane">🛩️ Seaplane</button><button class="veh" data-p="0" data-v="boat">🚤 Boat</button></div>
-      <div class="pick"><button class="flt on" data-p="0" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="0" data-m="pro">🎖️ Pilot (helicopter)</button></div>
+      <div class="pick"><button class="flt on" data-p="0" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="0" data-m="pro">🎖️ Pilot</button></div>
       <table class="keysEasy">
         <tr><td><kbd>W</kbd></td><td>go!</td></tr>
         <tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn</td></tr>
         <tr><td><kbd>S</kbd></td><td>back up</td></tr>
         <tr class="extra"><td><kbd>F</kbd> honk</td><td><kbd>E</kbd><kbd>Q</kbd> higher / lower</td></tr>
       </table>
-      <table class="keysPro"><tr><td><kbd>W</kbd><kbd>S</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn the nose</td></tr><tr><td><kbd>Q</kbd><kbd>E</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Space</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>R</kbd></td><td>hold: winch down</td></tr><tr class="extra"><td colspan="2">Gamepad: left stick tilt, right stick turn, triggers climb / descend, A winch</td></tr></table>
+      <table class="keysPro"><tr><td><kbd>W</kbd><kbd>S</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn the nose</td></tr><tr><td><kbd>Q</kbd><kbd>E</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Space</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>R</kbd></td><td>winch / throw the ring</td></tr><tr class="extra"><td colspan="2">Boat: <kbd>W</kbd><kbd>S</kbd> throttle, <kbd>A</kbd><kbd>D</kbd> steer. Seaplane: <kbd>W</kbd><kbd>S</kbd> throttle lever, <kbd>A</kbd><kbd>D</kbd> turn, <kbd>Space</kbd><kbd>Shift</kbd> climb / dive.</td></tr><tr class="extra"><td colspan="2">Gamepad: left stick tilt, right stick turn, triggers climb / descend, A winch</td></tr></table>
     </div>
     <div class="card" style="--c:var(--p2)">
       <h3>🔵 Blue pilot</h3>
       <div class="pick"><button class="veh on" data-p="1" data-v="heli">🚁 Helicopter</button><button class="veh" data-p="1" data-v="plane">🛩️ Seaplane</button><button class="veh" data-p="1" data-v="boat">🚤 Boat</button></div>
-      <div class="pick"><button class="flt on" data-p="1" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="1" data-m="pro">🎖️ Pilot (helicopter)</button></div>
+      <div class="pick"><button class="flt on" data-p="1" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="1" data-m="pro">🎖️ Pilot</button></div>
       <table class="keysEasy">
         <tr><td><kbd>↑</kbd></td><td>go!</td></tr>
         <tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn</td></tr>
         <tr><td><kbd>↓</kbd></td><td>back up</td></tr>
         <tr class="extra"><td><kbd>/</kbd> honk</td><td><kbd>Enter</kbd><kbd>Shift</kbd> higher / lower</td></tr>
       </table>
-      <table class="keysPro"><tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn the nose</td></tr><tr><td><kbd>,</kbd><kbd>.</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Enter</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>Ctrl</kbd></td><td>hold: winch down</td></tr><tr class="extra"><td colspan="2">Gamepad: left stick tilt, right stick turn, triggers climb / descend, A winch</td></tr></table>
+      <table class="keysPro"><tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn the nose</td></tr><tr><td><kbd>,</kbd><kbd>.</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Enter</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>Ctrl</kbd></td><td>winch / throw the ring</td></tr><tr class="extra"><td colspan="2">Gamepad: left stick tilt, right stick turn, triggers climb / descend, A winch</td></tr></table>
     </div>
   </div>
   <p class="tip">Just fly! Everything stays up by itself. Fly to a golden light beam: the helicopter lowers its rescue basket,<br>the seaplane skims past and the boat pulls up alongside, and friends hop aboard. Then fly home and they hop out. Higher / lower keys work on both machines if you want them. Nothing can go wrong — explore anywhere.<br>Grown-ups: pick 🎖️ Pilot to fly the helicopter properly — your own height, your own hover, your own winch, and the wind to argue with.</p>
