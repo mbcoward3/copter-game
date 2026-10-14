@@ -4,8 +4,9 @@ import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { createWorld, terrainHeight, waveHeight, PRESETS, WORLD_R, BASE_Y, PAD_Y, PADS, OBSTACLES, ISLETS } from './world.js';
-import { buildHeli, buildBasket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, ANIMAL_TYPES, SKID, HOIST, BASKET_TOP, PLANE_FLOAT } from './models.js';
+import { createWorld, terrainHeight, canopyAt, waveHeight, PRESETS, WORLD_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, ISLETS } from './world.js';
+import { buildHeli, buildBasket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
+import { model } from './assets.js';
 import { createFx } from './fx.js';
 import { createLife } from './life.js';
 import { audio, sfx, animalVoice } from './audio.js';
@@ -67,8 +68,8 @@ function makePlayer(idx) {
     parked: true, altOff: 0, idleT: 0, incoming: 0, shake: 0, squash: 0, camG: 1,
     cargo: [], target: null, boardCd: 0, dropCd: 0, washAcc: 0, hornCd: 0, speakCd: 0,
     camPos: new THREE.Vector3(), camYaw: 0, camLook: new THREE.Vector3(),
-    rescued: 0, stars: 0, hint: '', input: { f: 0, t: 0, l: 0, horn: false },
-    ui: { score: $('.score', pane), stars: $('.stars', pane), slots: [...pane.querySelectorAll('.slot')], hint: $('.hint', pane), alt: $('.alt', pane), radar: $('.radar', pane).getContext('2d') },
+    rescued: 0, hint: '', input: { f: 0, t: 0, l: 0, horn: false },
+    ui: { score: $('.score', pane), slots: [...pane.querySelectorAll('.slot')], hint: $('.hint', pane), alt: $('.alt', pane), radar: $('.radar', pane).getContext('2d') },
   };
   players.push(p);
   return p;
@@ -83,6 +84,7 @@ function showVehicle(p, on) {
   if (!on || p.vehicle !== 'heli') { p.heliBasket.visible = false; p.rope.visible = false; }
 }
 function setVehicle(p, kind) {
+  if (p.pickup) { p.pickup.claimed = null; p.pickup = null; }
   p.target = null;
   while (p.cargo.length) deliverOne(p);
   p.vehicle = kind;
@@ -158,6 +160,7 @@ const V = new THREE.Vector3(), V2 = new THREE.Vector3();
 function surfaceAt(x, z, t, out) {
   let g = terrainHeight(x, z);
   for (const pad of PADS) if ((x - pad.x) ** 2 + (z - pad.z) ** 2 < 72) g = Math.max(g, PAD_Y);
+  for (const s of SITES) if (s.pad && (x - s.x) ** 2 + (z - s.z) ** 2 < 42) g = Math.max(g, s.y + 0.3);
   const w = waveHeight(x, z, t);
   out.land = g > w + 0.2;
   out.y = out.land ? g : w;
@@ -165,8 +168,22 @@ function surfaceAt(x, z, t, out) {
 }
 const SURF = { y: 0, land: false };
 
+const HANDS_OFF = { f: 0, t: 0, l: 0, horn: false };
 function updatePlayer(p, dt, t) {
-  const inp = p.input;
+  // A friend waiting at a landing site: once the helicopter is overhead it sets itself down beside them, they climb
+  // aboard, and then it sits there until the pilot presses go again.
+  if (p.pickup && p.pickup.state !== 'waiting') p.pickup = null;
+  if (!p.pickup && !p.grounded && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
+    if (an.kind !== 'camp' || (an.claimed && an.claimed !== p)) continue;
+    if (Math.hypot(an.site.x - p.pos.x, an.site.z - p.pos.z) < 8) { p.pickup = an; an.claimed = p; p.parked = true; sfx.winch(); break; }
+  }
+  const held = p.pickup || (p.grounded && p.incoming > 0);
+  const inp = held ? HANDS_OFF : p.input;
+  if (p.pickup) {
+    const s = p.pickup.site, pull = damp(1.6, dt);
+    p.vel.x += ((s.x - p.pos.x) * 0.9 - p.vel.x) * pull; p.vel.z += ((s.z - p.pos.z) * 0.9 - p.vel.z) * pull;
+    if (p.grounded) board(p.pickup, p);
+  }
   // The helicopter looks after its own height: it cruises a little above whatever is below,
   // takes off when you steer and settles back onto a helipad when left alone above one.
   const busy = inp.f !== 0 || inp.t !== 0 || inp.l !== 0;
@@ -178,8 +195,13 @@ function updatePlayer(p, dt, t) {
     if ((overPad && p.idleT > 2.2 && Math.hypot(p.vel.x, p.vel.z) < 3 && !p.cargo.length) || (p.grounded && p.altOff <= -CRUISE + 0.5 && !busy)) p.parked = true;
   }
   // (over the sea, hold height against the calm water line so the swell does not make it bob)
-  let ahead = p.overLand ? p.surfaceY : 0;
-  for (const sec of [0.6, 1.3]) { surfaceAt(p.pos.x + p.vel.x * sec, p.pos.z + p.vel.z * sec, t, SURF); if (SURF.land) ahead = Math.max(ahead, SURF.y); }
+  // (and over forest, against the treetops)
+  let ahead = p.overLand ? p.surfaceY + Math.max(0, canopyAt(p.pos.x, p.pos.z) - 4) : 0;
+  for (const sec of [0.6, 1.3, 2.2]) {
+    const ax = p.pos.x + p.vel.x * sec, az = p.pos.z + p.vel.z * sec;
+    surfaceAt(ax, az, t, SURF);
+    if (SURF.land) ahead = Math.max(ahead, SURF.y + Math.max(0, canopyAt(ax, az) - 4));
+  }
   const wantY = p.parked ? p.surfaceY + SKID - 0.5 : ahead + SKID + CRUISE + p.altOff;
   // start-up: the rotor has to wind all the way up before the skids leave the ground
   const spooling = !p.parked && p.grounded && p.spin < 0.93;
@@ -244,7 +266,7 @@ function updatePlayer(p, dt, t) {
   else p.spin += (1 - p.spin) * damp(2, dt);
   const m = p.model;
   m.rotor.rotation.y += p.spin * 34 * dt; m.tail.rotation.x += p.spin * 50 * dt;
-  m.discMat.opacity = 0.3 * p.spin * p.spin; m.tipRingMat.opacity = 0.22 * p.spin * p.spin;
+  m.discMat.opacity = 0.3 * p.spin * p.spin; m.tipRingMat.opacity = 0.1 * p.spin * p.spin;
   m.bladeMat.opacity = m.tipMat.opacity = 1 - 0.72 * p.spin * p.spin;
 
   // attitude
@@ -314,7 +336,7 @@ function updatePlane(p, dt, t) {
   if (!p.target && ready && room) {
     let bd = 85;
     for (const an of waiting) {
-      if (an.claimed && an.claimed !== p) continue;
+      if (an.kind === 'camp' || (an.claimed && an.claimed !== p)) continue;
       const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
       const off = Math.abs(angDiff(Math.atan2(an.pos.x - p.pos.x, an.pos.z - p.pos.z), p.yaw));
       if (d < bd && (off < 1.0 || d < 30)) { bd = d; p.target = an; }
@@ -491,7 +513,7 @@ function updateBoat(p, dt, t) {
   if (!p.target && ready && room) {
     let bd = 65;
     for (const an of waiting) {
-      if (an.claimed && an.claimed !== p) continue;
+      if (an.kind === 'camp' || (an.claimed && an.claimed !== p)) continue;
       const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
       const off = Math.abs(angDiff(Math.atan2(an.pos.x - p.pos.x, an.pos.z - p.pos.z), p.yaw));
       if (d < bd && (off < 1.1 || d < 28)) { bd = d; p.target = an; }
@@ -610,7 +632,8 @@ function updateWinch(p, dt, t) {
   p.hoist = clamp(p.hoist + (needHoist ? dt / 0.55 : -dt / 0.9), 0, 1);
   if (needHoist && was === 0) sfx.door();
   const hz = p.hoist * p.hoist * (3 - 2 * p.hoist);
-  p.heli.door.position.z = -0.25 - 1.55 * Math.min(1, hz * 1.6);
+  const open = Math.min(1, hz * 1.6);
+  p.heli.door.position.set(DOOR_OPEN.x * open, 0, DOOR_OPEN.z * open);
   p.heli.boom.rotation.y = -Math.PI / 2 * clamp((hz - 0.3) / 0.7, 0, 1);
   const out = clamp((hz - 0.3) / 0.7, 0, 1);
   // boom tip in world space (stowed it points forward along the cabin, deployed it sticks out of the side)
@@ -626,7 +649,7 @@ function updateWinch(p, dt, t) {
   if (!p.target && !p.parked && p.cargo.length + p.incoming < MAX_CARGO) {
     let bd = 20;
     for (const an of waiting) {
-      if (an.claimed && an.claimed !== p) continue;
+      if (an.kind === 'camp' || (an.claimed && an.claimed !== p)) continue;      // (campers are fetched by landing, not by basket)
       const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
       if (d < bd && hookY - an.pos.y > 2) { bd = d; p.target = an; }
     }
@@ -720,22 +743,88 @@ function pickType() {
 }
 function spawnAnimal(near) {
   const maxD = near ? 130 : Math.min(150 + game.mission * 60, WORLD_R - 20);
-  let spot = null, kind = 'ring';
+  const heliUp = activePlayers().some(p => p.vehicle === 'heli');
+  if (!near && !game.boat && Math.random() < 0.16 && waiting.length + 2 <= maxWaiting() && spawnBoat(maxD)) return;
+  let spot = null, kind = 'ring', site = null;
   for (let tries = 0; tries < 40 && !spot; tries++) {
     const r = Math.random();
     let c;
-    if (r < 0.3) { c = ISLETS[(Math.random() * ISLETS.length) | 0]; kind = 'islet'; }
-    else { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = r < 0.55 ? 'raft' : 'ring'; }
+    site = null;
+    if (r < 0.22 && heliUp && !near) {
+      // someone waiting on an island, where only a landing will do
+      const free = SITES.filter(q => !q.busy);
+      if (!free.length) continue;
+      site = free[(Math.random() * free.length) | 0]; kind = 'camp';
+      const a = Math.random() * 6.283;
+      c = { x: site.x + Math.cos(a) * (site.r - 2.5), z: site.z + Math.sin(a) * (site.r - 2.5) };
+    }
+    else if (r < 0.45) { c = ISLETS[(Math.random() * ISLETS.length) | 0]; kind = 'islet'; }
+    else { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = r < 0.7 ? 'raft' : 'ring'; }
     if (Math.hypot(c.x, c.z) > maxD) continue;
     if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 45)) continue;
     spot = c;
   }
   if (!spot) return;
+  const an = addWaiting(kind, spot.x, spot.z, site ? { site } : null);
+  if (site) site.busy = true;
+  fx.emoji('\u2757', an.pos.x, an.pos.y + 5, an.pos.z, 3.5);
+  sfx.mayday();
+}
+// A fishing boat broken down and smoking, with her crew waiting on deck to be winched off one by one.
+// When the last of them is safe she gets her engine going again and motors away.
+const DECK_SPOTS = [[1.3, -4.2], [-1.3, -6.6], [1.1, -8.6]];
+function spawnBoat(maxD) {
+  let spot = null;
+  for (let tries = 0; tries < 30 && !spot; tries++) {
+    const c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0];
+    if (Math.hypot(c.x, c.z) > maxD || Math.hypot(c.x, c.z) < 90) continue;
+    if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 55)) continue;
+    spot = c;
+  }
+  if (!spot) return false;
+  const hull = new THREE.Color().setHSL(Math.random(), 0.6, 0.22);
+  const B = { x: spot.x, z: spot.z, y: 0, yaw: Math.random() * 6.283, deck: 1.7, crew: 0, leaving: 0, puff: 0, mesh: model('World_Boat', { tints: { Navy: hull } }) };
+  B.mesh.scale.setScalar(1.5); B.mesh.rotation.order = 'YXZ';
+  scene.add(B.mesh);
+  game.boat = B;
+  const n = 2 + (Math.random() < 0.5 ? 1 : 0);
+  for (let i = 0; i < n; i++) { addWaiting('deck', B.x, B.z, { boat: B, off: DECK_SPOTS[i] }); B.crew++; }
+  fx.emoji('\u{1F198}', B.x, 12, B.z, 4.5);
+  sfx.mayday();
+  return true;
+}
+function boatFriendOff(B) { if (--B.crew <= 0) { B.leaving = 0.01; sfx.horn(); fx.emoji('\u{1F44B}', B.x, 12, B.z, 4); } }
+function updateBoatRescue(dt, t) {
+  const B = game.boat; if (!B) return;
+  if (B.leaving) {
+    B.leaving += dt;
+    const sp = Math.min(B.leaving * 2.2, 9);
+    // (she swings toward open water before she gathers way)
+    B.yaw += angDiff(Math.atan2(B.x, B.z), B.yaw) * damp(0.5, dt);
+    B.x += Math.sin(B.yaw) * sp * dt; B.z += Math.cos(B.yaw) * sp * dt;
+    if (Math.random() < dt * sp * 2) fx.emit(B.x - Math.sin(B.yaw) * 10, 0.3, B.z - Math.cos(B.yaw) * 10, (Math.random() - 0.5) * 2, 1.2, (Math.random() - 0.5) * 2, 0.92, 0.97, 1, 0.5, 0.9, 1.2, 2, 1);
+    if (B.leaving > 45 || Math.hypot(B.x, B.z) > WORLD_R + 260) { scene.remove(B.mesh); game.boat = null; return; }
+  } else {
+    // smoke from the engine hatch, so she can be found from far off
+    B.puff -= dt;
+    if (B.puff <= 0) {
+      B.puff = 0.09;
+      const k = 0.16 + Math.random() * 0.1;
+      fx.emit(B.x + Math.sin(B.yaw) * 1.5, B.y + 4, B.z + Math.cos(B.yaw) * 1.5, 0.6 + (Math.random() - 0.5), 3.2, 0.3 + (Math.random() - 0.5), k, k, k, 0.5, 2.2 + Math.random() * 1.6, 3.2 + Math.random(), -0.6, 0.35);
+    }
+  }
+  const fx_ = Math.sin(B.yaw), fz_ = Math.cos(B.yaw);
+  const h0 = waveHeight(B.x, B.z, t), hf = waveHeight(B.x + fx_ * 7, B.z + fz_ * 7, t), hs = waveHeight(B.x + fz_ * 3, B.z - fx_ * 3, t);
+  B.y = h0 - 0.15;
+  B.mesh.position.set(B.x, B.y, B.z);
+  B.mesh.rotation.set(-(hf - h0) / 7 * 0.8, B.yaw, (hs - h0) / 3 * 0.6);
+}
+function addWaiting(kind, x, z, extra) {
   const type = pickType();
   const model = buildAnimal(type.id);
   const an = {
-    id: animalSerial++, type, model, kind, state: 'waiting', pos: new THREE.Vector3(spot.x, 0, spot.z),
-    phase: Math.random() * 6, callT: 3 + Math.random() * 6, excite: 0, exciteCd: 0, grow: 0, claimed: null, prop: null,
+    id: animalSerial++, type, model, kind, state: 'waiting', pos: new THREE.Vector3(x, 0, z),
+    phase: Math.random() * 6, callT: 3 + Math.random() * 6, excite: 0, exciteCd: 0, grow: 0, claimed: null, prop: null, ...extra,
   };
   if (kind === 'ring') an.prop = buildRing(); else if (kind === 'raft') an.prop = buildRaft();
   if (an.prop) scene.add(an.prop);
@@ -743,9 +832,8 @@ function spawnAnimal(near) {
   scene.add(model);
   waiting.push(an);
   placeWaiting(an, game.t, 0);
-  if (kind !== 'islet') fx.splash(an.pos.x, an.pos.y, an.pos.z, 20);
-  fx.emoji('❗', an.pos.x, an.pos.y + 5, an.pos.z, 3.5);
-  sfx.mayday();
+  if (kind === 'ring' || kind === 'raft') fx.splash(an.pos.x, an.pos.y, an.pos.z, 20);
+  return an;
 }
 function placeWaiting(an, t, dt) {
   const x = an.pos.x, z = an.pos.z;
@@ -762,9 +850,14 @@ function placeWaiting(an, t, dt) {
     m.rotation.y += angDiff(want, m.rotation.y) * damp(4, dt || 1);
   }
   const hop = excited ? Math.abs(Math.sin(t * 7 + an.phase)) * 0.35 : 0;
-  if (an.kind === 'islet') {
+  if (an.kind === 'islet' || an.kind === 'camp') {
     an.pos.y = terrainHeight(x, z);
     m.position.set(x, an.pos.y + hop, z); m.rotation.x = m.rotation.z = 0;
+  } else if (an.kind === 'deck') {
+    // on the deck of the stricken boat, riding the swell with her
+    const B = an.boat, c = Math.cos(B.yaw), sn = Math.sin(B.yaw);
+    an.pos.set(B.x + an.off[0] * c + an.off[1] * sn, B.y + B.deck, B.z - an.off[0] * sn + an.off[1] * c);
+    m.position.set(an.pos.x, an.pos.y + hop, an.pos.z); m.rotation.x = m.rotation.z = 0;
   } else {
     const w = waveHeight(x, z, t);
     const rock = Math.sin(t * 1.4 + an.phase);
@@ -780,14 +873,10 @@ function placeWaiting(an, t, dt) {
     m.rotation.z = rock * 0.07;
   }
   m.scale.setScalar(s);
-  // waving arms
-  const ud = m.userData;
-  for (const sx of [-1, 1]) {
-    const arm = ud['arm' + sx]; if (!arm) continue;
-    const up = excited ? 1 : 0.35 + 0.35 * Math.sin(t * 2 + an.phase);
-    arm.position.y = 0.66 + up * 0.42; arm.position.x = sx * (0.52 + (excited ? Math.sin(t * 12 + sx) * 0.07 : 0));
-  }
-  ud.head.rotation.z = excited ? Math.sin(t * 6 + an.phase) * 0.12 : 0;
+  // a happy wriggle when help is close
+  const body = m.userData.body;
+  body.rotation.z = excited ? Math.sin(t * 6 + an.phase) * 0.14 : Math.sin(t * 1.6 + an.phase) * 0.04;
+  body.rotation.y = excited ? Math.sin(t * 9 + an.phase) * 0.25 : 0;
   // beacon
   const fade = clamp((nd - 16) / 30, 0, 1);
   an.beam.position.set(x, an.pos.y + 2, z);
@@ -810,7 +899,9 @@ function board(an, p) {
   waiting.splice(i, 1);
   if (an.prop) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }
   scene.remove(an.beam);
-  if (an.kind !== 'islet') { fx.splash(an.pos.x, an.pos.y, an.pos.z, 24); sfx.splash(); } else fx.dust(an.pos.x, an.pos.y, an.pos.z, 10);
+  if (an.kind === 'ring' || an.kind === 'raft') { fx.splash(an.pos.x, an.pos.y, an.pos.z, 24); sfx.splash(); } else fx.dust(an.pos.x, an.pos.y, an.pos.z, 10);
+  if (an.site) an.site.busy = false;
+  if (an.boat) boatFriendOff(an.boat);
   an.state = 'boarding'; an.t = 0; an.by = p; an.claimed = null;
   { const d = an.model.position.distanceTo(p.pos); an.bdur = 0.38 + Math.max(0, d - 8) * 0.022; an.barc = 1.6 + Math.max(0, d - 8) * 0.2; }
   an.from = an.model.position.clone(); an.fromScale = an.model.scale.x; an.slot = p.cargo.length + p.incoming;
@@ -901,7 +992,6 @@ function updateResidents(dt, t) {
     an.model.position.set(an.x, BASE_Y + hop, an.z);
     const want = near && nd < 60 ? Math.atan2(near.pos.x - an.x, near.pos.z - an.z) : 0;
     an.model.rotation.y += angDiff(want, an.model.rotation.y) * damp(3, dt);
-    for (const sx of [-1, 1]) { const arm = an.model.userData['arm' + sx]; if (arm) arm.position.y = 0.66 + (party || nd < 30 ? 0.42 : 0); }
   });
 }
 // old friends wander into the station to make room (reuses the hoppers list)
@@ -961,7 +1051,7 @@ function syncHud() {
   $('#mCount').textContent = Math.min(game.rescued, game.goal) + ' / ' + game.goal;
   $('#mBar').style.width = Math.min(100, (game.rescued / game.goal) * 100) + '%';
   for (const p of players) {
-    p.ui.score.textContent = '🐾 ' + p.rescued; p.ui.stars.textContent = '⭐ ' + p.stars;
+    p.ui.score.textContent = '🐾 ' + p.rescued;
     p.ui.slots.forEach((el, i) => { const a = p.cargo[i]; el.textContent = a ? a.type.e : ''; el.classList.toggle('full', !!a); });
   }
 }
@@ -983,6 +1073,7 @@ function hintFor(p) {
   const solo = activePlayers().length === 1;
   if (game.celebrate > 0) return '🎆 Hooray!';
   if (Math.hypot(p.pos.x, p.pos.z) > WORLD_R - 10) return '↩️ Heading back to the islands';
+  if (p.pickup || (p.grounded && p.incoming > 0)) return '\u{1F6EC} Landing to pick up a friend';
   if (p.mode === 'pickup') return '🧺 Here comes the basket!';
   if (p.mode === 'deliver') return p.vehicle !== 'heli' ? '🏠 Heading for the dock…' : '🏠 Lowering them home…';
   if (p.cargo.length >= MAX_CARGO) return '🏠 Basket full — fly home!';
@@ -1095,7 +1186,6 @@ $('#bTime').addEventListener('click', e => { cyclePreset(); e.currentTarget.blur
 $('#bGfx').addEventListener('click', e => { toggleGfx(); e.currentTarget.blur(); });
 $('#bMute').addEventListener('click', e => { toggleMute(); e.currentTarget.blur(); });
 $('#bPause').addEventListener('click', e => { togglePause(); e.currentTarget.blur(); });
-life.onPop = p => { p.stars++; syncHud(); };
 
 // ================================================================= rendering
 const menuCam = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 9000);
@@ -1181,6 +1271,20 @@ composer.addPass(new ShaderPass({
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.3, 0.55, 0.92);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
+// the grade: a little more contrast and colour than the tone curve leaves, and corners that fall away gently
+composer.addPass(new ShaderPass({
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    void main(){
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      c = mix(c, c * c * (3.0 - 2.0 * c), 0.28);
+      c = mix(vec3(dot(c, vec3(0.299, 0.587, 0.114))), c, 1.12);
+      vec2 q = vUv - 0.5;
+      c *= 1.0 - dot(q, q) * 0.42;
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+}));
 
 function onResize() {
   renderer.setSize(innerWidth, innerHeight);
@@ -1190,6 +1294,27 @@ function onResize() {
 }
 addEventListener('resize', onResize);
 
+// development: debug.view = [x, y, z, lookX, lookY, lookZ] holds the menu camera still; debug.run(seconds) plays
+// the game forward without waiting for the screen (a hidden tab draws nothing), and debug.shot(name) posts the
+// frame to serve.mjs, which writes shots/<name>.jpg
+const debug = {
+  view: null,
+  // put a rescue where it can be looked at: a stricken boat, or a friend at landing site number i
+  boat: () => spawnBoat(400),
+  camp(i) { const site = SITES[i]; site.busy = true; return addWaiting('camp', site.x + site.r - 2.5, site.z, { site }); },
+  run(seconds = 0.1) { for (let i = 0; i < seconds * 30; i++) { last = performance.now() - 33; tick(performance.now()); } },
+  // milliseconds a frame really takes to draw (reading a pixel back makes the graphics card finish first)
+  time(frames = 40) {
+    const gl = renderer.getContext(), px = new Uint8Array(4), t0 = performance.now();
+    for (let i = 0; i < frames; i++) { debug.run(0.034); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); }
+    return (performance.now() - t0) / frames;
+  },
+  shot(name) {
+    debug.run(0.07);
+    return new Promise(done => canvas.toBlob(b => fetch('/__shot/' + name + '.jpg', { method: 'POST', body: b }).then(() => done(name)), 'image/jpeg', 0.92));
+  },
+};
+
 // ================================================================= main loop
 setPreset(0);
 layoutHud(); syncHud();
@@ -1197,8 +1322,8 @@ showVehicle(players[1], false);
 players[0].active = true;   // red sits on its pad behind the menu
 
 let last = performance.now(), simT = 0;
-function frame(now) {
-  requestAnimationFrame(frame);
+function frame(now) { requestAnimationFrame(frame); tick(now); }
+function tick(now) {
   const dt = Math.min((now - last) / 1000, 0.05); last = now;
   const playing = game.state === 'play';
   if (!game.paused) simT += dt;
@@ -1231,6 +1356,7 @@ function frame(now) {
       game.spawnT -= dt;
       if (waiting.length < maxWaiting() && game.spawnT <= 0 && game.celebrate <= 0) { spawnAnimal(false); game.spawnT = 4 + Math.random() * 4; }
     }
+    updateBoatRescue(dt, t);
     for (const an of waiting) placeWaiting(an, t, dt);
     updateLeaving(dt); updateBoarding(dt); updateSinking(dt);
     updateHoppers(dt, t);
@@ -1269,13 +1395,15 @@ function frame(now) {
     const a = performance.now() / 1000 * 0.07 + 0.9;
     menuCam.position.set(Math.sin(a) * 70, 24 + Math.sin(a * 0.7) * 5, Math.cos(a) * 70);
     menuCam.lookAt(0, 9, 0);
+    if (debug.view) { menuCam.position.fromArray(debug.view, 0); menuCam.lookAt(debug.view[3], debug.view[4], debug.view[5]); }
     const asp = innerWidth / innerHeight;
     if (Math.abs(menuCam.aspect - asp) > 1e-4) { menuCam.aspect = asp; menuCam.updateProjectionMatrix(); }
   } else updateHud(dt);
 
+  world.focus(getViews().map(v => v.cam.position));
   composer.render();
 }
 requestAnimationFrame(frame);
 
 // tiny debug handle (also handy for automated checks)
-window.__game = { gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx };
+window.__game = { gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };
