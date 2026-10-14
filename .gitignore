@@ -1,0 +1,8 @@
+node_modules/
+rescue-squad-3d.html
+
+# Unreal is a separate prototype and contains large generated artifacts.
+unreal/
+
+.claude/
+.mcp.json

@@ -1,0 +1,8 @@
+.git
+.github
+node_modules
+unreal
+.claude
+.mcp.json
+*.html
+*.md
