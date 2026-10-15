@@ -315,13 +315,17 @@ def plane():
                     [(-4.75, 0.05, 0.55), (-5.1, 0.05, 0.6), (-5.15, 0.03, 2.1), (-4.95, 0.03, 2.25)], 'Paint', 0.02))
     # floats with their struts and spreader bars, and little water rudders
     for side in (1, -1):
-        bits.append(loft('Float', [(4.2, 0.08, 0.15, -1.25, 2), (3.4, 0.36, 0.38, -1.4, 2.6), (1.6, 0.46, 0.45, -1.42, 3), (-0.8, 0.44, 0.42, -1.43, 3),
-                                   (-2.6, 0.3, 0.25, -1.5, 2.6), (-3.1, 0.12, 0.1, -1.55, 2)],
-                         lambda x, s, u: 'Dark' if u < -0.5 else 'Paint', ring=20, subdivide=1))
+        # (deep floats that stand well clear of the swell: keels at -1.85, decks at about -0.6)
+        # (loft builds on the centreline, so each float is moved out under its own struts)
+        float_ = loft('Float', [(4.4, 0.08, 0.2, -1.0, 2), (3.6, 0.32, 0.5, -1.22, 2.6), (1.6, 0.4, 0.6, -1.24, 3), (-0.8, 0.38, 0.58, -1.26, 3),
+                                (-2.7, 0.26, 0.38, -1.44, 2.6), (-3.3, 0.1, 0.13, -1.6, 2)],
+                      lambda x, s, u: 'Dark' if u < -0.5 else 'Paint', ring=20, subdivide=1)
+        float_.location.y = side * 1.8
+        bits.append(float_)
         y = side * 1.8
-        bits += [rod('FloatStrut', (2.4, y, -1.0), (2.2, side * 0.55, -0.45), 0.055, 'Metal', 8), rod('FloatStrut', (-0.5, y, -1.0), (0.2, side * 0.55, -0.45), 0.055, 'Metal', 8),
-                 rod('FloatStrut', (2.4, y, -1.0), (0.2, side * 0.55, -0.45), 0.035, 'Metal', 8), slab('WaterRudder', (-3.15, y, -1.62), (0.25, 0.03, 0.28), 'Dark', 0.01)]
-    bits += [rod('Spreader', (2.4, 1.8, -1.0), (2.4, -1.8, -1.0), 0.04, 'Metal', 8), rod('Spreader', (-0.5, 1.8, -1.0), (-0.5, -1.8, -1.0), 0.04, 'Metal', 8)]
+        bits += [rod('FloatStrut', (2.4, y, -0.62), (2.2, side * 0.55, -0.45), 0.055, 'Metal', 8), rod('FloatStrut', (-0.5, y, -0.62), (0.2, side * 0.55, -0.45), 0.055, 'Metal', 8),
+                 rod('FloatStrut', (2.4, y, -0.62), (0.2, side * 0.55, -0.45), 0.035, 'Metal', 8), slab('WaterRudder', (-3.35, y, -1.62), (0.25, 0.03, 0.32), 'Dark', 0.01)]
+    bits += [rod('Spreader', (2.4, 1.8, -0.62), (2.4, -1.8, -0.62), 0.04, 'Metal', 8), rod('Spreader', (-0.5, 1.8, -0.62), (-0.5, -1.8, -0.62), 0.04, 'Metal', 8)]
     return join('Vehicle_Plane', bits)
 
 

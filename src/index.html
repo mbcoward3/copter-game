@@ -44,7 +44,7 @@
   .big.ghost{background:var(--glass);font-size:18px;padding:12px 22px;border-width:2px;}
   .big:hover{transform:translateY(-3px) scale(1.03);} .big:focus-visible{outline:4px solid #ffd23c;outline-offset:3px;}
   .cards{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;}
-  .card{background:var(--glass);backdrop-filter:blur(10px);border-radius:18px;padding:14px 20px;border:2px solid var(--c);min-width:270px;}
+  .card{background:var(--glass);backdrop-filter:blur(10px);border-radius:18px;padding:14px 20px;border:2px solid var(--c);width:min(360px,92vw);height:330px;box-sizing:border-box;}
   .card h3{font-size:18px;margin-bottom:8px;color:var(--c);}
   .card table{border-collapse:collapse;font-size:15px;}
   .card td{padding:3px 10px 3px 0;}
@@ -52,8 +52,9 @@
   .veh,.flt{pointer-events:auto;flex:1;padding:8px 6px;white-space:nowrap;border-radius:12px;border:2px solid rgba(255,255,255,.3);background:rgba(255,255,255,.08);color:#fff;font:700 15px "Segoe UI",system-ui,sans-serif;cursor:pointer;}
   .veh.on,.flt.on{background:var(--c);border-color:#fff;}
   .flt{font-size:13px;padding:5px 6px;}
+  /* the keys shown are the ones for this pilot's machine and way of flying */
   .card .keysPro,.card.pro .keysEasy{display:none;}
-  .card.pro .keysPro{display:table;}
+  .card.pro.v-heli .kp-heli,.card.pro.v-boat .kp-boat,.card.pro.v-plane .kp-plane{display:table;}
   .veh:focus-visible,.flt:focus-visible{outline:3px solid #ffd23c;outline-offset:2px;}
   .card tr.extra td{padding-top:8px;font-size:12.5px;opacity:.75;}
   kbd{display:inline-block;min-width:28px;padding:3px 7px;border-radius:7px;background:#fff;color:var(--ink);font:700 13px "Segoe UI",system-ui,sans-serif;text-align:center;box-shadow:0 2px 0 #9fb0c4;margin:1px;}
@@ -101,7 +102,7 @@
   </div>
   <div class="row" id="resumeRow" style="display:none"><button class="big ghost" id="resume">▶ Keep flying</button></div>
   <div class="cards">
-    <div class="card" style="--c:var(--p1)">
+    <div class="card v-heli" style="--c:var(--p1)">
       <h3>🔴 Red pilot</h3>
       <div class="pick"><button class="veh on" data-p="0" data-v="heli">🚁 Helicopter</button><button class="veh" data-p="0" data-v="plane">🛩️ Seaplane</button><button class="veh" data-p="0" data-v="boat">🚤 Boat</button></div>
       <div class="pick"><button class="flt on" data-p="0" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="0" data-m="pro">🎖️ Pilot</button></div>
@@ -111,9 +112,11 @@
         <tr><td><kbd>S</kbd></td><td>back up</td></tr>
         <tr class="extra"><td><kbd>F</kbd> honk</td><td><kbd>E</kbd><kbd>Q</kbd> higher / lower</td></tr>
       </table>
-      <table class="keysPro"><tr><td><kbd>W</kbd><kbd>S</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn the nose</td></tr><tr><td><kbd>Q</kbd><kbd>E</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Space</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>R</kbd></td><td>winch / throw the ring</td></tr><tr class="extra"><td colspan="2">Boat: <kbd>W</kbd><kbd>S</kbd> throttle, <kbd>A</kbd><kbd>D</kbd> steer. Seaplane: <kbd>W</kbd><kbd>S</kbd> throttle lever, <kbd>A</kbd><kbd>D</kbd> turn, <kbd>Space</kbd><kbd>Shift</kbd> climb / dive.</td></tr><tr class="extra"><td colspan="2">Gamepad: left stick tilt, right stick turn, triggers climb / descend, A winch</td></tr></table>
+      <table class="keysPro kp-heli"><tr><td><kbd>W</kbd><kbd>S</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn the nose</td></tr><tr><td><kbd>Q</kbd><kbd>E</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Space</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>R</kbd></td><td>hold to lower the basket</td></tr></table>
+      <table class="keysPro kp-boat"><tr><td><kbd>W</kbd></td><td>throttle</td></tr><tr><td><kbd>S</kbd></td><td>slow / astern</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>steer</td></tr><tr><td></td><td>stop beside a friend to throw the ring</td></tr></table>
+      <table class="keysPro kp-plane"><tr><td><kbd>W</kbd><kbd>S</kbd></td><td>boost / ease off (it cruises by itself)</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn</td></tr><tr><td><kbd>Space</kbd><kbd>Shift</kbd></td><td>climb / dive</td></tr><tr><td></td><td>fly down onto the water to land; hold W to take off again</td></tr></table>
     </div>
-    <div class="card" style="--c:var(--p2)">
+    <div class="card v-heli" style="--c:var(--p2)">
       <h3>🔵 Blue pilot</h3>
       <div class="pick"><button class="veh on" data-p="1" data-v="heli">🚁 Helicopter</button><button class="veh" data-p="1" data-v="plane">🛩️ Seaplane</button><button class="veh" data-p="1" data-v="boat">🚤 Boat</button></div>
       <div class="pick"><button class="flt on" data-p="1" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="1" data-m="pro">🎖️ Pilot</button></div>
@@ -123,10 +126,12 @@
         <tr><td><kbd>↓</kbd></td><td>back up</td></tr>
         <tr class="extra"><td><kbd>/</kbd> honk</td><td><kbd>Enter</kbd><kbd>Shift</kbd> higher / lower</td></tr>
       </table>
-      <table class="keysPro"><tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn the nose</td></tr><tr><td><kbd>,</kbd><kbd>.</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Enter</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>Ctrl</kbd></td><td>winch / throw the ring</td></tr><tr class="extra"><td colspan="2">Gamepad: left stick tilt, right stick turn, triggers climb / descend, A winch</td></tr></table>
+      <table class="keysPro kp-heli"><tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn the nose</td></tr><tr><td><kbd>,</kbd><kbd>.</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Enter</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>Ctrl</kbd></td><td>hold to lower the basket</td></tr></table>
+      <table class="keysPro kp-boat"><tr><td><kbd>↑</kbd></td><td>throttle</td></tr><tr><td><kbd>↓</kbd></td><td>slow / astern</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>steer</td></tr><tr><td></td><td>stop beside a friend to throw the ring</td></tr></table>
+      <table class="keysPro kp-plane"><tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>boost / ease off (it cruises by itself)</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn</td></tr><tr><td><kbd>Enter</kbd><kbd>Shift</kbd></td><td>climb / dive</td></tr><tr><td></td><td>fly down onto the water to land; hold ↑ to take off again</td></tr></table>
     </div>
   </div>
-  <p class="tip">Just fly! Everything stays up by itself. Fly to a golden light beam: the helicopter lowers its rescue basket,<br>the seaplane skims past and the boat pulls up alongside, and friends hop aboard. Then fly home and they hop out. Higher / lower keys work on both machines if you want them. Nothing can go wrong — explore anywhere.<br>Grown-ups: pick 🎖️ Pilot to fly the helicopter properly — your own height, your own hover, your own winch, and the wind to argue with.</p>
+  <p class="tip">Just fly! Everything stays up by itself. Fly to a golden light beam: the helicopter lowers its rescue basket,<br>the seaplane skims past and the boat pulls up alongside, and friends hop aboard. Then fly home and they hop out. Higher / lower keys work on both machines if you want them. Nothing can go wrong — explore anywhere.<br>Grown-ups: pick 🎖️ Pilot to do it all yourself — no autopilot, the wind to argue with, and stars for doing it well.</p>
 </div>
 <div id="err"></div>
 

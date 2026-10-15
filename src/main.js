@@ -471,7 +471,7 @@ function updatePlane(p, dt, t) {
   }
 
   // ---- turning: one smoothed turn rate; the bank comes from it
-  const maxRate = p.afloat ? 1.15 : 0.9;
+  const maxRate = p.afloat ? 1.15 : p.pro ? 1.5 : 0.9;
   let turnCmd = p.pro ? clamp(inp.t - inp.s, -1, 1) : inp.t !== 0 ? inp.t + assist * 0.35 : assist;
   // far out to sea: lean back toward the islands
   const rr = Math.hypot(p.pos.x, p.pos.z);
@@ -515,17 +515,30 @@ function updatePlane(p, dt, t) {
 
   const flying = p.fs > PL.fly - 1;
   if (p.pro) {
-    // ---- flown properly: a throttle lever, the elevator on the height keys, and it flies only above flying speed
-    p.thr = clamp((p.thr || 0) + inp.f * dt * 0.7, 0, 1);
-    if (!ready) p.thr = 0;
-    // (air drag grows with the square of speed, so full power tops out near 40 m/s and a trickle holds about 16;
-    // on the water the floats drag too, and with the throttle closed it soon stops)
-    const drag = 0.0056 * p.fs * Math.abs(p.fs) + (p.afloat ? 0.03 * p.fs + (p.thr === 0 ? p.fs * 0.35 : 0) : 0);
-    p.fs = clamp(p.fs + (p.thr * 9 - drag) * dt, -3, 42);
-    const lift = p.fs - 15;                                  // flying speed is about 15 m/s
-    let vyT = lift > 0 ? inp.l * Math.min(9, lift * 0.9) : -Math.min(5, 1 - lift * 0.5);
-    if (p.afloat && (inp.l <= 0 || lift <= 0)) vyT = Math.min(vyT, 0);
-    p.vel.y += (vyT - p.vel.y) * damp(2.2, dt);
+    // ---- flown by hand, arcade style. In the air it cruises by itself at 32 m/s: W boosts, S eases off, and it settles
+    // back to cruise when you let go; diving picks up speed and climbing costs some. It never stalls, so landing is just
+    // flying down onto the water, where it settles and slows to a taxi. On the water W drives it along, and held long
+    // enough it lifts off by itself.
+    let vyT = 0;
+    if (p.afloat) {
+      // (with a friend close by and room aboard, W taxis up to them; otherwise it is take-off power)
+      const taxi = room && waiting.some(an => !outOfReach(an, p) && Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z) < 45);
+      const want = !ready || p.incoming ? 0 : inp.f > 0 ? (taxi ? 6 : 30) : inp.f < 0 ? -3 : 0;
+      p.fs += clamp(want - p.fs, -7 * dt, 7 * dt);
+      if (inp.f > 0 && !taxi && p.fs > 19) vyT = 7;                             // rotate and climb away
+      else if (inp.l > 0 && p.fs > 15) vyT = 6;
+    } else {
+      vyT = inp.l * (inp.l > 0 ? 11 : 10);
+      if (inp.l === 0 && alt < 12) vyT = 4;                                       // hands off, it climbs back to a safe height
+      const want = 32 + (inp.f > 0 ? 18 * inp.f : 12 * inp.f) - p.vel.y * 1.4;       // (a dive speeds it up, a climb slows it)
+      p.fs += clamp(want - p.fs, -6 * dt, 8 * dt);
+      p.fs = Math.max(p.fs, 18);
+      let ahead = -1e9;
+      for (const sec of [0.6, 1.4, 2.4]) ahead = Math.max(ahead, landWithin(p, fx_, fz_, p.fs * sec, t));
+      if (ahead > 2.5) vyT = Math.max(vyT, (ahead + 5 - alt) * 1.6);             // never fly into a hill (beaches and sandbars do not count)
+      if (alt < 3 && vyT < 0) vyT = Math.max(vyT, -2.2);                          // a gentle last few metres onto the water
+    }
+    p.vel.y += (vyT - p.vel.y) * damp(3, dt);
     p.descent = p.vel.y;
   } else {
   // ---- height: cruise when flying, follow the glide slope when landing or scooping, always clear of land
@@ -585,14 +598,14 @@ function updatePlane(p, dt, t) {
     if (d < (an.kind === 'islet' ? 30 : an.kind === 'deck' ? 16 : 13) && p.afloat && Math.abs(p.fs) < 5.5) { board(an, p); p.target = null; }
   }
   // (a pilot taxis right up to them and stops; they swim over)
-  if (p.pro && p.afloat && Math.abs(p.fs) < 2.5 && room) for (const an of waiting) {
+  if (p.pro && p.afloat && Math.abs(p.fs) < 7.5 && room) for (const an of waiting) {
     if (outOfReach(an, p)) continue;
     const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
-    if (d < (an.kind === 'islet' ? 24 : 14)) { board(an, p); if (d < 8) rate(p, 3, 'Right alongside'); else if (d < 11) rate(p, 2, 'Nice taxiing'); else rate(p, 1, 'A long swim!'); break; }
+    if (d < (an.kind === 'islet' ? 24 : 12)) { board(an, p); if (an.kind === 'islet' || d < 7) rate(p, 3, 'Right alongside'); else if (d < 10) rate(p, 2, 'Nice taxiing'); else rate(p, 1, 'A long swim!'); break; }
   }
   // ---- home: friends hop out along the pier
   p.dropCd -= dt;
-  if (p.cargo.length && p.afloat && dockD < (p.pro ? 18 : 34) && Math.abs(p.fs) < (p.pro ? 2.5 : 12) && p.dropCd <= 0) { if (p.pro) rate(p, dockD < 10 ? 3 : 2, dockD < 10 ? 'Neat mooring' : 'Moored'); deliverOne(p); p.dropCd = 0.45; }
+  if (p.cargo.length && p.afloat && dockD < (p.pro ? 22 : 34) && Math.abs(p.fs) < (p.pro ? 7 : 12) && p.dropCd <= 0) { if (p.pro) rate(p, dockD < 10 ? 3 : 2, dockD < 10 ? 'Neat mooring' : 'Moored'); deliverOne(p); p.dropCd = 0.45; }
   if (!p.parked && p.afloat && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; sfx.engineStop(); }
   p.mode = p.target || p.incoming ? 'pickup' : (p.cargo.length && dockD < 130 ? 'deliver' : 'idle');
 
@@ -603,7 +616,7 @@ function updatePlane(p, dt, t) {
   p.sea += ((1 - air) - p.sea) * damp(3, dt);                               // 1 = sitting on the water, 0 = airborne
   const planing = clamp(p.fs / PL.fly, 0, 1);
   const pt = -Math.atan2(p.vel.y, Math.max(p.fs, 10)) * 0.85 - p.sea * planing * 0.075;
-  const rt = clamp(-Math.atan(p.yawVel * Math.max(p.fs, 0) / 9.8) * lerp(0.9, 0.12, p.sea), -0.6, 0.6);
+  const rt = clamp(-Math.atan(p.yawVel * Math.max(p.fs, 0) / 9.8) * lerp(0.9, 0.12, p.sea), p.pro ? -1.05 : -0.6, p.pro ? 1.05 : 0.6);
   p.pitch += (pt - p.pitch) * damp(2.2, dt); p.roll += (rt - p.roll) * damp(2.0, dt);
   p.shake = Math.max(0, p.shake - dt * 2.4); p.squash = Math.max(0, p.squash - dt * 1.7);
   const rumble = p.sea * p.spin * (1.15 - 0.75 * p.spin) * 0.05;
@@ -716,7 +729,7 @@ function updateBoat(p, dt, t) {
   if (p.pro) {
     // a throttle and a hull: full power runs it up to 34 m/s, letting go it coasts down on the water's drag, back is astern
     const thrust = !ready || atDock ? 0 : inp.f > 0 ? 7.5 * inp.f : inp.f < 0 ? 6 * inp.f : 0;
-    p.fs += (thrust - p.fs * (0.05 + Math.abs(p.fs) * 0.004) - (inp.f === 0 ? p.fs * 0.12 : 0)) * dt;
+    p.fs += (thrust - p.fs * (0.05 + Math.abs(p.fs) * 0.004) - (inp.f === 0 ? p.fs * 0.32 : 0)) * dt;
     if (atDock) p.fs *= 1 - damp(2, dt);
   } else p.fs += clamp((want - p.fs) * 1.8, -11, 8.5) * dt;
 
@@ -742,7 +755,7 @@ function updateBoat(p, dt, t) {
   const rideY = wave * 0.75;
   p.bvy = p.bvy || 0;
   if (p.pos.y <= rideY + 0.02) {
-    if (p.air > 0.35) { fx.splash(p.pos.x, wave, p.pos.z, 30, 1.2); sfx.splash(); p.squash = 1; p.shake = 0.6; if (p.pro) rate(p, p.air > 0.8 ? 3 : 2, p.air > 0.8 ? 'Big air!' : 'Airborne!'); }
+    if (p.air > 0.5 && Math.abs(p.fs) > 12) { fx.splash(p.pos.x, wave, p.pos.z, 30, 1.2); sfx.splash(); p.squash = 1; p.shake = 0.6; if (p.pro) rate(p, p.air > 0.8 ? 3 : 2, p.air > 0.8 ? 'Big air!' : 'Airborne!'); }
     p.bvy = (rideY - p.pos.y) / Math.max(dt, 1e-3) * 0.5 + Math.max(0, (waveHeight(p.pos.x + Math.sin(p.yaw) * p.fs * 0.05, p.pos.z + Math.cos(p.yaw) * p.fs * 0.05, t) * 0.75 - rideY) / 0.05) * 0.35;
     p.pos.y = rideY; p.air = 0;
   } else { p.bvy -= 9.8 * dt; p.pos.y += p.bvy * dt; p.air += dt; if (p.pos.y < rideY) p.pos.y = rideY - 0.001; }
@@ -755,12 +768,14 @@ function updateBoat(p, dt, t) {
   }
   // (a pilot comes alongside, stops and throws the ring)
   p.throwCd = Math.max(0, (p.throwCd || 0) - dt);
-  if (p.pro && inp.w && p.throwCd <= 0 && room) {
+  // (stopped right beside someone, the crew throws without being asked)
+  const autoThrow = p.pro && Math.abs(p.fs) < 2 && waiting.some(an => !outOfReach(an, p) && Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z) < 11);
+  if (p.pro && (inp.w || autoThrow) && p.throwCd <= 0 && room) {
     p.throwCd = 0.8;
     let best = null, bd = 1e9;
     for (const an of waiting) { if (inland(an)) continue; const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z); if (d < bd) { bd = d; best = an; } }
     if (best && bd < (best.kind === 'islet' ? 26 : 17) && Math.abs(p.fs) < 4) { board(best, p); if (bd < 8) rate(p, 3, 'Right alongside'); else if (bd < 12) rate(p, 2, 'Good throw'); else rate(p, 1, 'Long throw!'); }
-    else sfx.boop();
+    else if (inp.w) sfx.boop();
   }
   p.dropCd -= dt;
   if (p.cargo.length && dockD < (p.pro ? 14 : 30) && Math.abs(p.fs) < (p.pro ? 2.5 : 10) && p.dropCd <= 0) { if (p.pro) rate(p, dockD < 8 ? 3 : 2, dockD < 8 ? 'Neat docking' : 'Docked'); deliverOne(p); p.dropCd = 0.45; }
@@ -1164,6 +1179,7 @@ const BP = new THREE.Vector3();
 function boardPoint(p, an, out) {
   if (p.vehicle === 'heli') return out.copy(p.basket.position);
   const g = p.model.group;
+  g.updateMatrixWorld();      // (it has moved since the last frame was drawn)
   const side = Math.sign((an.model.position.x - g.position.x) * Math.cos(p.yaw) - (an.model.position.z - g.position.z) * Math.sin(p.yaw)) || 1;
   if (p.vehicle === 'boat') out.set(side * 1.9, 0, -2.2); else out.set(side * 1.8, 0, 0.6);
   out.applyMatrix4(g.matrixWorld);
@@ -1223,6 +1239,7 @@ function updateBoarding(dt, t) {
     }
     an.t += dt / an.bdur;
     const k = Math.min(an.t, 1), e = k * k * (3 - 2 * k);
+    p.basket.updateWorldMatrix(true, false);
     V.set(SLOTS[an.slot][0], SLOTS[an.slot][1], SLOTS[an.slot][2]).applyMatrix4(p.basket.matrixWorld);
     m.position.lerpVectors(an.from, V, e);
     m.position.y += Math.sin(k * Math.PI) * an.barc;
@@ -1383,35 +1400,28 @@ function layoutHud() {
   $('.label', p0).textContent = two ? 'Red' : 'Rescue 9';
   $('#mission').style.top = two ? '62px' : '14px';
 }
-const spoolHint = p => !p.parked && p.grounded && p.spin < 0.93;
+// A line of guidance under each pilot's picture. Small pilots cannot read, so in easy flying it stays empty; in Pilot
+// mode it says what to do next in that machine's own terms.
 function hintFor(p) {
   const solo = activePlayers().length === 1;
   if (p.flashT > 0) return p.flash;
-  if (game.celebrate > 0) return '🎆 Hooray!';
-  if (Math.hypot(p.pos.x, p.pos.z) > WORLD_R - 10) return '↩️ Heading back to the islands';
-  if (p.pickup || (p.grounded && p.incoming > 0)) return '\u{1F6EC} Landing to pick up a friend';
-  if (p.mode === 'pickup') return '🧺 Here comes the basket!';
-  if (p.mode === 'deliver') return p.vehicle !== 'heli' ? '🏠 Heading for the dock…' : '🏠 Lowering them home…';
-  if (p.cargo.length >= MAX_CARGO) return '🏠 Basket full — fly home!';
-  if (spoolHint(p)) return '🔊 Engine starting…';
-  if (p.pro && p.vehicle === 'boat') {
-    if (p.cargo.length >= MAX_CARGO || (p.cargo.length && !waiting.length)) return '\u{1F3E0} Bring them in to the jetty and stop';
-    return '\u{1F6DF} Stop beside a friend and press ' + (p.idx && !solo ? 'Ctrl' : 'R') + ' to throw the ring';
+  if (!p.pro) return '';
+  const key = (a, b) => (p.idx && !solo ? b : a);
+  const full = p.cargo.length >= MAX_CARGO || (p.cargo.length && !waiting.length);
+  if (p.vehicle === 'heli') {
+    if (p.grounded) return p.incoming ? 'Climbing aboard…' : 'Hold ' + key('Space', 'Enter') + ' to lift off';
+    if (full) return 'Full — land at the base, or winch them down by the paddock';
+    return 'Hover over a friend and hold ' + key('R', 'Ctrl') + ' to winch';
   }
-  if (p.pro && p.vehicle === 'plane') {
-    if (p.parked || (p.afloat && Math.abs(p.fs) < 1 && !p.thr)) return '\u{1F6E9}\uFE0F ' + (p.idx && !solo ? '\u2191' : 'W') + ' opens the throttle, ' + (p.idx && !solo ? 'Enter' : 'Space') + ' lifts off';
-    if (p.cargo.length >= MAX_CARGO || (p.cargo.length && !waiting.length)) return '\u{1F3E0} Land and taxi in to the jetty';
-    return '\u{1F6EC} Land, taxi up to a friend and stop';
+  if (p.vehicle === 'boat') {
+    if (p.incoming) return 'Coming aboard…';
+    if (full) return 'Full — bring them in to the jetty and stop';
+    return 'Stop beside a friend to throw the ring';
   }
-  if (p.pro && p.vehicle === 'heli') {
-    if (p.grounded) return '\u{1F681} Hold ' + (p.idx && !solo ? 'Enter' : 'Space') + ' to lift off';
-    if (p.cargo.length >= MAX_CARGO) return '\u{1F3E0} Full \u2014 take them home';
-    return p.cargo.length ? '\u{1F3E0} Land at base, or winch them down' : '\u{1FA9D} Hover over a friend and hold ' + (p.idx && !solo ? 'Ctrl' : 'R') + ' to winch';
-  }
-  if (p.landed) return '🚁 Press ' + (solo ? '↑ or W' : p.idx ? '↑' : 'W') + ' to fly!';
-  if (p.cargo.length && !waiting.length) return '🏠 Bring them home to base';
-  if (p.cargo.length) return '✨ More friends, or fly home';
-  return '✨ Follow the golden light beams';
+  if (p.incoming) return 'Swimming to the float…';
+  if (p.afloat && p.fs < 3 && !p.cargo.length) return key('W', '↑') + ' to speed up, ' + key('Space', 'Enter') + ' to lift off';
+  if (full) return 'Full — land and taxi in to the jetty';
+  return 'Fly down onto the water near a friend and taxi up to them';
 }
 function drawRadar(p) {
   const g = p.ui.radar, S = 336, c = S / 2, R = c - 14, range = 210;
@@ -1461,6 +1471,7 @@ const menu = $('#menu');
 const vehicleChoice = ['heli', 'heli'];
 for (const b of document.querySelectorAll('.veh')) b.addEventListener('click', () => {
   const i = +b.dataset.p; vehicleChoice[i] = b.dataset.v;
+  const card = b.closest('.card'); card.classList.remove('v-heli', 'v-boat', 'v-plane'); card.classList.add('v-' + b.dataset.v);
   for (const o of document.querySelectorAll('.veh[data-p="' + i + '"]')) o.classList.toggle('on', o === b);
 });
 for (const b of document.querySelectorAll('.flt')) b.addEventListener('click', () => {
