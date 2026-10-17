@@ -48,6 +48,8 @@ export const STATION = { x: 0, z: -30 };
 export const LIGHTHOUSE = { x: -98, z: 74 };
 // a sea arch between the base and the lighthouse: tall enough to fly through, and the boat fits under it too
 export const ARCH = { x: -59, z: 54, yaw: 3.97 };
+// a level patch of sand below the base, east of the jetty, for the sunshades and towels (the bank above is too steep)
+const BEACH = { x: 20, z: 38, r: 6, y: 1.5 };
 // the fishermen's huts on stilts round the atoll's lagoon
 // (each faces the middle of the lagoon; porch is where someone waits on its front step, floor its height)
 export const HUTS = [0.4, 1.9, 3.3, 4.6].map(a => {
@@ -60,15 +62,15 @@ export const HUTS = [0.4, 1.9, 3.3, 4.6].map(a => {
 // dents are hollows (a lagoon), cliff the height of a sea cliff and cliffDir the side it faces.
 const lobe = (x, z, r, h, o = {}) => ({ x, z, r, h, coast: 0.36, pow: 1.3, forest: 0.8, palms: 0.22, ...o, sx: x * 0.013 + 3.1, sz: z * 0.013 - 1.7 });
 export const ISLANDS = [
-  lobe(0, -12, 56, 6.5, { coast: 0.1, forest: 0, flats: [{ x: 0, z: -8, r: 40, y: BASE_Y }] }),      // rescue base
+  lobe(0, -12, 56, 6.5, { coast: 0.1, forest: 0, flats: [{ x: 0, z: -8, r: 40, y: BASE_Y }, BEACH] }),      // rescue base
   lobe(8, -84, 44, 17, { forest: 0.95 }),                                                              // the wooded hill behind it
   lobe(LIGHTHOUSE.x, LIGHTHOUSE.z, 30, 8, { coast: 0.18, cliff: 7.2, forest: 0.12, palms: 0.05, flats: [{ x: LIGHTHOUSE.x, z: LIGHTHOUSE.z, r: 9, y: 7.5 }] }),
   lobe(175, 175, 92, 22, { ridge: 50, pow: 2.0, cliff: 12, cliffDir: [-0.6, -0.8], forest: 0.85,       // the mountain
     flats: [{ x: 146, z: 150, r: 10, site: 'Mountain ledge', pad: true }, { x: 205, z: 118, r: 10, site: 'Cove beach' }] }),
   lobe(-200, -130, 82, 20, { forest: 1,                                                                // the forest, with a lagoon and a meadow
     dents: [{ x: -168, z: -100, r: 20, y: -3.5 }], flats: [{ x: -214, z: -134, r: 11, site: 'Forest meadow', pad: true }] }),
-  lobe(210, -150, 44, 19, { forest: 0.7, cliff: 8, cliffDir: [1, -0.2] }),                             // twin hills joined by a sand spit
-  lobe(160, -196, 34, 12, { forest: 0.6, flats: [{ x: 186, z: -176, r: 9, site: 'Sand spit' }] }),
+  lobe(210, -150, 44, 19, { forest: 0.7, cliff: 8, cliffDir: [1, -0.2] }),                             // twin hills joined by a grassy saddle
+  lobe(160, -196, 34, 12, { forest: 0.6, flats: [{ x: 186, z: -176, r: 9, site: 'Hill saddle' }] }),
   lobe(-165, 200, 58, 2.6, { coast: 0.14, forest: 0, palms: 0.4, dents: [{ x: -165, z: 200, r: 25, y: -4 }, { x: -142, z: 172, r: 7, y: -4 }, { x: -133, z: 161, r: 7, y: -4 }] }),      // the atoll, with a channel through its reef
   lobe(30, -255, 46, 8, { coast: 0.2, cliff: 15, forest: 0.35, flats: [{ x: 30, z: -255, r: 10, site: 'Table rock', pad: true }] }),      // the mesa
   lobe(-285, 45, 40, 14, { ridge: 22, pow: 1.5, cliff: 11, forest: 0.3, palms: 0.05, flats: [{ x: -268, z: 62, r: 9, site: 'Crag shelf' }] }),
@@ -78,7 +80,7 @@ export const ISLANDS = [
 export const ISLETS = [
   { x: 95, z: 60 }, { x: -70, z: -95 }, { x: 110, z: -70 }, { x: -20, z: 135 },
   { x: 60, z: 250 }, { x: -120, z: -260 }, { x: 250, z: -40 }, { x: -230, z: 120 },
-  { x: 100, z: -262 }, { x: -110, z: 5 },
+  { x: 120, z: -262 }, { x: -110, z: 5 },
 ];
 for (const I of ISLANDS) I.reach = I.r * (1 + I.coast) * 1.34;
 for (const s of ISLETS) ISLANDS.push({ x: s.x, z: s.z, r: 17, h: 3.2, islet: true, reach: 17, forest: 0, palms: 0.2 });
@@ -87,16 +89,20 @@ export const OBSTACLES = [
   { x: LIGHTHOUSE.x, z: LIGHTHOUSE.z, r: 6.5, top: 42 },
   { x: STATION.x, z: STATION.z, r: 15, top: 24 },
   // the arch's two feet; and, for the easy helicopter only, the whole arch, which it flies round rather than through
-  ...[-1, 1].map(k => ({ x: ARCH.x + k * 12.5 * Math.cos(ARCH.yaw), z: ARCH.z + k * 12.5 * Math.sin(ARCH.yaw), r: 6, top: 24 })),
+  ...[-1, 1].map(k => ({ x: ARCH.x + k * 12.5 * Math.cos(ARCH.yaw), z: ARCH.z + k * 12.5 * Math.sin(ARCH.yaw), r: 6, top: 24, wr: 7.5 })),
   { x: ARCH.x, z: ARCH.z, r: 19, top: 25, easy: true },
   ...HUTS.map(h => ({ x: h.x, z: h.z, r: 6, top: 13 })),
 ];
+// (wr, where there is one, is how far it reaches out at the waterline: what a hull keeps clear of)
+// the boulders in the shallows that break the surface, which a hull must also keep clear of
+export const SHOALS = [];
 
 function islandHeight(I, x, z, natural) {
   const dx = x - I.x, dz = z - I.z, d2 = dx * dx + dz * dz;
   if (d2 >= I.reach * I.reach) return SEA_FLOOR;
   const dist = Math.sqrt(d2);
-  if (I.islet) { const d = dist / I.r, s = 1 - d * d * (3 - 2 * d); return SEA_FLOOR + (I.h - SEA_FLOOR) * Math.pow(s, 0.8); }
+  // (a sandbar has a little level top to stand on)
+  if (I.islet) { const d = Math.max(0, dist - 3.5) / (I.r - 3.5), s = 1 - d * d * (3 - 2 * d); return SEA_FLOOR + (I.h - SEA_FLOOR) * Math.pow(s, 0.8); }
   const wob = (fbm(x * 0.017 + I.sx, z * 0.017 + I.sz) - 0.5) * 2 * I.coast;
   const d = dist / (I.r * (1 + wob));
   let h;
@@ -121,7 +127,12 @@ function islandHeight(I, x, z, natural) {
 // places a helicopter can set down away from the base: { x, z, y, r, name, pad }
 export const SITES = [];
 for (const I of ISLANDS) for (const F of I.flats || []) {
-  if (F.y === undefined) F.y = Math.round(islandHeight(I, F.x, F.z, true) * 2) / 2;
+  if (F.y === undefined) {
+    // (level with its own hillside, or with a neighbouring hill that reaches over it, so that does not bulge through)
+    let over = SEA_FLOOR;
+    for (const J of ISLANDS) if (J !== I) for (let a = 0; a < 6.283; a += 0.3) for (let r = 0; r <= F.r + 0.01; r += F.r / 4) over = Math.max(over, islandHeight(J, F.x + Math.cos(a) * r, F.z + Math.sin(a) * r, true));
+    F.y = Math.max(Math.round(islandHeight(I, F.x, F.z, true) * 2) / 2, Math.ceil(over * 2 + 0.2) / 2);
+  }
   if (F.site) SITES.push({ x: F.x, z: F.z, y: F.y, r: F.r, name: F.site, pad: !!F.pad });
 }
 export function terrainHeight(x, z) {
@@ -143,6 +154,13 @@ function raiseCanopy(x, z, radius, top) {
   for (let j = cj - n; j <= cj + n; j++) for (let i = ci - n; i <= ci + n; i++) {
     if (i < 0 || j < 0 || i >= CAN_N || j >= CAN_N) continue;
     if (canopy[j * CAN_N + i] < top) canopy[j * CAN_N + i] = top;
+  }
+}
+function clearCanopy(x, z, radius) {
+  const cell = CAN_SPAN / CAN_N;
+  for (let j = 0; j < CAN_N; j++) for (let i = 0; i < CAN_N; i++) {
+    const cx = ((i + 0.5) / CAN_N - 0.5) * CAN_SPAN, cz = ((j + 0.5) / CAN_N - 0.5) * CAN_SPAN;
+    if (Math.hypot(cx - x, cz - z) < radius + cell * 0.5) canopy[j * CAN_N + i] = 0;
   }
 }
 
@@ -639,7 +657,7 @@ export function createWorld(scene, renderer) {
     lm.emissive.set(padCols[i]); lm.emissiveIntensity = 2.2;
   });
   for (const s of SITES) {
-    keepOut.push({ x: s.x, z: s.z, r: s.r + 2 });
+    keepOut.push({ x: s.x, z: s.z, r: s.r + 9 });       // (a glade wide enough that the big trees' crowns do not reach over it)
     if (s.pad) helipad(s.x, s.z, s.y + 0.3, 6.5, '#ffd23c');
   }
 
@@ -652,14 +670,17 @@ export function createWorld(scene, renderer) {
   place('World_Table', -27, 0, { y: BASE_Y, yaw: 0.2 });
   place('World_Jetty', 0, 36, { y: 0.35, scale: 1.2 });
   // sunshades and towels on the dry sand east of the jetty, wherever the beach turns out to be
-  let beachZ = 30;
-  while (beachZ < 60 && terrainHeight(20, beachZ + 5) > 1.5) beachZ++;
-  place('World_Beach', 20, beachZ, { yaw: 0.4 });
-  keepOut.push({ x: STATION.x, z: STATION.z, r: 25 }, { x: 0, z: -6.5, r: 16 }, { x: 0, z: 40, r: 9 }, { x: 0, z: 52, r: 9 }, { x: 20, z: beachZ, r: 7 }, { x: 0, z: 8, r: 34 });
+  place('World_Beach', BEACH.x, BEACH.z, { y: BEACH.y, yaw: 1.5 });
+  keepOut.push({ x: STATION.x, z: STATION.z, r: 25 }, { x: 0, z: -6.5, r: 16 }, { x: 0, z: 40, r: 9 }, { x: 0, z: 52, r: 9 }, { x: BEACH.x, z: BEACH.z, r: 9 }, { x: 0, z: 8, r: 34 });
   world.paddock = { x: 0, z: -3, r: 9 };
   const beaconMat = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff1133, emissiveIntensity: 0 });
   const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), beaconMat);
-  beacon.position.set(STATION.x, BASE_Y + modelInfo('World_Station').size[1] + 0.2, STATION.z); scene.add(beacon);
+  { // (it tops the control tower's mast, the highest point of the station, which stands off to one side of it)
+    const sp = geo('World_Station').attributes.position, top = modelInfo('World_Station').size[1];
+    let bx = 0, bz = 0, bn = 0;
+    for (let i = 0; i < sp.count; i++) if (sp.getY(i) > top - 0.3) { bx += sp.getX(i); bz += sp.getZ(i); bn++; }
+    beacon.position.set(STATION.x + bx / bn, BASE_Y + top + 0.2, STATION.z + bz / bn); scene.add(beacon);
+  }
 
   // lighthouse
   const lh = new THREE.Group();
@@ -703,11 +724,27 @@ export function createWorld(scene, renderer) {
   const PALMS = ['World_Palm', 'World_Palm2', 'World_Palm3'], BUSHES = ['World_Bush', 'World_Bush2'], ROCKS = ['World_Rock', 'World_Rock2', 'World_Rock3'];
   const pick = list => list[(rnd() * list.length) | 0];
   const rocks = { World_Rock: [], World_Rock2: [], World_Rock3: [], World_Driftwood: [] };
-  const rock = (name, x, y, z, s) => {
-    dm.position.set(x, y, z); dm.rotation.set((rnd() - 0.5) * 0.5, rnd() * 6.283, (rnd() - 0.5) * 0.5); dm.scale.set(s, s * (0.7 + rnd() * 0.5), s * (0.8 + rnd() * 0.4)); dm.updateMatrix();
+  // the lowest ground under something r across, so it stands on a slope with none of its underside showing
+  const low = (x, z, r) => { let y = terrainHeight(x, z); for (let k = 0; k < 8; k++) y = Math.min(y, terrainHeight(x + Math.cos(k * 0.785) * r, z + Math.sin(k * 0.785) * r)); return y; };
+  const footOf = name => { const b = geo(name).boundingBox || (geo(name).computeBoundingBox(), geo(name).boundingBox); return Math.max(-b.min.x, b.max.x, -b.min.z, b.max.z) * 0.8; };
+  // (dy: how far it sinks below the lowest ground under it)
+  const rock = (name, x, dy, z, s) => {
+    dm.rotation.set((rnd() - 0.5) * 0.5, rnd() * 6.283, (rnd() - 0.5) * 0.5); dm.scale.set(s, s * (0.7 + rnd() * 0.5), s * (0.8 + rnd() * 0.4));
+    const y = low(x, z, footOf(name) * s) + dy;
+    dm.position.set(x, y, z); dm.updateMatrix();
     rocks[name].push({ m: dm.matrix.clone(), x, z, cy: y, r: s * 1.6 });
+    return dm.matrix;
+  };
+  // how far a rock reaches out from where it stands, at the height of the sea (0 if it stays under it): what a hull must keep clear of
+  const _v = new THREE.Vector3();
+  const waterline = (name, m) => {
+    const P = geo(name).attributes.position; let r = 0;
+    for (let i = 0; i < P.count; i++) { _v.fromBufferAttribute(P, i).applyMatrix4(m); if (_v.y > -0.7 && _v.y < 3) r = Math.max(r, Math.hypot(_v.x - m.elements[12], _v.z - m.elements[14])); }
+    return r;
   };
   const blocked = (x, z) => keepOut.some(k => (x - k.x) ** 2 + (z - k.z) ** 2 < k.r * k.r);
+  for (const s of ISLETS) keepOut.push({ x: s.x, z: s.z, r: 6.5 });      // (whoever is stranded on a sandbar stands in the middle)
+  for (const I of ISLANDS) for (const D of I.dents || []) if (D.r < 10) keepOut.push({ x: D.x, z: D.z, r: D.r + 9 });      // (the atoll's reef channel)
   for (const I of ISLANDS) {
     const cell = 5.6;
     for (let gx = I.x - I.reach; gx < I.x + I.reach; gx += cell) for (let gz = I.z - I.reach; gz < I.z + I.reach; gz += cell) {
@@ -715,15 +752,19 @@ export function createWorld(scene, renderer) {
       const y = islandHeight(I, x, z);
       if (y < -2.5 || y < terrainHeight(x, z) - 0.01) continue;                 // sea, or a neighbouring lobe stands higher here
       const steep = Math.hypot(terrainHeight(x + 1.5, z) - terrainHeight(x - 1.5, z), terrainHeight(x, z + 1.5) - terrainHeight(x, z - 1.5)) / 3;
-      if (y < 0.9) { if (r < (I.cliff ? 0.2 : 0.07)) rock(pick(ROCKS), x, y - 0.2, z, 0.5 + rnd() * rnd() * 2.6); continue; }
+      if (y < 0.9) {
+        // (none in the reef channel or by the jetty and huts, and only pebbles off a sandbar)
+        if (r < (I.cliff ? 0.2 : 0.07) && !blocked(x, z)) { const name = pick(ROCKS), w = waterline(name, rock(name, x, -0.2, z, (0.5 + rnd() * rnd() * 2.6) * (I.islet ? 0.4 : 1))); if (w > 0) SHOALS.push({ x, z, r: w }); }
+        continue;
+      }
       if (blocked(x, z)) continue;
-      if (steep > 0.75) { if (r < 0.1) rock(pick(ROCKS), x, y - 0.5, z, 0.7 + rnd() * 1.5); continue; }
+      if (steep > 0.75) { if (r < 0.1) rock(pick(ROCKS), x, -0.3, z, 0.7 + rnd() * 1.5); continue; }
       if (y < 3.4) {
         // the beach: palms leaning over it, driftwood and scrub along the top of the sand
         if (r < I.palms) { const s = 0.85 + rnd() * 0.45; plant(pick(PALMS), x, y - 0.25, z, s, 0.2); raiseCanopy(x, z, 3, 9 * s); }
-        else if (r < I.palms + 0.05) rock('World_Driftwood', x, y + 0.05, z, 0.7 + rnd() * 0.8);
+        else if (r < I.palms + 0.05) rock('World_Driftwood', x, -0.1, z, 0.7 + rnd() * 0.8);
         else if (r < I.palms + 0.16 && y > 2) plant(pick(BUSHES), x, y - 0.05, z, 0.7 + rnd() * 0.9);
-        else if (r > 0.97) rock(pick(ROCKS), x, y - 0.3, z, 0.4 + rnd() * 0.9);
+        else if (r > 0.97) rock(pick(ROCKS), x, -0.2, z, 0.4 + rnd() * 0.9);
         continue;
       }
       // inland: forest in drifts with glades between, scrub in the gaps, the odd boulder
@@ -734,21 +775,59 @@ export function createWorld(scene, renderer) {
         plant(name, x, y - 0.35, z, s);
         raiseCanopy(x, z, 7, modelInfo(name).size[1] * s * 1.1);
       } else if (r < wood * 0.82 + 0.16) plant(pick(BUSHES), x, y - 0.05, z, 0.8 + rnd() * 1.4);
-      else if (r > 0.975) rock(pick(ROCKS), x, y - 0.4, z, 0.5 + rnd() * 1.4);
+      else if (r > 0.975) rock(pick(ROCKS), x, -0.3, z, 0.5 + rnd() * 1.4);
     }
   }
-  // sea stacks: tall rocks standing in the shallows off the islands that have cliffs
-  for (const I of ISLANDS) if (I.cliff) for (let k = 0, n = 3 + ((rnd() * 3) | 0); k < n; k++) {
-    const a = rnd() * 6.283, d = I.r * (1.12 + rnd() * 0.3), x = I.x + Math.cos(a) * d, z = I.z + Math.sin(a) * d, y = terrainHeight(x, z);
-    if (y > -0.5 || y < -9 || Math.hypot(x, z) < 75) continue;
-    const s = 2.2 + rnd() * 3;
+  // sea stacks: tall rocks standing in the water off the sea cliffs (on the side a cliff faces), clear of the arch, the
+  // huts, the other islands and sandbars, the patrol boat's beat round the base, the edge of the world and each other
+  const stacks = [];
+  const stackOk = (I, x, z, y) => y < -1.5 && y > -9 && Math.hypot(x, z) > 205 && Math.hypot(x, z) < WORLD_R - 25
+    && Math.hypot(x - ARCH.x, z - ARCH.z) > 40 && HUTS.every(h => Math.hypot(x - h.x, z - h.z) > 40)
+    && ISLANDS.every(J => J === I || Math.hypot(x - J.x, z - J.z) > J.reach + (J.islet ? 15 : 6))
+    && stacks.every(q => Math.hypot(x - q.x, z - q.z) > 24);
+  for (const I of ISLANDS) if (I.cliff) for (let k = 0, n = 3 + ((rnd() * 3) | 0), placed = 0; k < 40 && placed < n; k++) {
+    const a = I.cliffDir ? Math.atan2(I.cliffDir[1], I.cliffDir[0]) + (rnd() - 0.5) * 2.6 : rnd() * 6.283, d = I.r * (1.15 + rnd() * 0.4);
+    const x = I.x + Math.cos(a) * d, z = I.z + Math.sin(a) * d, s = 2.2 + rnd() * 3;
+    // (wholly in the water: no part of it overhanging the beach)
+    let high = terrainHeight(x, z);
+    for (let q = 0; q < 8; q++) high = Math.max(high, terrainHeight(x + Math.cos(q * 0.785) * s * 1.1, z + Math.sin(q * 0.785) * s * 1.1));
+    if (!stackOk(I, x, z, terrainHeight(x, z)) || high > -0.6) continue;
+    const y = low(x, z, s * 0.9);
     dm.position.set(x, y - 1, z); dm.rotation.set(0, rnd() * 6.283, 0); dm.scale.set(s, s * (1.6 + rnd() * 1.4), s); dm.updateMatrix();
-    rocks[pick(ROCKS)].push({ m: dm.matrix.clone(), x, z, cy: y + s * 3, r: s * 6 });
-    OBSTACLES.push({ x, z, r: s * 1.8, top: y + s * 6 });
+    const name = pick(ROCKS), wr = waterline(name, dm.matrix);
+    if (!wr) continue;                  // (one that would not even break the surface)
+    placed++; stacks.push({ x, z });
+    rocks[name].push({ m: dm.matrix.clone(), x, z, cy: y + s * 3, r: s * 6 });
+    OBSTACLES.push({ x, z, r: s * 1.8, top: y + s * 6, wr });
     // (and a place just to seaward of it where a raft can fetch up)
-    const out = s * 1.8 + 11, sx2 = x + Math.cos(a) * out, sz2 = z + Math.sin(a) * out;
+    const out = wr + 10, sx2 = x + Math.cos(a) * out, sz2 = z + Math.sin(a) * out;
     if (terrainHeight(sx2, sz2) < -3) world.spawn.stacks.push({ x: sx2, z: sz2 });
   }
+  // ledges on the sea cliffs, where only the helicopter's basket can reach: find the cliff face, then step back from
+  // its edge to the first patch of level ground, and clear the plants and boulders off it
+  world.spawn.ledges = [];
+  const slope = (x, z) => Math.hypot(terrainHeight(x + 1.5, z) - terrainHeight(x - 1.5, z), terrainHeight(x, z + 1.5) - terrainHeight(x, z - 1.5)) / 3;
+  for (const I of ISLANDS) if (I.cliff) for (let k = 0; k < 64; k++) {
+    const a = (k / 64) * 6.283, ca = Math.cos(a), sa = Math.sin(a);
+    for (let d = I.r * 0.6; d < I.r * 1.4; d += 1.5) {
+      const x = I.x + ca * d, z = I.z + sa * d, y = terrainHeight(x, z);
+      if (!(y > 5 && y < 15 && slope(x, z) > 0.9 && terrainHeight(x + ca * 6, z + sa * 6) < y - 3)) continue;
+      for (let e = d - 1; e > d - 8; e -= 0.5) {
+        const lx = I.x + ca * e, lz = I.z + sa * e, ly = terrainHeight(lx, lz);
+        let flat = slope(lx, lz) < 0.35;
+        for (let q = 0; q < 6 && flat; q++) flat = Math.abs(terrainHeight(lx + Math.cos(q * 1.047) * 1.2, lz + Math.sin(q * 1.047) * 1.2) - ly) < 0.5;
+        if (!flat) continue;
+        if (ly > 5 && ly < 18 && !blocked(lx, lz) && terrainHeight(lx + ca * 7, lz + sa * 7) < ly - 3) world.spawn.ledges.push({ x: lx, z: lz });
+        break;
+      }
+      break;
+    }
+  }
+  const nearLedge = it => world.spawn.ledges.some(l => (it.x - l.x) ** 2 + (it.z - l.z) ** 2 < 16);
+  for (const [name, list] of species) species.set(name, list.filter(it => !nearLedge(it)));
+  for (const name in rocks) rocks[name] = rocks[name].filter(it => it.cy < 2 || !nearLedge(it));
+  // the trees round a landing site stand back from it, so their tops must not roof it over either
+  for (const s of SITES) clearCanopy(s.x, s.z, s.r);
   const lodded = [];
   let plantCount = 0;
   for (const [name, list] of species) {
@@ -821,24 +900,14 @@ export function createWorld(scene, renderer) {
     }
   };
 
-  // ---------- ledges on the sea cliffs, where only the helicopter's basket can reach
-  world.spawn.ledges = [];
-  for (const I of ISLANDS) if (I.cliff) for (let k = 0; k < 64; k++) {
-    const a = (k / 64) * 6.283;
-    for (let d = I.r * 0.6; d < I.r * 1.4; d += 1.5) {
-      const x = I.x + Math.cos(a) * d, z = I.z + Math.sin(a) * d, y = terrainHeight(x, z);
-      const steep = Math.hypot(terrainHeight(x + 1.5, z) - terrainHeight(x - 1.5, z), terrainHeight(x, z + 1.5) - terrainHeight(x, z - 1.5)) / 3;
-      if (y > 5 && y < 15 && steep > 0.9 && terrainHeight(x + Math.cos(a) * 6, z + Math.sin(a) * 6) < y - 3) { world.spawn.ledges.push({ x, z }); break; }
-    }
-  }
-
   // ---------- open-sea spawn points
   let guard = 0;
   while (world.spawn.sea.length < 60 && guard++ < 5000) {
     const a = rnd() * 6.283, d = 70 + rnd() * (WORLD_R - 100);
     const x = Math.cos(a) * d, z = Math.sin(a) * d;
-    let ok = true;
+    let ok = terrainHeight(x, z) < -5;       // (a sandbar is small enough to sit inside the ring below)
     for (let k = 0; k < 8 && ok; k++) if (terrainHeight(x + Math.cos(k * 0.785) * 14, z + Math.sin(k * 0.785) * 14) > -5) ok = false;
+    if (ok && OBSTACLES.some(o => Math.hypot(x - o.x, z - o.z) < (o.wr || o.r) + 14)) ok = false;       // (nor hard by a stack, the arch or a hut)
     if (ok) world.spawn.sea.push({ x, z });
   }
 

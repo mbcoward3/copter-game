@@ -4,7 +4,7 @@ import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER } from './world.js';
+import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER } from './world.js';
 import { buildHeli, buildBasket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
 import { model } from './assets.js';
 import { createFx } from './fx.js';
@@ -227,11 +227,49 @@ function nearestFor(p) {
   return best && { an: best, d: bd };
 }
 function waterRoute(p, goal) {
-  const inGoal = Math.hypot(goal.x - LAGOON.x, goal.z - LAGOON.z) < LAGOON.r, inMe = Math.hypot(p.pos.x - LAGOON.x, p.pos.z - LAGOON.z) < LAGOON.r + 4;
-  if (inGoal === inMe) return goal;
   const [outer, inner] = CHANNEL;
-  const near = inGoal ? outer : inner, far = inGoal ? inner : outer;
-  return LEG.set(Math.hypot(p.pos.x - near.x, p.pos.z - near.z) > 10 ? near.x : far.x, 0, Math.hypot(p.pos.x - near.x, p.pos.z - near.z) > 10 ? near.z : far.z);
+  const inGoal = Math.hypot(goal.x - LAGOON.x, goal.z - LAGOON.z) < LAGOON.r, inMe = Math.hypot(p.pos.x - LAGOON.x, p.pos.z - LAGOON.z) < LAGOON.r + 4;
+  // (how far along the channel from its seaward mouth, and how far off its middle line)
+  const ax = inner.x - outer.x, az = inner.z - outer.z, len = Math.hypot(ax, az), dx = p.pos.x - outer.x, dz = p.pos.z - outer.z;
+  const u = (dx * ax + dz * az) / len, inChan = Math.abs(dx * az - dz * ax) / len < 14 && u > -6 && u < len + 6;
+  if (inGoal ? inMe : !inMe && !inChan) return goal;
+  // in the channel: on to the end the friend is on; otherwise to the mouth on our side first
+  const to = inChan ? (inGoal ? inner : u > 4 ? outer : null) : inGoal ? outer : inner;
+  return to ? LEG.set(to.x, 0, to.z) : goal;
+}
+// ---- hulls on the water (the boat, the seaplane's floats, the stricken fishing boat, friends adrift) keep off the rocks
+// and out of water too shallow to float in, whatever the swell is doing
+const DRAFT = 0.4;
+const shallow = (x, z) => terrainHeight(x, z) > -DRAFT;
+// is there rock standing in the water within pad of here? (sea stacks, the arch's feet, the huts' stilts, boulders that break the surface)
+function rockNear(x, z, pad) {
+  for (const o of OBSTACLES) if (!o.easy && (x - o.x) ** 2 + (z - o.z) ** 2 < ((o.wr || o.r) + pad) ** 2) return true;
+  for (const o of SHOALS) if ((x - o.x) ** 2 + (z - o.z) ** 2 < (o.r + pad) ** 2) return true;
+  return false;
+}
+// a hull is a line from stern to bow (half-length len) with some beam: push it clear of every rock it has run into,
+// by just as far as it is in (so it slides along the rock rather than through it). Returns whether it touched.
+function fendOff(pos, yaw, len, beam, high, shoals = true, stacks = true) {
+  const fx_ = Math.sin(yaw), fz_ = Math.cos(yaw);
+  let hit = false;
+  const one = (ox, oz, r) => {
+    const t = clamp((ox - pos.x) * fx_ + (oz - pos.z) * fz_, -len, len);
+    const dx = pos.x + fx_ * t - ox, dz = pos.z + fz_ * t - oz, d = Math.hypot(dx, dz), min = r + beam;
+    if (d < min && d > 0.01) { pos.x += dx / d * (min - d); pos.z += dz / d * (min - d); hit = true; }
+  };
+  if (stacks) for (const o of OBSTACLES) if (!o.easy && high <= o.top) one(o.x, o.z, o.wr || o.r);
+  if (shoals && high < 1.5) for (const o of SHOALS) one(o.x, o.z, o.r);
+  return hit;
+}
+// moved from (px, pz) into water too shallow under its middle or its leading end (lead ahead, negative going astern)?
+// Then slide along whichever way is still deep enough, or stay put. Already in the shallows, any way that gets deeper is allowed.
+const keel = (x, z, fx_, fz_, lead) => Math.max(terrainHeight(x, z), terrainHeight(x + fx_ * lead, z + fz_ * lead));
+function aground(pos, px, pz, fx_, fz_, lead) {
+  const g0 = keel(px, pz, fx_, fz_, lead);
+  const stuck = (x, z) => { const g = keel(x, z, fx_, fz_, lead); return g > -DRAFT && g > g0 - 0.01; };
+  if (!stuck(pos.x, pos.z)) return false;
+  if (!stuck(pos.x, pz)) pos.z = pz; else if (!stuck(px, pos.z)) pos.x = px; else { pos.x = px; pos.z = pz; }
+  return true;
 }
 function updatePlayer(p, dt, t) {
   // A friend waiting at a landing site: once the helicopter is overhead it sets itself down beside them, they climb
@@ -292,8 +330,9 @@ function updatePlayer(p, dt, t) {
     else p.idleT += dt;
     if (!p.parked) {
       p.altOff = clamp(p.altOff + inp.l * 16 * dt, -CRUISE, 70);
-      const overPad = PADS.some(pad => Math.hypot(p.pos.x - pad.x, p.pos.z - pad.z) < 7);
-      if ((overPad && p.idleT > 2.2 && Math.hypot(p.vel.x, p.vel.z) < 3 && !p.cargo.length) || (p.grounded && p.altOff <= -CRUISE + 0.5 && !busy)) p.parked = true;
+      // (the landing sites out on the islands too, with or without friends aboard)
+      const overPad = (!p.cargo.length && PADS.some(pad => Math.hypot(p.pos.x - pad.x, p.pos.z - pad.z) < 7)) || SITES.some(s => Math.hypot(p.pos.x - s.x, p.pos.z - s.z) < (s.pad ? 6.5 : s.r - 2));
+      if ((overPad && p.idleT > 2.2 && Math.hypot(p.vel.x, p.vel.z) < 3) || (p.grounded && p.altOff <= -CRUISE + 0.5 && !busy)) p.parked = true;
     }
     // (over the sea, hold height against the calm water line so the swell does not make it bob)
     // (and over forest, against the treetops)
@@ -341,7 +380,7 @@ function updatePlayer(p, dt, t) {
   // towers and buildings push the helicopter round them
   for (const o of OBSTACLES) {
     if (p.pos.y - SKID > o.top || (o.easy && p.pro)) continue;
-    const dx = p.pos.x - o.x, dzz = p.pos.z - o.z, d = Math.hypot(dx, dzz), min = o.r + 4.5;
+    const dx = p.pos.x - o.x, dzz = p.pos.z - o.z, d = Math.hypot(dx, dzz), min = Math.max(o.r, o.wr || 0) + 4.5;      // (a stack spreads widest at the waterline)
     if (d < min && d > 0.01) { p.pos.x = o.x + (dx / d) * min; p.pos.z = o.z + (dzz / d) * min; }
   }
 
@@ -422,12 +461,10 @@ function updatePlayer(p, dt, t) {
 // Everything is driven through smoothed rates (turn rate, speed, climb rate) so nothing ever snaps.
 const PL = { max: 36, fly: 16, cruise: 16 };
 function landWithin(p, fx_, fz_, dist, t) { surfaceAt(p.pos.x + fx_ * dist, p.pos.z + fz_ * dist, t, SURF2); return SURF2.land ? SURF2.y : -1e9; }
-// is there land, or something standing in the water (a sea stack, the arch's feet, a hut), this far ahead on the water?
-function blockedAt(p, fx_, fz_, dist, t) {
-  if (landWithin(p, fx_, fz_, dist, t) > -1e8) return true;
+// is there land or shallows, or rock standing in the water, this far ahead on the water?
+function blockedAt(p, fx_, fz_, dist, pad = 3) {
   const x = p.pos.x + fx_ * dist, z = p.pos.z + fz_ * dist;
-  for (const o of OBSTACLES) if (!o.easy && (x - o.x) ** 2 + (z - o.z) ** 2 < (o.r + 3) ** 2) return true;
-  return false;
+  return shallow(x, z) || rockNear(x, z, pad);
 }
 function updatePlane(p, dt, t) {
   const inp = p.input, m = p.plane;
@@ -492,9 +529,10 @@ function updatePlane(p, dt, t) {
   // taxiing with a beach ahead: swing toward open water and follow the shore round, as the boat does
   p.avoidT = Math.max(0, (p.avoidT || 0) - dt);
   if (!p.pro && ready && p.afloat && p.fs > -0.5 && !(p.target && p.target.kind === 'islet' && gd < 60)) {
-    const blocked = blockedAt(p, fx_, fz_, 16, t) || blockedAt(p, fx_, fz_, 8, t);
+    // (the wings reach out over the water a good way either side)
+    const blocked = blockedAt(p, fx_, fz_, 16, 7) || blockedAt(p, fx_, fz_, 8, 7);
     if (blocked && p.avoidT <= 0) {
-      const l = blockedAt(p, Math.sin(p.yaw + 0.9), Math.cos(p.yaw + 0.9), 16, t), r = blockedAt(p, Math.sin(p.yaw - 0.9), Math.cos(p.yaw - 0.9), 16, t);
+      const l = blockedAt(p, Math.sin(p.yaw + 0.9), Math.cos(p.yaw + 0.9), 16, 7), r = blockedAt(p, Math.sin(p.yaw - 0.9), Math.cos(p.yaw - 0.9), 16, 7);
       p.avoidDir = l && !r ? -1 : r && !l ? 1 : (turnCmd >= 0 ? 1 : -1);
     }
     if (blocked) p.avoidT = 1.1;
@@ -507,7 +545,7 @@ function updatePlane(p, dt, t) {
   const atDock = (!p.target && p.cargo.length > 0 && dockD < 18) || (p.afloat && p.incoming > 0);      // (and it waits while someone climbs aboard)
   // on the water, ease to a stop before a beach instead of bumping into it
   let shore = 1;
-  if (alt < 3) { if (landWithin(p, fx_, fz_, 7, t) > -1e8) shore = 0; else if (landWithin(p, fx_, fz_, 16, t) > -1e8) shore = 0.35; }
+  if (alt < 3) { if (blockedAt(p, fx_, fz_, 7, 6)) shore = 0; else if (blockedAt(p, fx_, fz_, 16, 6)) shore = 0.35; }
   let want = 0;
   if (ready && !atDock) {
     if (inp.f > 0) want = cap;
@@ -572,11 +610,12 @@ function updatePlane(p, dt, t) {
   const nfx = Math.sin(p.yaw), nfz = Math.cos(p.yaw);
   p.vel.x = nfx * p.fs; p.vel.z = nfz * p.fs;
   p.pos.addScaledVector(p.vel, dt);
-  for (const o of OBSTACLES) {          // last resort only; the steering above normally keeps us clear
-    if (p.pos.y - PLANE_FLOAT > o.top || o.easy) continue;
-    const dx = p.pos.x - o.x, dzz = p.pos.z - o.z, d = Math.hypot(dx, dzz), min = o.r + 7;
-    if (d < min && d > 0.01) { const push = Math.min(1, dt * 6); p.pos.x += ((o.x + (dx / d) * min) - p.pos.x) * push; p.pos.z += ((o.z + (dzz / d) * min) - p.pos.z) * push; }
-  }
+  // on the water the floats, bow to stern, stay off the shallows; and, last resort only (the steering above normally keeps
+  // us clear), the wingtips stay off anything tall and the floats off the boulders
+  const low = p.pos.y - PLANE_FLOAT;
+  if (!flying && low < 1.5 && aground(p.pos, px, pz, nfx, nfz, p.fs >= 0 ? 5 : -5)) p.fs *= Math.max(0, 1 - dt * 3);
+  const tips = fendOff(p.pos, p.yaw, 0, 7.4, low, false), floats = low < 1.5 && fendOff(p.pos, p.yaw, 3.4, 1.8, low, true, false);
+  if (tips || floats) p.fs *= 1 - damp(2, dt);
   surfaceAt(p.pos.x, p.pos.z, t, SURF);
   if (SURF.land && !flying && p.pos.y - SURF.y < PLANE_FLOAT + 1.2) { p.pos.x = px; p.pos.z = pz; p.fs *= Math.max(0, 1 - dt * 3); surfaceAt(px, pz, t, SURF); }
   const floor = (SURF.land ? SURF.y + 1.6 : 0) + PLANE_FLOAT;
@@ -702,9 +741,11 @@ function updateBoat(p, dt, t) {
   const ownIslet = p.target && p.target.kind === 'islet' && gd < 48;
   p.avoidT = Math.max(0, (p.avoidT || 0) - dt);
   if (!p.pro && ready && p.fs > -0.5 && !ownIslet) {
-    const blocked = blockedAt(p, fx_, fz_, 16, t) || blockedAt(p, fx_, fz_, 8, t);
+    // (looking further ahead the faster it goes, so it has room to turn)
+    const look = Math.max(16, p.fs * 0.8);
+    const blocked = blockedAt(p, fx_, fz_, look) || blockedAt(p, fx_, fz_, 8);
     if (blocked && p.avoidT <= 0) {
-      const l = blockedAt(p, Math.sin(p.yaw + 0.9), Math.cos(p.yaw + 0.9), 16, t), r = blockedAt(p, Math.sin(p.yaw - 0.9), Math.cos(p.yaw - 0.9), 16, t);
+      const l = blockedAt(p, Math.sin(p.yaw + 0.9), Math.cos(p.yaw + 0.9), 16), r = blockedAt(p, Math.sin(p.yaw - 0.9), Math.cos(p.yaw - 0.9), 16);
       p.avoidDir = l && !r ? -1 : r && !l ? 1 : (turnCmd >= 0 ? 1 : -1);
     }
     if (blocked) p.avoidT = 1.1;
@@ -725,7 +766,7 @@ function updateBoat(p, dt, t) {
   const dir = p.fs >= 0 ? 1 : -1;
   let shore = 1;
   if (p.pro) shore = 1;
-  else if (landWithin(p, fx_ * dir, fz_ * dir, 6, t) > -1e8) shore = 0; else if (landWithin(p, fx_ * dir, fz_ * dir, 14, t) > -1e8) shore = 0.3;
+  else if (blockedAt(p, fx_ * dir, fz_ * dir, 7, 1.5)) shore = 0; else if (blockedAt(p, fx_ * dir, fz_ * dir, 15, 1.5)) shore = 0.3;
   const atDock = (!p.pro && !p.target && p.cargo.length > 0 && dockD < 15) || p.incoming > 0;      // (and it lies stopped while someone comes aboard)
   let want = 0;
   if (ready && !atDock) want = inp.f > 0 ? cap : inp.f < 0 ? -7 : 0;
@@ -742,19 +783,10 @@ function updateBoat(p, dt, t) {
   const nfx = Math.sin(p.yaw), nfz = Math.cos(p.yaw);
   p.vel.set(nfx * p.fs, 0, nfz * p.fs);
   p.pos.x += p.vel.x * dt; p.pos.z += p.vel.z * dt;
-  for (const o of OBSTACLES) {
-    if (o.easy) continue;
-    const dx = p.pos.x - o.x, dzz = p.pos.z - o.z, d = Math.hypot(dx, dzz), min = o.r + 2.4;
-    if (d < min && d > 0.01) { p.pos.x = o.x + (dx / d) * min; p.pos.z = o.z + (dzz / d) * min; p.fs *= 1 - damp(4, dt); }
-  }
-  surfaceAt(p.pos.x, p.pos.z, t, SURF);
-  if (SURF.land) {
-    // touched the shallows: slide along whichever way is still water rather than stopping dead
-    if (!surfaceAt(p.pos.x, pz, t, SURF).land) p.pos.z = pz;
-    else if (!surfaceAt(px, p.pos.z, t, SURF).land) p.pos.x = px;
-    else { p.pos.x = px; p.pos.z = pz; }
-    p.fs += clamp(3 - p.fs, -14 * dt, 0);
-  }
+  // the whole hull, bow to stern, slides along any rock it meets; and touching the shallows it slides along whichever way
+  // is still deep enough rather than stopping dead
+  if (aground(p.pos, px, pz, nfx, nfz, p.fs >= 0 ? 4.8 : -4.6)) p.fs += clamp(3 - p.fs, -14 * dt, 0);
+  if (fendOff(p.pos, p.yaw, 3.2, 1.6, 0)) p.fs *= 1 - damp(4, dt);
   const wave = waveHeight(p.pos.x, p.pos.z, t);
   // the hull rides the swell; going fast enough over a big one it leaves the water for a moment
   const rideY = wave * 0.75;
@@ -935,12 +967,39 @@ function updateCamera(p, dt, t) {
   const pl = p.vehicle === 'plane', bt = p.vehicle === 'boat';
   const dist = lerp((pl ? 27 : bt ? 17 : 19) + ext * 0.42, pl ? 17 : bt ? 11.5 : 12.5, p.camG), height = lerp((pl ? 9 : bt ? 6 : 7.5) + ext * 0.3, pl ? 4.6 : bt ? 4 : 3.4, p.camG);
   const back = dist + (pro ? sp * 0.2 : 0);
-  const cx = p.pos.x - Math.sin(p.camYaw) * back, cz = p.pos.z - Math.cos(p.camYaw) * back;
-  let cy = p.pos.y + height + (pro ? sp * 0.04 : 0);
+  const vx = p.pos.x, vy = p.pos.y, vz = p.pos.z;
+  let cx = vx - Math.sin(p.camYaw) * back, cz = vz - Math.cos(p.camYaw) * back;
+  let cy = vy + height + (pro ? sp * 0.04 : 0);
   const fov = (activePlayers().length > 1 ? 66 : 58) + (pro ? sp * 0.36 : 0);
   if (Math.abs(p.cam.fov - fov) > 0.05) { p.cam.fov += (fov - p.cam.fov) * damp(3, dt); p.cam.updateProjectionMatrix(); }
-  const minY = Math.max(terrainHeight(cx, cz), 0.8) + 2.2;
-  if (cy < minY) cy = minY;
+  // Keep the view clear. Towers, rocks and huts: the camera steps sideways until the line from it to the machine
+  // passes them by. Going through the arch (the one easy obstacle) it drops low behind, to see through and not
+  // into the rock over the gap...
+  for (const o of OBSTACLES) {
+    const ox = o.x - vx, oz = o.z - vz, dv = Math.hypot(ox, oz);
+    if (o.easy) { if (dv < o.r) cy = lerp(cy, Math.min(cy, vy + 1.5), THREE.MathUtils.smoothstep(o.r - dv, 0, 8) * clamp((14 - vy) / 4, 0, 1)); continue; }
+    const R = Math.min(Math.max(o.r + 2, (o.wr || 0) + 3), dv);      // (the arch's feet spread wider than they stand)
+    if (dv < o.r || dv > back + R) continue;
+    const sx = cx - vx, sz = cz - vz, L = Math.hypot(sx, sz) + 1e-6, f = clamp((ox * sx + oz * sz) / (L * L), 0, 1);
+    let qx = vx + sx * f - o.x, qz = vz + sz * f - o.z, d = Math.hypot(qx, qz);
+    const over = clamp((o.top + 4 - vy - (cy - vy) * f) / 4, 0, 1);      // (fading out as the line clears its top)
+    if (d >= R || !over) continue;
+    if (d < 0.05) { qx = -sz / L * 0.05; qz = sx / L * 0.05; d = 0.05; }      // (dead behind it: pick a side)
+    const push = Math.min((R - d) / Math.max(f, 0.35), 10) * over / d;
+    cx += qx * push; cz += qz * push;
+  }
+  // ...and hills and treetops: it rises until it stands over them and looks down past them, easing up and down
+  // (never into the ground itself, though)
+  const floor = Math.max(terrainHeight(cx, cz), 0.8);
+  let need = floor + canopyAt(cx, cz) + 2.2 - cy;
+  for (let f = 0.3; f < 0.9; f += 0.25) {
+    const x = vx + (cx - vx) * f, z = vz + (cz - vz) * f;
+    const over = Math.max(terrainHeight(x, z), 0.8) + canopyAt(x, z) + 1.2 - (vy + (cy - vy) * f);
+    if (over > 0) need = Math.max(need, over / f);
+  }
+  need = clamp(need, 0, 22);
+  p.camLift = (p.camLift || 0) + (need - (p.camLift || 0)) * damp(need > (p.camLift || 0) ? 3.5 : 1.1, dt);
+  cy = Math.max(cy + p.camLift, floor + 2.2);
   V.set(cx, cy, cz);
   p.camPos.lerp(V, damp(5, dt));
   const lead = p.vehicle === 'plane' ? 9 : p.vehicle === 'boat' ? 7 : 5;
@@ -961,10 +1020,23 @@ function pickType() {
   const pool = fresh.length ? fresh : ANIMAL_TYPES;
   return pool[(Math.random() * pool.length) | 0];
 }
+// where a friend waits at a landing site: clear of the pad's rim and of where the helicopter sets down, still on the
+// level ground, and on the side of it looking out over open ground rather than into the trees
+function campSpot(site) {
+  const d = Math.min(8.2, site.r - 0.8), a0 = Math.random() * 6.283;
+  let best = a0, bs = 1e9;
+  for (let i = 0; i < 12; i++) {
+    const a = a0 + i * 0.5236, ca = Math.cos(a), sa = Math.sin(a);
+    let s = 0;
+    for (const r of [site.r + 4, site.r + 9, site.r + 15]) { const x = site.x + ca * r, z = site.z + sa * r; s += canopyAt(x, z) + Math.max(0, terrainHeight(x, z) - site.y); }
+    if (s < bs - 0.5) { bs = s; best = a; }
+  }
+  return { x: site.x + Math.cos(best) * d, z: site.z + Math.sin(best) * d };
+}
 function spawnAnimal(near) {
   const maxD = near ? 130 : Math.min(150 + game.mission * 60, WORLD_R - 20);
   const heliUp = activePlayers().some(p => p.vehicle === 'heli');
-  if (!near && !game.boat && Math.random() < 0.16 && waiting.length + 2 <= maxWaiting() && spawnBoat(maxD)) return;
+  if (!near && !game.boat && Math.random() < 0.16 && waiting.length + 3 <= maxWaiting() && spawnBoat(maxD)) return;
   let spot = null, kind = 'ring', site = null;
   for (let tries = 0; tries < 40 && !spot; tries++) {
     const r = Math.random();
@@ -975,8 +1047,7 @@ function spawnAnimal(near) {
       const free = SITES.filter(q => !q.busy);
       if (!free.length) continue;
       site = free[(Math.random() * free.length) | 0]; kind = 'camp';
-      const a = Math.random() * 6.283;
-      c = { x: site.x + Math.cos(a) * (site.r - 2.5), z: site.z + Math.sin(a) * (site.r - 2.5) };
+      c = campSpot(site);
     }
     else if (r < 0.3 && heliUp && !near && world.spawn.ledges.length) {
       // a climber stuck on a sea cliff: only the basket can reach
@@ -984,11 +1055,13 @@ function spawnAnimal(near) {
     }
     else if (r < 0.36 && !near && activePlayers().some(q => q.vehicle !== 'plane')) { c = HUTS[(Math.random() * HUTS.length) | 0].porch; kind = 'hut'; }
     else if (r < 0.5) { c = ISLETS[(Math.random() * ISLETS.length) | 0]; kind = 'islet'; }
-    else if (r < 0.58) { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = 'kayak'; }
-    else if (r < 0.64) { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = 'dinghy'; }
     else if (r < 0.56 && game.mission > 1 && world.spawn.stacks.length) { c = world.spawn.stacks[(Math.random() * world.spawn.stacks.length) | 0]; kind = 'raft'; }
-    else { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = r < 0.8 ? 'raft' : 'ring'; }
+    else if (r < 0.62) { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = 'kayak'; }
+    else if (r < 0.68) { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = 'dinghy'; }
+    else { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = r < 0.82 ? 'raft' : 'ring'; }
     if (Math.hypot(c.x, c.z) > maxD) continue;
+    // (anyone afloat bobs in clear water, with room for a hull to come alongside, never up against a rock)
+    if (!site && kind !== 'ledge' && kind !== 'hut' && kind !== 'islet' && rockNear(c.x, c.z, 8)) continue;
     if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 45)) continue;
     spot = c;
   }
@@ -1005,7 +1078,7 @@ function spawnBoat(maxD) {
   let spot = null;
   for (let tries = 0; tries < 30 && !spot; tries++) {
     const c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0];
-    if (Math.hypot(c.x, c.z) > maxD || Math.hypot(c.x, c.z) < 90) continue;
+    if (Math.hypot(c.x, c.z) > maxD || Math.hypot(c.x, c.z) < 90 || rockNear(c.x, c.z, 24)) continue;
     if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 55)) continue;
     spot = c;
   }
@@ -1027,16 +1100,22 @@ function updateBoatRescue(dt, t) {
   if (B.leaving) {
     B.leaving += dt;
     const sp = Math.min(B.leaving * 2.2, 9);
-    // (she swings toward open water before she gathers way)
-    B.yaw += angDiff(Math.atan2(B.x, B.z), B.yaw) * damp(0.5, dt);
-    B.x += Math.sin(B.yaw) * sp * dt; B.z += Math.cos(B.yaw) * sp * dt;
+    // (she swings toward open water before she gathers way, and round any island or rock in her path)
+    const clear = a => { const x = B.x + Math.sin(a) * 26, z = B.z + Math.cos(a) * 26; return terrainHeight(x, z) < -3 && !rockNear(x, z, 12); };
+    if (clear(B.yaw)) { B.yaw += angDiff(Math.atan2(B.x, B.z), B.yaw) * damp(0.5, dt); B.dodge = 0; }
+    else { B.dodge = B.dodge || (clear(B.yaw + 0.8) || !clear(B.yaw - 0.8) ? 1 : -1); B.yaw += B.dodge * 0.5 * dt; }
+    const px = B.x, pz = B.z, go = B.dodge ? sp * 0.4 : sp;
+    B.x += Math.sin(B.yaw) * go * dt; B.z += Math.cos(B.yaw) * go * dt;
+    aground(B, px, pz, Math.sin(B.yaw), Math.cos(B.yaw), 10.5);
+    fendOff(B, B.yaw, 7.2, 3.3, 0);
     if (Math.random() < dt * sp * 2) fx.emit(B.x - Math.sin(B.yaw) * 10, 0.3, B.z - Math.cos(B.yaw) * 10, (Math.random() - 0.5) * 2, 1.2, (Math.random() - 0.5) * 2, 0.92, 0.97, 1, 0.5, 0.9, 1.2, 2, 1);
     if (B.leaving > 45 || Math.hypot(B.x, B.z) > WORLD_R + 260) { scene.remove(B.mesh); game.boat = null; return; }
   } else {
     // she drifts downwind while she waits (never onto the shallows)
     windAt(B.x, B.z, t, WIND);
-    const nx = B.x + WIND.x * 0.1 * dt, nz = B.z + WIND.z * 0.1 * dt;
-    if (terrainHeight(nx + Math.sign(WIND.x) * 22, nz + Math.sign(WIND.z) * 22) < -6 && Math.hypot(nx, nz) < WORLD_R - 40) { B.x = nx; B.z = nz; }
+    // (nor onto a rock: she stops while there is still a hull's length of water between)
+    const nx = B.x + WIND.x * 0.1 * dt, nz = B.z + WIND.z * 0.1 * dt, wl = Math.hypot(WIND.x, WIND.z) || 1, ax = nx + WIND.x / wl * 22, az = nz + WIND.z / wl * 22;
+    if (terrainHeight(ax, az) < -6 && !rockNear(ax, az, 12) && !rockNear(nx, nz, 14) && Math.hypot(nx, nz) < WORLD_R - 40) { B.x = nx; B.z = nz; }
     // smoke from the engine hatch, so she can be found from far off
     B.puff -= dt;
     if (B.puff <= 0) {
@@ -1051,6 +1130,7 @@ function updateBoatRescue(dt, t) {
   B.mesh.position.set(B.x, B.y, B.z);
   B.mesh.rotation.set(-(hf - h0) / 7 * 0.8, B.yaw, (hs - h0) / 3 * 0.6);
 }
+const HIDDEN = new THREE.MeshBasicMaterial({ visible: false });
 function addWaiting(kind, x, z, extra) {
   const type = pickType();
   const friend = buildAnimal(type.id);
@@ -1059,7 +1139,14 @@ function addWaiting(kind, x, z, extra) {
     phase: Math.random() * 6, callT: 3 + Math.random() * 6, excite: 0, exciteCd: 0, grow: 0, claimed: null, prop: null, ...extra,
   };
   if (kind === 'ring') an.prop = buildRing(); else if (kind === 'raft') an.prop = buildRaft();
-  else if (kind === 'kayak') { an.prop = model('World_Kayak', { tints: { Tip: new THREE.Color().setHSL(Math.random(), 0.8, 0.45) } }); an.prop.scale.setScalar(1.9); an.prop.rotation.order = 'YXZ'; an.heading = Math.random() * 6.283; }
+  else if (kind === 'kayak') {
+    an.prop = model('World_Kayak', { tints: { Tip: new THREE.Color().setHSL(Math.random(), 0.8, 0.45) } }); an.prop.scale.setScalar(1.9); an.prop.rotation.order = 'YXZ'; an.heading = Math.random() * 6.283;
+    // (the paddle is modelled across the cockpit, where it would run through whoever sits there: it lies across the foredeck instead)
+    const names = an.prop.geometry.userData.mats, oar = i => /Accent|Metal/.test(names[i]);
+    const paddle = new THREE.Mesh(an.prop.geometry, an.prop.material.map((mt, i) => oar(i) ? mt : HIDDEN));
+    an.prop.material = an.prop.material.map((mt, i) => oar(i) ? HIDDEN : mt);
+    paddle.position.set(0, -0.27, 1.05); paddle.castShadow = true; an.prop.add(paddle);
+  }
   else if (kind === 'dinghy') { an.prop = new THREE.Group(); const hull = model('World_Sail'); hull.scale.setScalar(1.5); hull.rotation.z = 1.45; hull.position.set(-0.6, 0.15, 0); an.prop.add(hull); an.prop.rotation.y = Math.random() * 6.283; }
   if (an.prop) scene.add(an.prop);
   an.beam = buildBeam(); scene.add(an.beam);
@@ -1094,15 +1181,17 @@ function placeWaiting(an, t, dt) {
     an.heading += (dt || 0) * 0.25;
     windAt(x, z, t, WIND);
     const nx = x + (Math.sin(an.heading) * 0.6 + WIND.x * 0.04) * (dt || 0), nz = z + (Math.cos(an.heading) * 0.6 + WIND.z * 0.04) * (dt || 0);
-    if (terrainHeight(nx, nz) < -4) { an.pos.x = nx; an.pos.z = nz; }
+    if (terrainHeight(nx, nz) < -4 && !rockNear(nx, nz, 5)) { an.pos.x = nx; an.pos.z = nz; }
     an.pos.y = w + 0.35;
     m.position.set(an.pos.x, w - 0.55 + hop * 0.3, an.pos.z); m.rotation.z = Math.sin(t * 1.4 + an.phase) * 0.06;
     an.prop.position.set(an.pos.x, w - 0.05, an.pos.z); an.prop.rotation.set(Math.sin(t * 1.2) * 0.05, an.heading, Math.sin(t * 1.4 + an.phase) * 0.06);
   } else if (an.kind === 'dinghy') {
     // sitting on the hull of their capsized sailing dinghy
     const w = waveHeight(x, z, t);
-    an.pos.y = w + 1.3;
-    m.position.set(x, w + 0.95 + hop * 0.4, z); m.rotation.z = Math.sin(t * 1.3 + an.phase) * 0.05;
+    // (astride the upturned side of the hull, which lies a little off the middle of it: 0.6 across, 1.45 up)
+    const h = an.prop.rotation.y;
+    an.pos.y = w + 1.8;
+    m.position.set(x - 0.6 * Math.cos(h), w + 1.4 + hop * 0.4, z + 0.6 * Math.sin(h)); m.rotation.z = Math.sin(t * 1.3 + an.phase) * 0.05;
     an.prop.position.set(x, w, z); an.prop.rotation.x = Math.sin(t * 1.1 + an.phase) * 0.04;
   } else if (an.kind === 'islet' || an.kind === 'camp' || an.kind === 'ledge') {
     an.pos.y = terrainHeight(x, z);
@@ -1333,7 +1422,16 @@ function updateResidents(dt, t) {
 // old friends wander into the station to make room (reuses the hoppers list)
 function updateLeaving(dt) {
   for (let i = hoppers.length - 1; i >= 0; i--) {
-    const an = hoppers[i]; if (an.state !== 'leaving') continue;
+    const an = hoppers[i];
+    if (an.state === 'bye') {
+      // (a friend nobody can reach now heads off home: a happy hop on the spot as they shrink away)
+      an.t += dt;
+      an.model.position.y = an.pos.y + Math.abs(Math.sin(an.t * 8)) * 0.6;
+      an.model.scale.setScalar(Math.max(0.01, 1.7 * (1 - an.t / 1.4)));
+      if (an.t >= 1.4) { scene.remove(an.model); hoppers.splice(i, 1); }
+      continue;
+    }
+    if (an.state !== 'leaving') continue;
     an.t += dt;
     an.model.position.x += (4 - an.model.position.x) * damp(2, dt);
     an.model.position.z += (-12 - an.model.position.z) * damp(2, dt);
@@ -1487,6 +1585,23 @@ for (const b of document.querySelectorAll('.flt')) b.addEventListener('click', (
   syncHud();
 });
 function applyVehicleChoices() { for (const p of players) if (p.vehicle !== vehicleChoice[p.idx]) setVehicle(p, vehicleChoice[p.idx]); }
+// friends nobody flying now can get to (up at a landing site with no helicopter about) wave and head off home,
+// so they neither wait for ever nor hold up new rescues
+function releaseStranded() {
+  const act = activePlayers();
+  for (let i = waiting.length - 1; i >= 0; i--) {
+    const an = waiting[i];
+    if (act.some(p => !outOfReach(an, p))) continue;
+    waiting.splice(i, 1);
+    scene.remove(an.beam);
+    if (an.prop) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }
+    if (an.site) an.site.busy = false;
+    for (const p of players) { if (p.pickup === an) p.pickup = null; if (p.target === an) p.target = null; }
+    an.claimed = null; an.state = 'bye'; an.t = 0;
+    fx.emoji('\u{1F44B}', an.pos.x, an.pos.y + 4.5, an.pos.z, 3);
+    hoppers.push(an);
+  }
+}
 function startGame(n) {
   audio.unlock();
   applyVehicleChoices();
@@ -1494,6 +1609,7 @@ function startGame(n) {
   game.started = true;
   players[0].active = true;
   if ((n === 2) !== players[1].active) setP2(n === 2, true);
+  releaseStranded();
   if (fresh) {
     game.mission = 1; game.rescued = 0; game.goal = goalFor(1);
     spawnAnimal(true); spawnAnimal(true); spawnAnimal(false);
@@ -1513,6 +1629,7 @@ function setP2(on, quiet) {
   } else {
     p.target = null; while (p.cargo.length) deliverOne(p);
     p.active = false; showVehicle(p, false);
+    releaseStranded();
   }
   layoutHud(); onResize();
 }
@@ -1522,7 +1639,7 @@ function togglePause() {
   if (game.state === 'play') { game.state = 'menu'; game.paused = true; $('#resumeRow').style.display = ''; menu.classList.remove('hidden'); layoutHud(); onResize(); }
   else resume();
 }
-function resume() { applyVehicleChoices(); game.state = 'play'; game.paused = false; menu.classList.add('hidden'); layoutHud(); onResize(); }
+function resume() { applyVehicleChoices(); releaseStranded(); game.state = 'play'; game.paused = false; menu.classList.add('hidden'); layoutHud(); onResize(); }
 // ---- picture quality. Four steps from the full picture down to one any laptop can draw smoothly. On "auto" (the
 // default) the game watches how long frames really take and steps down when it is struggling, back up when there
 // is room to spare; the corner button can also pin it to the best or the fastest. maxPR caps the pixels drawn per
@@ -1635,6 +1752,25 @@ function placeRain(at, t) {
 
 // ================================================================= rendering
 const menuCam = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 9000);
+// how high the menu's orbit must go at angle a to sail over the wooded hill and see the base past its treetops,
+// worked out once round the circle and smoothed so it climbs and settles gently
+let menuLift = null;
+function menuFloor(a) {
+  const N = 180, top = (x, z) => Math.max(terrainHeight(x, z), 0.8) + canopyAt(x, z);
+  if (!menuLift) {
+    const need = [];
+    for (let i = 0; i < N; i++) {
+      const x = Math.sin(i / N * 6.283) * 70, z = Math.cos(i / N * 6.283) * 70;
+      let y = top(x, z) + 9;
+      for (let f = 0.05; f < 0.65; f += 0.05) y = Math.max(y, (top(x * (1 - f), z * (1 - f)) + 3 - 9 * f) / (1 - f));
+      need.push(y);
+    }
+    const ring = (src, w, fn) => src.map((_, i) => { let v = fn === 'max' ? -1e9 : 0; for (let j = -w; j <= w; j++) { const s = src[(i + j + N) % N]; v = fn === 'max' ? Math.max(v, s) : v + s / (2 * w + 1); } return v; });
+    menuLift = ring(ring(ring(need, 12, 'max'), 6), 6);
+  }
+  const u = ((a / 6.283) % 1 + 1) % 1 * N, i = Math.floor(u) % N;
+  return lerp(menuLift[i], menuLift[(i + 1) % N], u - Math.floor(u));
+}
 menuCam.layers.enable(PLANT_LAYER);
 function getViews() {
   const act = activePlayers();
@@ -1763,7 +1899,7 @@ const debug = {
     const c = kind === 'hut' ? HUTS[i].porch : kind === 'ledge' ? world.spawn.ledges[i] : world.spawn.sea[i];
     return addWaiting(kind, c.x, c.z);
   },
-  camp(i) { const site = SITES[i]; site.busy = true; return addWaiting('camp', site.x + site.r - 2.5, site.z, { site }); },
+  camp(i) { const site = SITES[i], c = campSpot(site); site.busy = true; return addWaiting('camp', c.x, c.z, { site }); },
   run(seconds = 0.1) { for (let i = 0; i < seconds * 30; i++) { last = performance.now() - 33; tick(performance.now()); } },
   // milliseconds a frame really takes to draw (reading a pixel back makes the graphics card finish first)
   time(frames = 40) {
@@ -1859,7 +1995,7 @@ function tick(now) {
   // menu camera: slow orbit of the base
   if (!playing) {
     const a = performance.now() / 1000 * 0.07 + 0.9;
-    menuCam.position.set(Math.sin(a) * 70, 24 + Math.sin(a * 0.7) * 5, Math.cos(a) * 70);
+    menuCam.position.set(Math.sin(a) * 70, Math.max(24 + Math.sin(a * 0.7) * 5, menuFloor(a)), Math.cos(a) * 70);
     menuCam.lookAt(0, 9, 0);
     if (debug.view) { menuCam.position.fromArray(debug.view, 0); menuCam.lookAt(debug.view[3], debug.view[4], debug.view[5]); }
     const asp = innerWidth / innerHeight;
