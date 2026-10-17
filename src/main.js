@@ -102,6 +102,7 @@ function setVehicle(p, kind) {
 const BERTH = [{ x: -4.6, z: 52 }, { x: 6.4, z: 52 }];       // the boats tie up alongside the pier
 const MOORING = [{ x: -8, z: 60 }, { x: 8, z: 60 }];   // either side of the pier
 const DOCK = new THREE.Vector3(0, 0, 66);
+const HOME_SPOT = { x: 0, z: -3 };        // where the easy helicopter heads with friends aboard: over the paddock
 function parkPlayer(p) {
   const pad = p.vehicle === 'plane' ? MOORING[p.idx] : p.vehicle === 'boat' ? BERTH[p.idx] : PADS[p.idx];
   if (p.vehicle === 'plane') { p.pos.set(pad.x, PLANE_FLOAT, pad.z); p.fs = 0; p.afloat = true; p.sea = 1; p.hoist = 0; }
@@ -363,7 +364,21 @@ function updatePlayer(p, dt, t) {
     if (p.parked && p.clearance < 4) lift = Math.max(lift, -0.16);      // flare: the last few metres are slow and gentle
     if (spooling) lift = Math.min(lift, 0);
 
-    p.yawVel += (inp.t * (p.grounded ? 0 : 1.75) - p.yawVel) * damp(5, dt);
+    // The autopilot, as the seaplane has: hold go and it turns toward the nearest friend (over a landing site, the site
+    // itself), slows right down over them for the basket, and once it is full (or has some aboard and nobody is near)
+    // it heads home to the paddock. Any steering of the pilot's own wins.
+    let steer = inp.t, gd = 1e9, off = 0;
+    if (inp.f > 0 && inp.t === 0 && !p.grounded) {
+      const room = p.cargo.length + p.incoming < MAX_CARGO, guide = room ? nearestFor(p) : null;
+      const an = p.target || (guide && guide.an);
+      const goal = p.cargo.length && (!room || !guide || guide.d > 200) ? HOME_SPOT : an ? (an.kind === 'camp' ? an.site : an.pos) : null;
+      if (goal) {
+        gd = Math.hypot(goal.x - p.pos.x, goal.z - p.pos.z);
+        off = angDiff(Math.atan2(goal.x - p.pos.x, goal.z - p.pos.z), p.yaw);
+        if (gd > 4) steer = clamp(off * 1.6, -1, 1);
+      }
+    }
+    p.yawVel += (steer * (p.grounded ? 0 : 1.75) - p.yawVel) * damp(5, dt);
     p.yaw += p.yawVel * dt;
     fx_ = Math.sin(p.yaw); fz_ = Math.cos(p.yaw);
     // ease off by itself near a friend who needs a lift, so the basket can reach
@@ -372,6 +387,8 @@ function updatePlayer(p, dt, t) {
       const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
       if (d < 34) top = Math.min(top, 6 + d * 0.6);
     }
+    // (on autopilot it comes to a hover over where it is going, and turns before it sets off rather than swinging wide)
+    if (gd < 1e9) top = Math.min(top, 0.5 + gd * 0.55) * clamp(1.3 - Math.abs(off), 0.25, 1);
     tgt = p.parked || spooling ? 0 : inp.f * (inp.f > 0 ? top : 12);
     const a = damp(p.grounded ? 5 : (inp.f === 0 ? 0.9 : 1.5), dt);
     p.vel.x += (fx_ * tgt - p.vel.x) * a; p.vel.z += (fz_ * tgt - p.vel.z) * a;
