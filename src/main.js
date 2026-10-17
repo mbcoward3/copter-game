@@ -59,9 +59,13 @@ function makePlayer(idx) {
   rope.castShadow = true; scene.add(rope);
   const cam = new THREE.PerspectiveCamera(60, 1, 0.5, 9000);
   cam.layers.enable(PLANT_LAYER);
+  // Every shader is built for a fixed number of lights, so a helicopter (and its searchlight) going out of sight would
+  // rebuild them all, a freeze of seconds on a small laptop. A dark stand-in light keeps the count while it is away.
+  const spotStandIn = new THREE.SpotLight(0xffffff, 0); spotStandIn.visible = false;
+  scene.add(spotStandIn);
   const pane = $('#pane' + idx);
   const p = {
-    idx, model, basket, rope, cam, pane, active: false,
+    idx, model, basket, rope, cam, pane, spotStandIn, active: false,
     vehicle: 'heli', heli: model, heliBasket: basket, plane, boat, fs: 0, afloat: true, sea: 1, hoist: 0, manualT: 0, hook: new THREE.Vector3(),
     pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, yawVel: 0, pitch: 0, roll: 0,
     spin: 0, landed: true, grounded: true, clearance: 0, surfaceY: 0, overLand: true,
@@ -83,6 +87,7 @@ function showVehicle(p, on) {
   p.heli.group.visible = on && p.vehicle === 'heli';
   p.plane.group.visible = on && p.vehicle === 'plane';
   p.boat.group.visible = on && p.vehicle === 'boat';
+  p.spotStandIn.visible = !p.heli.group.visible;
   if (!on || p.vehicle !== 'heli') { p.heliBasket.visible = false; p.rope.visible = false; }
 }
 function setVehicle(p, kind) {
@@ -1520,21 +1525,36 @@ function togglePause() {
 function resume() { applyVehicleChoices(); game.state = 'play'; game.paused = false; menu.classList.add('hidden'); layoutHud(); onResize(); }
 // ---- picture quality. Four steps from the full picture down to one any laptop can draw smoothly. On "auto" (the
 // default) the game watches how long frames really take and steps down when it is struggling, back up when there
-// is room to spare; the corner button can also pin it to the best or the fastest.
+// is room to spare; the corner button can also pin it to the best or the fastest. maxPR caps the pixels drawn per
+// screen pixel (a sharp laptop screen would otherwise be drawn at four times the pixels), msaa smooths the edges.
 const QUALITY = [
-  { name: 'Best', scale: 1, refl: 1, shadow: 4096, near: 105, far: 400, bloom: true },
-  { name: 'Good', scale: 0.85, refl: 0.5, shadow: 2048, near: 90, far: 360, bloom: true },
-  { name: 'Fast', scale: 0.72, refl: 0, shadow: 2048, near: 70, far: 300, bloom: true },
-  { name: 'Fastest', scale: 0.6, refl: 0, shadow: 1024, near: 50, far: 240, bloom: false },
+  { name: 'Best', maxPR: 2, scale: 1, msaa: 4, refl: 1, shadow: 4096, near: 105, far: 400, bloom: true },
+  { name: 'Good', maxPR: 1.5, scale: 0.85, msaa: 4, refl: 0.5, shadow: 2048, near: 90, far: 360, bloom: true },
+  { name: 'Fast', maxPR: 1.25, scale: 0.75, msaa: 2, refl: 0, shadow: 2048, near: 70, far: 300, bloom: true },
+  { name: 'Fastest', maxPR: 1, scale: 0.6, msaa: 2, refl: 0, shadow: 1024, near: 50, far: 240, bloom: false },
 ];
-const quality = { mode: 'auto', level: 0, slowT: 0, fastT: 0, coolT: 6, blockUpT: 0, avg: 16.7 };      // (a grace period while shaders compile)
+// Where "auto" starts: the level it settled on last time on this machine, or else a guess from the graphics chip, so
+// a small laptop is not made to struggle through the best picture for the first half minute.
+function firstQuality() {
+  try { const saved = localStorage.getItem('rescue-squad-quality'); if (saved !== null) return clamp(+saved | 0, 0, QUALITY.length - 1); } catch (e) { /* (private window) */ }
+  const gl = renderer.getContext(), info = gl.getExtension('WEBGL_debug_renderer_info');
+  const chip = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : '';
+  let level = /SwiftShader|llvmpipe|Software|Basic Render/i.test(chip) ? 3
+    : /Intel|Mali|Adreno|PowerVR|Radeon\(TM\) Graphics|Radeon Graphics|Vega \d+ Graphics/i.test(chip) || matchMedia('(pointer: coarse)').matches ? 2
+    : /Apple/i.test(chip) ? 1 : 0;
+  // (a very big screen is a lot of pixels even for a strong card)
+  if (level === 0 && innerWidth * innerHeight * PR * PR > 4.5e6) level = 1;
+  return level;
+}
+const quality = { mode: 'auto', level: 0, slowT: 0, fastT: 0, coolT: 6, blockUpT: 0, avg: 16.7, savedT: 0 };      // (a grace period while shaders compile)
 function setQuality(level) {
   level = clamp(level, 0, QUALITY.length - 1);
   const q = QUALITY[level];
   quality.level = level;
   gfx.reflections = q.refl > 0; gfx.reflScale = q.refl;
-  const pr = Math.max(0.5, PR * q.scale);
+  const pr = Math.max(0.5, Math.min(PR, q.maxPR) * q.scale);
   renderer.setPixelRatio(pr); composer.setPixelRatio(pr);
+  for (const rt of [composer.renderTarget1, composer.renderTarget2]) if (rt.samples !== q.msaa) { rt.samples = q.msaa; rt.dispose(); }
   const sun = world.sun;
   if (sun.shadow.mapSize.x !== q.shadow) { sun.shadow.mapSize.set(q.shadow, q.shadow); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
   world.setDetail(q.near, q.far);
@@ -1558,12 +1578,18 @@ function watchFrames(ms) {
   quality.coolT -= s; quality.blockUpT -= s;
   if (quality.coolT > 0) return;
   if (quality.avg > 21) { quality.slowT += s; quality.fastT = 0; } else if (quality.avg < 17.6) { quality.fastT += s; quality.slowT = 0; } else { quality.slowT = quality.fastT = 0; }
-  if (quality.slowT > 2.5 && quality.level < QUALITY.length - 1) {
+  quality.savedT += s;
+  if (quality.savedT > 20) {
+    quality.savedT = -1e9;
+    try { localStorage.setItem('rescue-squad-quality', quality.level); } catch (e) { /* (private window) */ }
+  }
+  // (under 30 frames a second it steps down sooner)
+  if (quality.slowT > (quality.avg > 34 ? 1.2 : 2.5) && quality.level < QUALITY.length - 1) {
     // (if it struggles straight after a step up, do not try that again for a minute)
     if (quality.justUp) quality.blockUpT = 60;
-    setQuality(quality.level + 1); quality.slowT = 0; quality.coolT = 4; quality.justUp = false;
+    setQuality(quality.level + 1); quality.slowT = 0; quality.coolT = 3; quality.justUp = false; quality.savedT = 0;
   } else if (quality.fastT > 15 && quality.level > 0 && quality.blockUpT <= 0) {
-    setQuality(quality.level - 1); quality.fastT = 0; quality.coolT = 5; quality.justUp = true;
+    setQuality(quality.level - 1); quality.fastT = 0; quality.coolT = 5; quality.justUp = true; quality.savedT = 0;
   } else if (quality.fastT > 8) quality.justUp = false;
 }
 function toggleMute() { audio.unlock(); $('#bMute').textContent = audio.toggleMute() ? '🔇' : '🔊'; }
@@ -1623,9 +1649,18 @@ const gfx = { reflections: true, reflScale: 1 };
 const reflRT = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType });
 const reflCam = new THREE.PerspectiveCamera();
 reflCam.layers.enable(MIRROR_LAYER);
-const clipAboveSea = [new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.6)];
-const NO_CLIP = [];
+const aboveSea = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.6), _cp = new THREE.Plane(), _cq = new THREE.Vector4();
 const _rp = new THREE.Vector3(), _rt = new THREE.Vector3(), _ru = new THREE.Vector3(), _rm = new THREE.Matrix4();
+// what lies under the sea is cut away by tilting the mirror camera's near plane onto the water (as three's Reflector
+// does) rather than with a clipping plane, which would need a second copy of every shader
+function clipNearToSea(c) {
+  _cp.copy(aboveSea).applyMatrix4(c.matrixWorldInverse);
+  const e = c.projectionMatrix.elements;
+  _cq.set((Math.sign(_cp.normal.x) + e[8]) / e[0], (Math.sign(_cp.normal.y) + e[9]) / e[5], -1, (1 + e[10]) / e[14]);
+  const k = 2 / (_cp.normal.dot(_cq) + _cp.constant * _cq.w);
+  e[2] = _cp.normal.x * k; e[6] = _cp.normal.y * k; e[10] = _cp.normal.z * k + 1; e[14] = _cp.constant * k;
+  c.projectionMatrixInverse.copy(c.projectionMatrix).invert();
+}
 function renderReflection(renderer, cam) {
   const u = world.waterUniforms;
   cam.updateMatrixWorld();
@@ -1638,15 +1673,14 @@ function renderReflection(renderer, cam) {
   reflCam.near = cam.near; reflCam.far = cam.far;
   reflCam.updateMatrixWorld();
   reflCam.projectionMatrix.copy(cam.projectionMatrix);
-  reflCam.projectionMatrixInverse.copy(cam.projectionMatrixInverse);
+  // (only the depth row changes, so where things land on the mirror is the same either way)
   u.uReflMat.value.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1)
     .multiply(reflCam.projectionMatrix).multiply(_rm.copy(reflCam.matrixWorld).invert());
+  clipNearToSea(reflCam);
   world.water.visible = false;
-  renderer.clippingPlanes = clipAboveSea;
   renderer.setRenderTarget(reflRT);
   renderer.clear();
   renderer.render(scene, reflCam);
-  renderer.clippingPlanes = NO_CLIP;
   world.water.visible = true;
   u.uReflTex.value = reflRT.texture;
 }
@@ -1665,6 +1699,8 @@ class SplitRenderPass extends Pass {
       if (Math.abs(v.cam.aspect - a) > 1e-4) { v.cam.aspect = a; v.cam.updateProjectionMatrix(); }
       const tanF = Math.tan(THREE.MathUtils.degToRad(v.cam.fov) / 2);
       world.aimSun(v.focus);
+      v.cam.updateMatrixWorld();
+      world.cull(v.cam);
       // the shadow map is drawn once per view and shared by the mirror pass and the main pass
       renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;
       if (gfx.reflections) {
@@ -1683,7 +1719,6 @@ class SplitRenderPass extends Pass {
   }
 }
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 4 }));
-composer.setPixelRatio(PR);
 composer.addPass(new SplitRenderPass());
 // one bad (NaN / runaway) pixel would be smeared over the whole screen by bloom – scrub them first
 composer.addPass(new ShaderPass({
@@ -1832,10 +1867,22 @@ function tick(now) {
   } else updateHud(dt);
 
   if (debug.noDraw) return;          // (soak tests play the game without drawing it)
-  world.focus(getViews().map(v => v.cam.position));
   composer.render();
 }
-requestAnimationFrame(frame);
+setQuality(firstQuality());
+// Every shader is handed to the graphics driver before the first frame and compiled side by side where the browser
+// allows it, instead of one after another inside the first frame with the page frozen for seconds. They are compiled
+// for the composer's buffer, which is what the scene is really drawn into, and the full-screen passes' shaders come
+// along through a scene of stand-in quads wearing them.
+const postScene = new THREE.Scene(), quad = new THREE.PlaneGeometry(2, 2);
+for (const pass of composer.passes) for (const v of Object.values(pass)) for (const m of [v].flat()) if (m && m.isShaderMaterial) postScene.add(new THREE.Mesh(quad, m));
+renderer.setRenderTarget(composer.renderTarget1);
+const warmUp = Promise.all([renderer.compileAsync(scene, menuCam), renderer.compileAsync(postScene, menuCam)]);
+renderer.setRenderTarget(null);
+warmUp.catch(() => {}).then(() => {
+  requestAnimationFrame(frame);
+  requestAnimationFrame(() => canvas.classList.add('ready'));
+});
 
 // tiny debug handle (also handy for automated checks)
 window.__game = { life, terrainHeight, quality, setQuality, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };

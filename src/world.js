@@ -463,6 +463,32 @@ function groundMaterial(noiseTex, rocky) {
   return mat;
 }
 
+// A grid made by PlaneGeometry, cut into tiles x tiles meshes that share its vertices, so that a view (and the sun's
+// shadow box) only draws the tiles it can see. pad grows each tile's bounds for vertices a shader moves up or down.
+function tiled(geo, segs, tiles, material, pad, setup) {
+  const group = new THREE.Group(), ts = segs / tiles, row = segs + 1, p = geo.attributes.position.array, v = new THREE.Vector3();
+  for (let ty = 0; ty < tiles; ty++) for (let tx = 0; tx < tiles; tx++) {
+    const idx = new Uint32Array(ts * ts * 6), box = new THREE.Box3();
+    let k = 0;
+    for (let iy = ty * ts; iy < (ty + 1) * ts; iy++) for (let ix = tx * ts; ix < (tx + 1) * ts; ix++) {
+      const a = ix + row * iy, b = a + row, c = b + 1, d = a + 1;
+      idx[k++] = a; idx[k++] = b; idx[k++] = d; idx[k++] = b; idx[k++] = c; idx[k++] = d;
+    }
+    for (let iy = ty * ts; iy <= (ty + 1) * ts; iy++) for (let ix = tx * ts; ix <= (tx + 1) * ts; ix++) {
+      const i = (ix + row * iy) * 3; box.expandByPoint(v.set(p[i], p[i + 1], p[i + 2]));
+    }
+    box.min.y -= pad; box.max.y += pad;
+    const g = new THREE.BufferGeometry();
+    for (const name in geo.attributes) g.setAttribute(name, geo.attributes[name]);
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.boundingBox = box; g.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+    const tile = new THREE.Mesh(g, material);
+    setup(tile);
+    group.add(tile);
+  }
+  return group;
+}
+
 function canvasTex(w, h, draw) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   draw(c.getContext('2d'), w, h);
@@ -530,29 +556,25 @@ export function createWorld(scene, renderer) {
   for (let i = 0; i < tpos.count; i++) tpos.setY(i, terrainHeight(tpos.getX(i), tpos.getZ(i)));
   tgeo.computeVertexNormals();
   const groundMat = groundMaterial(noiseTex, false), rockMat = groundMaterial(noiseTex, true);
-  const terrain = new THREE.Mesh(tgeo, groundMat);
-  terrain.receiveShadow = true; terrain.castShadow = true;
-  terrain.layers.set(PLANT_LAYER);
+  const terrain = tiled(tgeo, TSEG, 8, groundMat, 0, tile => { tile.receiveShadow = tile.castShadow = true; tile.layers.set(PLANT_LAYER); });
   // the mirror in the water only needs the land's shape above the waterline, seen softly: a copy a tenth as dense
   const mgeo = new THREE.PlaneGeometry(TSIZE, TSIZE, 150, 150);
   mgeo.rotateX(-Math.PI / 2);
   { const mp = mgeo.attributes.position; for (let i = 0; i < mp.count; i++) mp.setY(i, terrainHeight(mp.getX(i), mp.getZ(i))); }
   mgeo.computeVertexNormals();
-  const mirrorLand = new THREE.Mesh(mgeo, groundMat);
-  mirrorLand.layers.set(MIRROR_LAYER); mirrorLand.receiveShadow = true;
+  const mirrorLand = tiled(mgeo, 150, 3, groundMat, 0, tile => { tile.layers.set(MIRROR_LAYER); tile.receiveShadow = true; });
   scene.add(mirrorLand);
   world.terrain = terrain;
   scene.add(terrain);
 
   // height map for the water shader (shallows + shore foam)
-  const HT = 512;
+  // (read straight off the terrain's own vertices, which lie on the same grid: row j runs along x at z = j)
+  const HT = TSEG + 1;
   const hdata = new Uint8Array(HT * HT);
-  for (let j = 0; j < HT; j++) for (let i = 0; i < HT; i++) {
-    const h = terrainHeight((i / (HT - 1) - 0.5) * TSIZE, (j / (HT - 1) - 0.5) * TSIZE);
-    hdata[j * HT + i] = Math.round(THREE.MathUtils.clamp((h + 14) / 30, 0, 1) * 255);
-  }
+  for (let i = 0; i < HT * HT; i++) hdata[i] = Math.round(THREE.MathUtils.clamp((tpos.getY(i) + 14) / 30, 0, 1) * 255);
   const heightTex = new THREE.DataTexture(hdata, HT, HT, THREE.RedFormat, THREE.UnsignedByteType);
   heightTex.magFilter = heightTex.minFilter = THREE.LinearFilter;
+  heightTex.unpackAlignment = 1;      // (rows of 449 bytes are not a multiple of four)
   heightTex.needsUpdate = true;
 
   // ---------- water (grid is dense near the middle, stretched toward the horizon)
@@ -576,8 +598,9 @@ export function createWorld(scene, renderer) {
     uLamp: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uReflTex: { value: null }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 },
   };
-  const water = new THREE.Mesh(wgeo, new THREE.ShaderMaterial({ uniforms: waterUniforms, vertexShader: WATER_VERT, fragmentShader: WATER_FRAG, transparent: true, depthWrite: false }));
-  water.frustumCulled = false; water.renderOrder = -1;
+  const waterMat = new THREE.ShaderMaterial({ uniforms: waterUniforms, vertexShader: WATER_VERT, fragmentShader: WATER_FRAG, transparent: true, depthWrite: false });
+  // (tiles padded by the tallest swell, so a wave crest never pokes up out of a tile that was left undrawn)
+  const water = tiled(wgeo, 320, 8, waterMat, 6, tile => { tile.renderOrder = -1; });
   scene.add(water);
   world.waterUniforms = waterUniforms; world.water = water;
 
@@ -667,7 +690,7 @@ export function createWorld(scene, renderer) {
 
   // ---------- forest, palms, scrub and rocks
   // Every plant is one of a handful of models drawn many times. Near ones are the full model, those across the bay a
-  // sparser copy, and the far hills' are single soft shapes; world.focus() sorts them by distance.
+  // sparser copy, and the far hills' are single soft shapes; world.cull() sorts them for each view.
   let NEAR = 105, FAR = 400;
   const dm = new THREE.Object3D();
   const species = new Map();        // model name -> [{ m: Matrix4, x, z, s }]
@@ -682,7 +705,7 @@ export function createWorld(scene, renderer) {
   const rocks = { World_Rock: [], World_Rock2: [], World_Rock3: [], World_Driftwood: [] };
   const rock = (name, x, y, z, s) => {
     dm.position.set(x, y, z); dm.rotation.set((rnd() - 0.5) * 0.5, rnd() * 6.283, (rnd() - 0.5) * 0.5); dm.scale.set(s, s * (0.7 + rnd() * 0.5), s * (0.8 + rnd() * 0.4)); dm.updateMatrix();
-    rocks[name].push(dm.matrix.clone());
+    rocks[name].push({ m: dm.matrix.clone(), x, z, cy: y, r: s * 1.6 });
   };
   const blocked = (x, z) => keepOut.some(k => (x - k.x) ** 2 + (z - k.z) ** 2 < k.r * k.r);
   for (const I of ISLANDS) {
@@ -720,7 +743,7 @@ export function createWorld(scene, renderer) {
     if (y > -0.5 || y < -9 || Math.hypot(x, z) < 75) continue;
     const s = 2.2 + rnd() * 3;
     dm.position.set(x, y - 1, z); dm.rotation.set(0, rnd() * 6.283, 0); dm.scale.set(s, s * (1.6 + rnd() * 1.4), s); dm.updateMatrix();
-    rocks[pick(ROCKS)].push(dm.matrix.clone());
+    rocks[pick(ROCKS)].push({ m: dm.matrix.clone(), x, z, cy: y + s * 3, r: s * 6 });
     OBSTACLES.push({ x, z, r: s * 1.8, top: y + s * 6 });
     // (and a place just to seaward of it where a raft can fetch up)
     const out = s * 1.8 + 11, sx2 = x + Math.cos(a) * out, sz2 = z + Math.sin(a) * out;
@@ -739,6 +762,7 @@ export function createWorld(scene, renderer) {
       return mesh;
     });
     const size = modelInfo(name).size;
+    for (const it of list) { it.r = Math.max(size[0], size[1], size[2]) * it.s * 0.6; it.cy = it.y + size[1] * it.s * 0.5; }
     lodded.push({ list, tiers, leaf: look(leaf ? leaf.mat : 'Leaf').color, size, bushy: /Bush/.test(name) });
     plantCount += list.length;
   }
@@ -749,46 +773,52 @@ export function createWorld(scene, renderer) {
   const lumps = new THREE.InstancedMesh(lumpGeo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), plantCount);
   lumps.frustumCulled = false; lumps.count = 0; lumps.receiveShadow = true;
   scene.add(lumps);
+  for (const L of lodded) for (const it of L.list) {
+    // (each plant's lump is worked out once; world.cull() only picks which ones to draw)
+    dm.position.set(it.x, it.y + L.size[1] * it.s * 0.62, it.z); dm.rotation.set(0, it.x, 0);
+    dm.scale.set(L.size[0] * it.s * 0.46, L.size[1] * it.s * 0.36, L.size[2] * it.s * 0.46); dm.updateMatrix();
+    it.lump = dm.matrix.clone(); it.col = L.leaf.clone().multiplyScalar(1.15);
+  }
+  const rockSets = [];
   for (const name in rocks) {
     const list = rocks[name]; if (!list.length) continue;
     const mesh = new THREE.InstancedMesh(geo(name), name === 'World_Driftwood' ? look('Bleached') : rockMat, list.length);
-    list.forEach((mx, i) => mesh.setMatrixAt(i, mx));
-    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
+    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.count = 0;
     scene.add(mesh);
+    rockSets.push({ mesh, list });
   }
   world.counts = { plants: plantCount, rocks: Object.values(rocks).reduce((n, l) => n + l.length, 0) };
 
-  const lodAt = [new THREE.Vector3(1e9, 0, 0)], lumpCol = new THREE.Color();
-  let lodDirty = true;
-  world.setDetail = (near, far) => { NEAR = near; FAR = far; lodDirty = true; };
-  // call with the positions the scene is being watched from; re-sorts the plants when a viewer has moved far enough
-  world.focus = function (points) {
-    let moved = lodDirty || points.length !== lodAt.length;
-    for (let i = 0; i < points.length && !moved; i++) if (points[i].distanceToSquared(lodAt[i]) > 64) moved = true;
-    if (!moved) return;
-    lodDirty = false;
-    lodAt.length = points.length;
-    points.forEach((p, i) => { (lodAt[i] || (lodAt[i] = new THREE.Vector3())).copy(p); });
+  world.setDetail = (near, far) => { NEAR = near; FAR = far; };
+  // Called before each viewport is drawn. Of the plants and rocks this camera can see (with a margin, so the shadows
+  // and mirror images of those just outside the picture are still there), near ones get the full model, those across
+  // the bay the sparser copy and the far hills' a lump. The view's shadow and mirror passes use the same choice.
+  const frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _sph = new THREE.Sphere(), MARGIN = 14;
+  const seen = it => { _sph.center.set(it.x, it.cy, it.z); _sph.radius = it.r + MARGIN; return frustum.intersectsSphere(_sph); };
+  world.cull = function (cam) {
+    frustum.setFromProjectionMatrix(_pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const px = cam.position.x, pz = cam.position.z, near2 = NEAR * NEAR, far2 = FAR * FAR;
     let nl = 0;
     for (const L of lodded) {
       let n0 = 0, n1 = 0;
+      const [t0, t1] = L.tiers;
       for (const it of L.list) {
-        let d2 = 1e12;
-        for (const p of points) { const dx = it.x - p.x, dz = it.z - p.z, q = dx * dx + dz * dz; if (q < d2) d2 = q; }
-        if (d2 < NEAR * NEAR) L.tiers[0].setMatrixAt(n0++, it.m);
-        else if (d2 < FAR * FAR || L.bushy) { if (d2 < FAR * FAR) L.tiers[1].setMatrixAt(n1++, it.m); }
-        else {
-          dm.position.set(it.x, it.y + L.size[1] * it.s * 0.62, it.z); dm.rotation.set(0, it.x, 0);
-          dm.scale.set(L.size[0] * it.s * 0.46, L.size[1] * it.s * 0.36, L.size[2] * it.s * 0.46); dm.updateMatrix();
-          lumps.setMatrixAt(nl, dm.matrix);
-          lumps.setColorAt(nl++, lumpCol.copy(L.leaf).multiplyScalar(1.15));
-        }
+        const dx = it.x - px, dz = it.z - pz, d2 = dx * dx + dz * dz;
+        if ((d2 >= far2 && L.bushy) || !seen(it)) continue;
+        if (d2 < near2) t0.setMatrixAt(n0++, it.m);
+        else if (d2 < far2) t1.setMatrixAt(n1++, it.m);
+        else { lumps.setMatrixAt(nl, it.lump); lumps.setColorAt(nl++, it.col); }
       }
-      L.tiers[0].count = n0; L.tiers[1].count = n1;
-      L.tiers[0].instanceMatrix.needsUpdate = L.tiers[1].instanceMatrix.needsUpdate = true;
+      t0.count = n0; t1.count = n1;
+      t0.instanceMatrix.needsUpdate = t1.instanceMatrix.needsUpdate = true;
     }
     lumps.count = nl; lumps.instanceMatrix.needsUpdate = true;
     if (lumps.instanceColor) lumps.instanceColor.needsUpdate = true;
+    for (const R of rockSets) {
+      let n = 0;
+      for (const it of R.list) if (seen(it)) R.mesh.setMatrixAt(n++, it.m);
+      R.mesh.count = n; R.mesh.instanceMatrix.needsUpdate = true;
+    }
   };
 
   // ---------- ledges on the sea cliffs, where only the helicopter's basket can reach
