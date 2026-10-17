@@ -39,7 +39,10 @@ const smooth = t => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 export const PLANT_LAYER = 1;
 // and only the water's mirror sees this one (a lighter copy of the land)
 export const MIRROR_LAYER = 2;
-export const WORLD_R = 330;        // soft flight boundary
+export const WORLD_R = 620;        // soft flight boundary
+export const HOME_R = 330;         // the home bay's own islands, rocks and open-sea spawns lie inside this
+// the land is worked out on a grid TSPAN across, a point every TSTEP metres
+export const TSPAN = 1400, TSTEP = 2;
 export const SEA_FLOOR = -14;
 export const BASE_Y = 5;           // height of the rescue base plateau
 export const PAD_Y = BASE_Y + 0.3;
@@ -76,14 +79,74 @@ export const ISLANDS = [
   lobe(-285, 45, 40, 14, { ridge: 22, pow: 1.5, cliff: 11, forest: 0.3, palms: 0.05, flats: [{ x: -268, z: 62, r: 9, site: 'Crag shelf' }] }),
   lobe(290, 20, 42, 2.4, { coast: 0.3, forest: 0, palms: 0.45, flats: [{ x: 290, z: 20, r: 9, site: 'Palm cay' }] }),
 ];
+// The far zones, each with its own islands and its own kinds of rescue. A place belongs to whichever zone it lies
+// deepest inside (see zoneOf); the home bay is everything round the base.
+export const ZONES = [
+  { id: 'home', name: 'Home Bay', icon: '\u{1F3DD}️', x: 0, z: 0, r: 260, color: '#5dff8f' },
+  { id: 'forest', name: 'Pine Forest', icon: '\u{1F332}', x: -410, z: -250, r: 135, color: '#62d26f' },
+  { id: 'reef', name: 'Coral Reef', icon: '\u{1F420}', x: -300, z: 350, r: 130, color: '#3fe0d0' },
+  { id: 'harbour', name: 'Harbour Town', icon: '\u{1F3D8}️', x: 455, z: -165, r: 115, color: '#ffa04a' },
+  { id: 'snow', name: 'Snowy Peaks', icon: '❄️', x: 55, z: -505, r: 135, color: '#bfe8ff' },
+  { id: 'volcano', name: 'Volcano Isle', icon: '\u{1F30B}', x: 320, z: 390, r: 120, color: '#ff6a3a' },
+];
+export const zoneOf = (x, z) => { let best = ZONES[0], bd = 1e9; for (const Z of ZONES) { const d = Math.hypot(x - Z.x, z - Z.z) - Z.r; if (d < bd) { bd = d; best = Z; } } return best; };
+// the ranger's fire tower in the pine forest, the wreck on the reef, the harbour's breakwater and the crater
+export const TOWER = { x: -392, z: -206 };
+export const WRECK = { x: -238, z: 296, yaw: 0.7 };
+export const BREAKWATER = [[446, -214], [404, -204], [389, -182]];
+export const CRATER = { x: 320, z: 390, r: 11 };
+export const LAKE = { x: -424, z: -246, r: 28 };
+function bar(a, b, w, h) {
+  const x = (a[0] + b[0]) / 2, z = (a[1] + b[1]) / 2;
+  return { x, z, bar: [a[0], a[1], b[0], b[1]], w, h, r: 0, coast: 0, forest: 0, palms: 0, reach: Math.hypot(b[0] - a[0], b[1] - a[1]) / 2 + w + 12 };
+}
+ISLANDS.push(
+  // the pine forest: a big wooded island round a lake that only something that flies can reach, and a wooded islet
+  lobe(-420, -250, 104, 26, { forest: 1, pine: 1, coast: 0.28, palms: 0, pow: 1.0, dents: [{ ...LAKE, y: -3.5, f: 30 }],
+    flats: [{ x: -370, z: -302, r: 10, site: 'Pine clearing', pad: true }, { x: -478, z: -210, r: 10, site: 'Lakeside camp' }, { x: TOWER.x, z: TOWER.z, r: 6 }] }),
+  lobe(-318, -338, 30, 9, { forest: 0.9, pine: 1, palms: 0 }),
+  // the reef: a second atoll, with coral flats just under the surface round it (and the old wreck aground on one)
+  lobe(-335, 385, 58, 2.5, { coast: 0.14, forest: 0, palms: 0.45, dents: [{ x: -335, z: 385, r: 26, y: -4 }, { x: -296, z: 362, r: 7, y: -4 }, { x: -284, z: 350, r: 7, y: -4 }] }),
+  lobe(-238, 300, 34, 0.4, { coast: 0.45, forest: 0, palms: 0, sub: -4.4 }),
+  lobe(-262, 418, 26, 0.4, { coast: 0.45, forest: 0, palms: 0, sub: -4.4 }),
+  // harbour town on its terrace above a walled harbour
+  lobe(482, -160, 72, 9, { coast: 0.14, forest: 0.18, palms: 0.06, town: 1, dents: [{ x: 418, z: -160, r: 26, y: -6 }],
+    flats: [{ x: 492, z: -160, r: 34, y: 5 }, { x: 502, z: -112, r: 9, y: 5, site: 'Town square', pad: true }] }),
+  ...BREAKWATER.slice(1).map((b, i) => bar(BREAKWATER[i], b, 3, 2.4)),
+  // the snowy peaks: a ridged range with a sheltered cove where the ice floes collect, and a second peak behind
+  lobe(30, -505, 105, 30, { ridge: 70, pow: 1.8, cliff: 10, cliffDir: [0, -1], forest: 0.6, pine: 1, palms: 0, treeLine: 12, dents: [{ x: 96, z: -432, r: 26, y: -6 }],
+    flats: [{ x: 10, z: -550, r: 13, y: 12, site: 'Ski hut', pad: true }] }),
+  lobe(128, -548, 52, 22, { ridge: 40, pow: 1.8, forest: 0.5, pine: 1, palms: 0, treeLine: 12 }),
+  // the volcano: a cone with a crater on top, black-sand coves and terraces on its slopes
+  lobe(CRATER.x, CRATER.z, 82, 5, { cone: { h: 62, crater: CRATER.r, deep: 10 }, coast: 0.2, forest: 0.4, palms: 0.12, treeLine: 13, cliff: 6, cliffDir: [0.8, 0.6],
+    dents: [{ x: 252, z: 345, r: 24, y: -6 }], flats: [{ x: 346, z: 360, r: 9, site: 'Lava lookout', pad: true }, { x: 362, z: 448, r: 9, site: 'Black sand camp' }] }),
+);
 // tiny sandbars where friends get stranded
 export const ISLETS = [
   { x: 95, z: 60 }, { x: -70, z: -95 }, { x: 110, z: -70 }, { x: -20, z: 135 },
   { x: 60, z: 250 }, { x: -120, z: -260 }, { x: 250, z: -40 }, { x: -230, z: 120 },
   { x: 120, z: -262 }, { x: -110, z: 5 },
 ];
-for (const I of ISLANDS) I.reach = I.r * (1 + I.coast) * 1.34;
+for (const I of ISLANDS) if (!I.bar) I.reach = I.r * (1 + I.coast) * 1.34;
 for (const s of ISLETS) ISLANDS.push({ x: s.x, z: s.z, r: 17, h: 3.2, islet: true, reach: 17, forest: 0, palms: 0.2 });
+// sandbars and cays out in the zones (the reef's cays, the volcano's black-sand bars, the breakwater's head)
+export const ZONE_ISLETS = [
+  { x: -210, z: 352, zone: 'reef' }, { x: -300, z: 282, zone: 'reef' }, { x: -392, z: 300, zone: 'reef' },
+  { x: 236, z: 440, zone: 'volcano' }, { x: 410, z: 330, zone: 'volcano' },
+  { x: -470, z: -100, zone: 'forest' },
+  { x: 386, z: -178, zone: 'harbour', r: 8, head: true },
+];
+for (const s of ZONE_ISLETS) ISLANDS.push({ x: s.x, z: s.z, r: s.r || 17, h: s.head ? 2.6 : 3.2, islet: true, reach: s.r || 17, forest: 0, palms: s.head ? 0 : 0.2 });
+// which islands can reach each 40 m square of the map, so a height is worked out from the few nearby, not all of them
+const BK = 40, BKN = Math.ceil(TSPAN / BK) + 2, BKH = (BKN * BK) / 2, buckets = Array.from({ length: BKN * BKN }, () => []);
+for (const I of ISLANDS) {
+  const i0 = Math.max(0, Math.floor((I.x - I.reach + BKH) / BK)), i1 = Math.min(BKN - 1, Math.floor((I.x + I.reach + BKH) / BK));
+  const j0 = Math.max(0, Math.floor((I.z - I.reach + BKH) / BK)), j1 = Math.min(BKN - 1, Math.floor((I.z + I.reach + BKH) / BK));
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const nx = Math.max(i * BK - BKH, Math.min(I.x, (i + 1) * BK - BKH)), nz = Math.max(j * BK - BKH, Math.min(I.z, (j + 1) * BK - BKH));
+    if ((nx - I.x) ** 2 + (nz - I.z) ** 2 < I.reach * I.reach) buckets[j * BKN + i].push(I);
+  }
+}
 
 export const OBSTACLES = [
   { x: LIGHTHOUSE.x, z: LIGHTHOUSE.z, r: 6.5, top: 42 },
@@ -100,6 +163,12 @@ export const SHOALS = [];
 function islandHeight(I, x, z, natural) {
   const dx = x - I.x, dz = z - I.z, d2 = dx * dx + dz * dz;
   if (d2 >= I.reach * I.reach) return SEA_FLOOR;
+  if (I.bar) {
+    // a breakwater: a level-topped wall of rubble along a line, steep-sided down to the sea bed
+    const [ax, az, bx, bz] = I.bar, ux = bx - ax, uz = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * ux + (z - az) * uz) / (ux * ux + uz * uz)));
+    const d = Math.hypot(x - ax - t * ux, z - az - t * uz);
+    return I.h + (fbm(x * 0.3, z * 0.3) - 0.5) * 0.4 + (SEA_FLOOR - I.h) * smooth((d - I.w) / 9);
+  }
   const dist = Math.sqrt(d2);
   // (a sandbar has a little level top to stand on)
   if (I.islet) { const d = Math.max(0, dist - 3.5) / (I.r - 3.5), s = 1 - d * d * (3 - 2 * d); return SEA_FLOOR + (I.h - SEA_FLOOR) * Math.pow(s, 0.8); }
@@ -113,14 +182,23 @@ function islandHeight(I, x, z, natural) {
     let hill = I.h * rise * (0.65 + 0.7 * fbm(x * 0.02 + I.sz, z * 0.02 + I.sx));
     if (I.ridge) hill += I.ridge * Math.pow(rise, 1.5) * Math.pow(ridged(x * 0.015 + I.sx, z * 0.015 + I.sz), 1.7) * 1.5;
     h = 2.2 * smooth(u / 0.16) + hill + (fbm(x * 0.09, z * 0.09) - 0.5) * 1.4 * smooth(u / 0.25);
+    if (I.cone) {
+      // a volcano: a cone rising to a rim, gullied down its sides, with a bowl of a crater inside the rim
+      const c = I.cone, span = I.r * 0.95, rim = c.h * Math.pow(1 - c.crater / span, 1.7);
+      let k = Math.min(rim, c.h * Math.pow(Math.max(0, 1 - dist / span), 1.7));
+      k *= 0.86 + 0.28 * ridged(x * 0.05 + I.sx, z * 0.05 + I.sz) * smooth((dist - c.crater) / 10);
+      if (dist < c.crater) k -= c.deep * (1 - (dist / c.crater) ** 2);
+      h += k;
+    }
     if (I.cliff) {
       // a sea cliff: the ground climbs to the cliff top almost at once, then runs level until the hill behind catches up
-      const face = I.cliffDir ? smooth(((dx * I.cliffDir[0] + dz * I.cliffDir[1]) / dist + 0.25) / 0.6) : 1;
+      const face = I.cliffDir ? smooth(((dx * I.cliffDir[0] + dz * I.cliffDir[1]) / (dist || 1) + 0.25) / 0.6) : 1;
       const t = (h - 2.4) / (I.cliff - 2.4);
       if (t > 0) h = Math.max(h, 2.4 + (I.cliff - 2.4) * face * smooth(t / 0.26));
     }
   }
-  if (I.dents) for (const D of I.dents) { const w = 1 - smooth((Math.hypot(x - D.x, z - D.z) - D.r) / 14); if (w > 0) h += (D.y - h) * w; }
+  if (I.sub) h += I.sub;
+  if (I.dents) for (const D of I.dents) { const w = 1 - smooth((Math.hypot(x - D.x, z - D.z) - D.r) / (D.f || 14)); if (w > 0) h += (D.y - h) * w; }
   if (I.flats && !natural) for (const F of I.flats) { const w = 1 - smooth((Math.hypot(x - F.x, z - F.z) - F.r) / 9); if (w > 0) h += (F.y - h) * w; }
   return h;
 }
@@ -136,13 +214,15 @@ for (const I of ISLANDS) for (const F of I.flats || []) {
   if (F.site) SITES.push({ x: F.x, z: F.z, y: F.y, r: F.r, name: F.site, pad: !!F.pad });
 }
 export function terrainHeight(x, z) {
+  const i = Math.floor((x + BKH) / BK), j = Math.floor((z + BKH) / BK);
+  if (i < 0 || j < 0 || i >= BKN || j >= BKN) return SEA_FLOOR;
   let h = SEA_FLOOR;
-  for (const I of ISLANDS) { const ih = islandHeight(I, x, z); if (ih > h) h = ih; }
+  for (const I of buckets[j * BKN + i]) { const ih = islandHeight(I, x, z); if (ih > h) h = ih; }
   return h;
 }
 
 // how far the treetops stand above the ground, so helicopters cruise over the forest and not through it
-const CAN_N = 160, CAN_SPAN = 800;
+const CAN_N = 280, CAN_SPAN = TSPAN;
 const canopy = new Float32Array(CAN_N * CAN_N);
 export function canopyAt(x, z) {
   const i = Math.floor((x / CAN_SPAN + 0.5) * CAN_N), j = Math.floor((z / CAN_SPAN + 0.5) * CAN_N);
@@ -323,7 +403,7 @@ varying vec3 vBigN;
 varying float vCrest;
 void main(){
   vec4 wp = modelMatrix * vec4(position, 1.0);
-  float fade = (1.0 - smoothstep(500.0, 1400.0, length(wp.xz))) * uSwell;
+  float fade = (1.0 - smoothstep(900.0, 2000.0, length(wp.xz))) * uSwell;
   float y = 0.0; vec2 dd = vec2(0.0);
   for (int i = 0; i < ${NW}; i++) {
     float ph = uWaves[i].z * dot(uWaves[i].xy, wp.xz) - uOmega[i] * uTime;
@@ -340,7 +420,8 @@ const WATER_FRAG = /* glsl */`
 uniform float uTime;
 uniform vec3 uZenith, uHorizon, uSunDir, uSunColor, uDeep, uShallow, uFogColor;
 uniform float uFogDensity, uSpec, uNight, uSwell;
-uniform sampler2D uHeightTex, uRipple;
+uniform sampler2D uHeightTex, uRipple, uNoise;
+uniform vec3 uReef;        // the coral reef: x, z, radius
 uniform vec4 uHeli[2];     // xyz world position, w strength
 uniform vec4 uLamp[2];     // searchlight spot on water: xz, radius, strength
 uniform sampler2D uReflTex;
@@ -389,11 +470,19 @@ void main(){
   float sd = max(dot(R, uSunDir), 0.0);
   vec3 sun = uSunColor * (pow(sd, 520.0) * uSpec + pow(sd, 48.0) * uSpec * 0.03);
 
-  float th = texture2D(uHeightTex, p / 900.0 + 0.5).r * 30.0 - 14.0;
+  float th = texture2D(uHeightTex, p / ${TSPAN.toFixed(1)} + 0.5).r * 30.0 - 14.0;
   float depth = vWorld.y - th;
   // clear water over sand is turquoise only where it is shallow; a few metres down the open sea takes over
   vec3 body = mix(uShallow, uDeep, smoothstep(0.0, 7.5, depth));
   float light = 0.25 + 0.75 * max(dot(N, uSunDir), 0.0);
+  // coral heads seen through the clear water over the reef: dark, mottled patches in the shallows
+  float reefW = (1.0 - smoothstep(uReef.z, uReef.z + 40.0, length(p - uReef.xy))) * smoothstep(8.0, 2.0, depth);
+  if (reefW > 0.0) {
+    vec4 cn = texture2D(uNoise, p / 70.0);
+    float patchy = smoothstep(0.42, 0.62, cn.r * 0.6 + texture2D(uNoise, p / 17.0).g * 0.4);
+    vec3 coral = mix(vec3(0.03, 0.13, 0.12), vec3(0.16, 0.12, 0.13), smoothstep(0.35, 0.65, cn.b));
+    body = mix(body, coral, patchy * reefW * 0.8);
+  }
   body *= mix(light, 1.0, 0.35) * (1.0 - 0.55 * uNight);
   body += uShallow * 0.1 * smoothstep(0.5, 0.85, chop) * (1.0 - 0.7 * uNight) / (1.0 + dist * 0.01);   // light through the ripples' crests
 
@@ -423,6 +512,13 @@ void main(){
 }`;
 
 // ---------------------------------------------------------------- ground
+// where the ground turns snowy above the snow line, black with volcanic sand and ash, or brown with pine needles
+// (circles x, z, r; the ground shader fades each out over 40 m beyond r)
+const SNOW_AREA = [60, -515, 150], ASH_AREA = [320, 390, 95], PINE_AREA = [-405, -262, 125];
+const zoneUniforms = {
+  uSnowZ: { value: new THREE.Vector3(...SNOW_AREA) }, uAshZ: { value: new THREE.Vector3(...ASH_AREA) }, uPineZ: { value: new THREE.Vector3(...PINE_AREA) },
+};
+export const snowAt = (x, z) => 1 - smooth((Math.hypot(x - SNOW_AREA[0], z - SNOW_AREA[1]) - SNOW_AREA[2]) / 40);
 // One material for the land and (with rocky set) for every boulder on it: scanned sand, mossy turf and rock, laid by
 // height and steepness in world space, so a rock half buried in the beach takes the beach's wet line and the hill's moss.
 function groundMaterial(noiseTex, rocky) {
@@ -430,7 +526,7 @@ function groundMaterial(noiseTex, rocky) {
   const uniforms = {
     tSandC: { value: groundTex('sand', 'c') }, tSandN: { value: groundTex('sand', 'n') },
     tMossC: { value: groundTex('moss', 'c') }, tMossN: { value: groundTex('moss', 'n') },
-    tRockC: { value: groundTex('rock', 'c') }, tRockN: { value: groundTex('rock', 'n') }, tNoise: { value: noiseTex },
+    tRockC: { value: groundTex('rock', 'c') }, tRockN: { value: groundTex('rock', 'n') }, tNoise: { value: noiseTex }, ...zoneUniforms,
   };
   mat.defines = rocky ? { ROCKY: 1 } : {};
   mat.onBeforeCompile = sh => {
@@ -446,6 +542,8 @@ function groundMaterial(noiseTex, rocky) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform sampler2D tSandC, tSandN, tMossC, tMossN, tRockC, tRockN, tNoise;
+        uniform vec3 uSnowZ, uAshZ, uPineZ;
+        float zoneW(vec3 Z, vec2 p) { return 1.0 - smoothstep(Z.z, Z.z + 40.0, length(p - Z.xy)); }
         varying vec3 vTP; varying vec3 vTN;
         vec3 twice(sampler2D t, vec2 uv, float n) { return mix(texture2D(t, uv).rgb, texture2D(t, uv * 0.37 + vec2(0.31, 0.17)).rgb, n); }`)
       .replace('#include <map_fragment>', `
@@ -458,6 +556,12 @@ function groundMaterial(noiseTex, rocky) {
         rockC = mix(rockC, vec3(dot(rockC, vec3(0.3, 0.5, 0.2))), 0.45) * vec3(1.45, 1.4, 1.36);
         vec3 sandC = twice(tSandC, gp / 22.0, n2) * vec3(1.62, 1.44, 1.12);
         vec3 grass = twice(tMossC, gp / 12.0, n2) * mix(vec3(0.42, 1.0, 0.3), vec3(0.8, 1.08, 0.4), smoothstep(0.3, 0.75, n1)) * 1.35;
+        float wAsh = zoneW(uAshZ, gp), wPine = zoneW(uPineZ, gp), wSnowZ = zoneW(uSnowZ, gp);
+        sandC = mix(sandC, mix(sandC, vec3(0.34, 0.35, 0.37), 0.75), wSnowZ);                       // shingle on the cold shore
+        sandC = mix(sandC, vec3(0.075, 0.07, 0.068) * (0.75 + 0.5 * n2), wAsh);                      // black volcanic sand
+        grass = mix(grass, grass * vec3(0.6, 0.55, 0.36), wAsh * 0.8);
+        rockC = mix(rockC, rockC * vec3(0.34, 0.32, 0.32), wAsh);
+        grass = mix(grass, grass * vec3(0.66, 0.74, 0.5), wPine);
         vec3 nm;
         #ifdef ROCKY
           float wMoss = smoothstep(0.72, 0.96, gn.y) * smoothstep(0.35, 0.6, n2) * smoothstep(2.0, 4.0, vTP.y);
@@ -470,6 +574,9 @@ function groundMaterial(noiseTex, rocky) {
           vec3 col = mix(mix(grass, sandC, wSand), rockC * 1.25, wRock);
           nm = mix(mix(texture2D(tMossN, gp / 12.0).xyz, texture2D(tSandN, gp / 22.0).xyz, wSand), texture2D(tRockN, gp / 13.0).xyz, wRock) * 2.0 - 1.0;
         #endif
+        // snow lies above the snow line wherever it is not too steep to hold it (on boulders too)
+        float wSnow = wSnowZ * smoothstep(6.0, 11.0, vTP.y + (n2 - 0.5) * 7.0 + (n3 - 0.5) * 1.5) * (1.0 - smoothstep(0.4, 0.62, steep + (n3 - 0.5) * 0.12));
+        col = mix(col, vec3(0.78, 0.82, 0.9) * (0.92 + 0.12 * n3), wSnow);
         float wet = 1.0 - smoothstep(-0.15, 0.75, vTP.y + (n3 - 0.5) * 0.3);
         col *= mix(1.0, 0.5, wet) * (0.82 + 0.36 * n1);
         diffuseColor.rgb = col;
@@ -567,32 +674,56 @@ export function createWorld(scene, renderer) {
   world.sun = sun;
 
   // ---------- terrain
-  const TSIZE = 900, TSEG = 448;
-  const tgeo = new THREE.PlaneGeometry(TSIZE, TSIZE, TSEG, TSEG);
-  tgeo.rotateX(-Math.PI / 2);
-  const tpos = tgeo.attributes.position;
-  for (let i = 0; i < tpos.count; i++) tpos.setY(i, terrainHeight(tpos.getX(i), tpos.getZ(i)));
-  tgeo.computeVertexNormals();
+  // The whole map's heights on one grid, then cut into tiles that each own their vertices; a tile with nothing but deep
+  // sea bed in it is never built (the sea above it hides it), so a bigger map with open water between costs little.
+  const TN = TSPAN / TSTEP, TR = TN + 1, H = new Float32Array(TR * TR);
+  for (let j = 0; j < TR; j++) for (let i = 0; i < TR; i++) H[j * TR + i] = terrainHeight(i * TSTEP - TSPAN / 2, j * TSTEP - TSPAN / 2);
+  const hAt = (i, j) => H[Math.min(TN, Math.max(0, j)) * TR + Math.min(TN, Math.max(0, i))];
+  // (stride: use every stride-th grid point, for a lighter copy; tile: that many cells a side)
+  function landTiles(stride, tile, material, setup) {
+    const group = new THREE.Group(), cells = TN / stride, n = Math.ceil(cells / tile);
+    for (let ty = 0; ty < n; ty++) for (let tx = 0; tx < n; tx++) {
+      const c0 = tx * tile, r0 = ty * tile, cw = Math.min(tile, cells - c0), rh = Math.min(tile, cells - r0);
+      let top = -1e9;
+      for (let r = 0; r <= rh; r++) for (let c = 0; c <= cw; c++) top = Math.max(top, hAt((c0 + c) * stride, (r0 + r) * stride));
+      if (top < -4) continue;
+      const vn = (cw + 1) * (rh + 1), pos = new Float32Array(vn * 3), nor = new Float32Array(vn * 3), idx = new Uint32Array(cw * rh * 6);
+      let k = 0;
+      for (let r = 0; r <= rh; r++) for (let c = 0; c <= cw; c++, k++) {
+        const i = (c0 + c) * stride, j = (r0 + r) * stride;
+        pos[k * 3] = i * TSTEP - TSPAN / 2; pos[k * 3 + 1] = hAt(i, j); pos[k * 3 + 2] = j * TSTEP - TSPAN / 2;
+        // (the normal from the neighbours on the full grid, so tiles meet without a seam of light)
+        const nx = hAt(i - stride, j) - hAt(i + stride, j), nz = hAt(i, j - stride) - hAt(i, j + stride), ny = 2 * stride * TSTEP, l = Math.hypot(nx, ny, nz);
+        nor[k * 3] = nx / l; nor[k * 3 + 1] = ny / l; nor[k * 3 + 2] = nz / l;
+      }
+      k = 0;
+      for (let r = 0; r < rh; r++) for (let c = 0; c < cw; c++) {
+        const a = r * (cw + 1) + c, b = a + cw + 1;
+        idx[k++] = a; idx[k++] = b; idx[k++] = a + 1; idx[k++] = b; idx[k++] = b + 1; idx[k++] = a + 1;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      g.setIndex(new THREE.BufferAttribute(idx, 1)); g.computeBoundingBox(); g.computeBoundingSphere();
+      const m = new THREE.Mesh(g, material);
+      setup(m);
+      group.add(m);
+    }
+    return group;
+  }
   const groundMat = groundMaterial(noiseTex, false), rockMat = groundMaterial(noiseTex, true);
-  const terrain = tiled(tgeo, TSEG, 8, groundMat, 0, tile => { tile.receiveShadow = tile.castShadow = true; tile.layers.set(PLANT_LAYER); });
-  // the mirror in the water only needs the land's shape above the waterline, seen softly: a copy a tenth as dense
-  const mgeo = new THREE.PlaneGeometry(TSIZE, TSIZE, 150, 150);
-  mgeo.rotateX(-Math.PI / 2);
-  { const mp = mgeo.attributes.position; for (let i = 0; i < mp.count; i++) mp.setY(i, terrainHeight(mp.getX(i), mp.getZ(i))); }
-  mgeo.computeVertexNormals();
-  const mirrorLand = tiled(mgeo, 150, 3, groundMat, 0, tile => { tile.layers.set(MIRROR_LAYER); tile.receiveShadow = true; });
+  const terrain = landTiles(1, 100, groundMat, tile => { tile.receiveShadow = tile.castShadow = true; tile.layers.set(PLANT_LAYER); });
+  // the mirror in the water only needs the land's shape above the waterline, seen softly: a copy far less dense
+  const mirrorLand = landTiles(4, 50, groundMat, tile => { tile.layers.set(MIRROR_LAYER); tile.receiveShadow = true; });
   scene.add(mirrorLand);
   world.terrain = terrain;
   scene.add(terrain);
 
-  // height map for the water shader (shallows + shore foam)
-  // (read straight off the terrain's own vertices, which lie on the same grid: row j runs along x at z = j)
-  const HT = TSEG + 1;
-  const hdata = new Uint8Array(HT * HT);
-  for (let i = 0; i < HT * HT; i++) hdata[i] = Math.round(THREE.MathUtils.clamp((tpos.getY(i) + 14) / 30, 0, 1) * 255);
-  const heightTex = new THREE.DataTexture(hdata, HT, HT, THREE.RedFormat, THREE.UnsignedByteType);
+  // height map for the water shader (shallows + shore foam), straight off the same grid: row j runs along x
+  const hdata = new Uint8Array(TR * TR);
+  for (let i = 0; i < TR * TR; i++) hdata[i] = Math.round(THREE.MathUtils.clamp((H[i] + 14) / 30, 0, 1) * 255);
+  const heightTex = new THREE.DataTexture(hdata, TR, TR, THREE.RedFormat, THREE.UnsignedByteType);
   heightTex.magFilter = heightTex.minFilter = THREE.LinearFilter;
-  heightTex.unpackAlignment = 1;      // (rows of 449 bytes are not a multiple of four)
+  heightTex.unpackAlignment = 1;      // (rows of an odd number of bytes)
   heightTex.needsUpdate = true;
 
   // ---------- water (grid is dense near the middle, stretched toward the horizon)
@@ -611,7 +742,7 @@ export function createWorld(scene, renderer) {
     uSunDir: { value: new THREE.Vector3() }, uSunColor: { value: new THREE.Color() },
     uDeep: { value: new THREE.Color() }, uShallow: { value: new THREE.Color() },
     uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0.001 }, uSpec: { value: 20 }, uNight: { value: 0 },
-    uHeightTex: { value: heightTex }, uRipple: { value: rippleTexture() },
+    uHeightTex: { value: heightTex }, uRipple: { value: rippleTexture() }, uNoise: { value: noiseTex }, uReef: { value: new THREE.Vector3(-290, 355, 120) },
     uHeli: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uLamp: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uReflTex: { value: null }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 },
@@ -721,6 +852,7 @@ export function createWorld(scene, renderer) {
     species.get(name).push({ m: dm.matrix.clone(), x, y, z, s });
   };
   const TREES = ['World_Tree3', 'World_Tree4', 'World_Tree5', 'World_Tree3', 'World_Tree4', 'World_Tree', 'World_Tree2'];
+  const PINES = ['World_Pine', 'World_Pine2', 'World_Pine'];
   const PALMS = ['World_Palm', 'World_Palm2', 'World_Palm3'], BUSHES = ['World_Bush', 'World_Bush2'], ROCKS = ['World_Rock', 'World_Rock2', 'World_Rock3'];
   const pick = list => list[(rnd() * list.length) | 0];
   const rocks = { World_Rock: [], World_Rock2: [], World_Rock3: [], World_Driftwood: [] };
@@ -742,6 +874,102 @@ export function createWorld(scene, renderer) {
     for (let i = 0; i < P.count; i++) { _v.fromBufferAttribute(P, i).applyMatrix4(m); if (_v.y > -0.7 && _v.y < 3) r = Math.max(r, Math.hypot(_v.x - m.elements[12], _v.z - m.elements[14])); }
     return r;
   };
+  // ---------- the far zones' buildings
+  // Each zone's own things go in a group of their own, which world.cull hides when a view is far from that zone (from
+  // the home bay none of them is drawn, and the far zones' buildings are only specks by then).
+  const zoneGroups = {};
+  const zplace = (zone, name, x, z, o) => { const m = place(name, x, z, o); scene.remove(m); (zoneGroups[zone] ||= new THREE.Group()).add(m); return m; };
+  // the ranger's fire tower on its own level patch in the pines; the ranger waits on the corner of its deck
+  {
+    const y = terrainHeight(TOWER.x, TOWER.z);
+    zplace('forest', 'World_FireTower', TOWER.x, TOWER.z, { y });
+    OBSTACLES.push({ x: TOWER.x, z: TOWER.z, r: 4, top: y + 17.6 });
+    keepOut.push({ x: TOWER.x, z: TOWER.z, r: 7 });
+    clearCanopy(TOWER.x, TOWER.z, 8);
+    world.towerDeck = { x: TOWER.x - 2.4, y: y + 12.1, z: TOWER.z + 2.4 };
+  }
+  // the ski hut, on the far side of its landing pad from the slope, its porch toward the pad
+  {
+    const s = SITES.find(q => q.name === 'Ski hut');
+    let a = 0, best = 1e9;
+    for (let k = 0; k < 16; k++) { const b = k * 0.3927, d = Math.abs(terrainHeight(s.x + Math.cos(b) * 15, s.z + Math.sin(b) * 15) - s.y); if (d < best) { best = d; a = b; } }
+    const hx = s.x + Math.cos(a) * 10.5, hz = s.z + Math.sin(a) * 10.5;
+    zplace('snow', 'World_SkiHut', hx, hz, { y: s.y, yaw: Math.atan2(s.x - hx, s.z - hz) });
+    OBSTACLES.push({ x: hx, z: hz, r: 5, top: s.y + 7.5 });
+    keepOut.push({ x: hx, z: hz, r: 8 });
+    s.block = { x: hx, z: hz, r: 6.5 };
+  }
+  // harbour town: rows of tall narrow houses stepping round the terrace, facing the harbour, painted every colour,
+  // with the quays, moored boats and a crane down at the water, and a little light on the breakwater's head
+  world.roofs = [];
+  {
+    const T = { x: 492, z: -160, r: 34, y: 5 }, sq = SITES.find(q => q.name === 'Town square');
+    const WALLS = ['#f4d27a', '#f29a7a', '#9fd3e6', '#f6efe2', '#b9e0a5', '#e8a6c8', '#f2b65e', '#cfd8ff'].map(c => new THREE.Color(c).multiplyScalar(2.1));
+    const ROOFS = ['#c8553d', '#a8442f', '#5d6b78', '#3f5f7a', '#b4613f'].map(c => new THREE.Color(c).multiplyScalar(2.6));
+    const spots = [];
+    for (let ring = 0; ring < 3; ring++) {
+      const rr = 9 + ring * 9.5, n = Math.round(rr * 0.62);
+      for (let i = 0; i < n; i++) {
+        const a = (i + ring * 0.5) / n * 6.283 + (rnd() - 0.5) * 0.12, x = T.x + Math.cos(a) * rr, z = T.z + Math.sin(a) * rr;
+        if (Math.hypot(x - sq.x, z - sq.z) < sq.r + 7 || Math.hypot(x - T.x, z - T.z) > T.r - 3) continue;
+        if (Math.abs(terrainHeight(x, z) - T.y) > 0.3) continue;
+        spots.push({ x, z, yaw: Math.atan2(T.x - x, T.z - z) + Math.PI + (rnd() - 0.5) * 0.3 });
+      }
+    }
+    const walls = new THREE.InstancedMesh(geo('World_House'), geo('World_House').userData.mats.map(mn => look(mn, { bake: 'World_House' })), spots.length);
+    const roofs = new THREE.InstancedMesh(geo('World_HouseRoof'), geo('World_HouseRoof').userData.mats.map(mn => look(mn, { bake: 'World_HouseRoof' })), spots.length);
+    spots.forEach((s, i) => {
+      const k = 0.9 + rnd() * 0.25;
+      dm.position.set(s.x, T.y, s.z); dm.rotation.set(0, s.yaw, 0); dm.scale.set(k, 0.9 + rnd() * 0.35, k); dm.updateMatrix();
+      walls.setMatrixAt(i, dm.matrix); roofs.setMatrixAt(i, dm.matrix);
+      walls.setColorAt(i, WALLS[(rnd() * WALLS.length) | 0]); roofs.setColorAt(i, ROOFS[(rnd() * ROOFS.length) | 0]);
+      const top = T.y + modelInfo('World_HouseRoof').size[1] * dm.scale.y + modelInfo('World_HouseRoof').min[1] * dm.scale.y;
+      OBSTACLES.push({ x: s.x, z: s.z, r: 4.6 * k, top });
+      keepOut.push({ x: s.x, z: s.z, r: 6 });
+      world.roofs.push({ x: s.x, z: s.z, y: top - 0.25 });
+    });
+    for (const m of [walls, roofs]) { m.castShadow = m.receiveShadow = true; (zoneGroups.harbour ||= new THREE.Group()).add(m); }
+    // the quay: two piers out into the harbour from its eastern shore, a crane by them, boats tied up alongside
+    for (const qz of [-168, -146]) {
+      let qx = 418; while (qx < 470 && terrainHeight(qx, qz) < 0.4) qx += 1;
+      zplace('harbour', 'World_Jetty', qx - 2, qz, { y: 0.35, yaw: -Math.PI / 2, scale: 1.2 });
+      keepOut.push({ x: qx - 6, z: qz, r: 8 });
+    }
+    { let cx = 418; while (cx < 470 && terrainHeight(cx, -185) < 1.2) cx += 1;
+      zplace('harbour', 'World_Crane', cx + 4, -185, { y: terrainHeight(cx + 4, -185), yaw: -Math.PI / 2 });
+      OBSTACLES.push({ x: cx + 4, z: -185, r: 3.5, top: terrainHeight(cx + 4, -185) + 21 }); keepOut.push({ x: cx + 4, z: -185, r: 7 }); }
+    world.moored = [];
+    for (const [bx, bz, name, yaw] of [[428, -178, 'World_Boat2', -1.5], [426, -157, 'World_Boat', -1.62]]) {
+      const b = zplace('harbour', name, bx, bz, { y: 0, yaw, scale: name === 'World_Boat2' ? 1.3 : 1.5 });
+      b.rotation.order = 'YXZ';
+      world.moored.push({ m: b, x: bx, z: bz, yaw });
+      OBSTACLES.push({ x: bx, z: bz, r: 6, top: 9, wr: 6.5 });
+    }
+    // the light on the breakwater's head
+    const head = ZONE_ISLETS.find(s => s.head);
+    zplace('harbour', 'World_Lighthouse', head.x + 2, head.z - 1.5, { scale: 0.42, yaw: 0.6 });
+    OBSTACLES.push({ x: head.x + 2, z: head.z - 1.5, r: 2.8, top: terrainHeight(head.x, head.z) + 18 });
+    keepOut.push({ x: head.x, z: head.z, r: 9 });
+    world.breakwaterHead = { x: head.x - 2.5, z: head.z + 2 };
+    // armour stones along both sides of the breakwater, half in and half out of the water
+    for (let i = 0; i + 1 < BREAKWATER.length; i++) {
+      const [ax, az] = BREAKWATER[i], [bx, bz] = BREAKWATER[i + 1], len = Math.hypot(bx - ax, bz - az), nx = -(bz - az) / len, nz = (bx - ax) / len;
+      for (let d = 2; d < len - 1; d += 2.6) for (const side of [-1, 1]) {
+        const x = ax + (bx - ax) * d / len + nx * side * (4.2 + rnd()), z = az + (bz - az) * d / len + nz * side * (4.2 + rnd());
+        rock(pick(ROCKS), x, -0.6, z, 0.9 + rnd() * 0.6);
+      }
+    }
+  }
+  // the wreck: an old fishing boat run up on the coral, listing, rusted and long since given up
+  {
+    const w = zplace('reef', 'World_Boat', WRECK.x, WRECK.z, { y: -1.5, yaw: WRECK.yaw, scale: 1.5, opts: { tints: { Navy: new THREE.Color(0.16, 0.06, 0.03), Paint: new THREE.Color(0.32, 0.27, 0.2) } } });
+    w.rotation.order = 'YXZ'; w.rotation.x = -0.12; w.rotation.z = 0.32;
+    OBSTACLES.push({ x: WRECK.x, z: WRECK.z, r: 8, top: 9, wr: 9 });
+    keepOut.push({ x: WRECK.x, z: WRECK.z, r: 10 });
+    world.wreckMesh = w;
+    world.wreck = { x: WRECK.x, z: WRECK.z, y: -1.5, yaw: WRECK.yaw, deck: 1.7, crew: 0, wreck: true };
+  }
+
   const blocked = (x, z) => keepOut.some(k => (x - k.x) ** 2 + (z - k.z) ** 2 < k.r * k.r);
   for (const s of ISLETS) keepOut.push({ x: s.x, z: s.z, r: 6.5 });      // (whoever is stranded on a sandbar stands in the middle)
   for (const I of ISLANDS) for (const D of I.dents || []) if (D.r < 10) keepOut.push({ x: D.x, z: D.z, r: D.r + 9 });      // (the atoll's reef channel)
@@ -769,19 +997,20 @@ export function createWorld(scene, renderer) {
       }
       // inland: forest in drifts with glades between, scrub in the gaps, the odd boulder
       const glade = fbm(x * 0.03 + 5.3, z * 0.03 - 8.1);
-      const wood = I.forest * smooth((glade - 0.3 + I.forest * 0.22) / 0.22) * (1 - smooth((y - 38) / 12));
+      const line = I.treeLine || 38, wood = I.forest * smooth((glade - 0.3 + I.forest * 0.22) / 0.22) * (1 - smooth((y - line) / (line < 20 ? 5 : 12)));
+
       if (r < wood * 0.82) {
-        const s = 0.75 + rnd() * 0.75, name = pick(TREES);
+        const s = 0.75 + rnd() * 0.75, name = pick(I.pine ? PINES : TREES);
         plant(name, x, y - 0.35, z, s);
         raiseCanopy(x, z, 7, modelInfo(name).size[1] * s * 1.1);
-      } else if (r < wood * 0.82 + 0.16) plant(pick(BUSHES), x, y - 0.05, z, 0.8 + rnd() * 1.4);
+      } else if (r < wood * 0.82 + 0.16 && y < line + 3) plant(pick(BUSHES), x, y - 0.05, z, 0.8 + rnd() * 1.4);
       else if (r > 0.975) rock(pick(ROCKS), x, -0.3, z, 0.5 + rnd() * 1.4);
     }
   }
   // sea stacks: tall rocks standing in the water off the sea cliffs (on the side a cliff faces), clear of the arch, the
   // huts, the other islands and sandbars, the patrol boat's beat round the base, the edge of the world and each other
   const stacks = [];
-  const stackOk = (I, x, z, y) => y < -1.5 && y > -9 && Math.hypot(x, z) > 205 && Math.hypot(x, z) < WORLD_R - 25
+  const stackOk = (I, x, z, y) => y < -1.5 && y > -9 && (zoneOf(x, z).id === 'home' ? Math.hypot(x, z) > 205 && Math.hypot(x, z) < HOME_R - 25 : Math.hypot(x, z) < WORLD_R - 30)
     && Math.hypot(x - ARCH.x, z - ARCH.z) > 40 && HUTS.every(h => Math.hypot(x - h.x, z - h.z) > 40)
     && ISLANDS.every(J => J === I || Math.hypot(x - J.x, z - J.z) > J.reach + (J.islet ? 15 : 6))
     && stacks.every(q => Math.hypot(x - q.x, z - q.z) > 24);
@@ -801,7 +1030,7 @@ export function createWorld(scene, renderer) {
     OBSTACLES.push({ x, z, r: s * 1.8, top: y + s * 6, wr });
     // (and a place just to seaward of it where a raft can fetch up)
     const out = wr + 10, sx2 = x + Math.cos(a) * out, sz2 = z + Math.sin(a) * out;
-    if (terrainHeight(sx2, sz2) < -3) world.spawn.stacks.push({ x: sx2, z: sz2 });
+    if (terrainHeight(sx2, sz2) < -3) world.spawn.stacks.push({ x: sx2, z: sz2, zone: zoneOf(sx2, sz2).id });
   }
   // ledges on the sea cliffs, where only the helicopter's basket can reach: find the cliff face, then step back from
   // its edge to the first patch of level ground, and clear the plants and boulders off it
@@ -817,7 +1046,7 @@ export function createWorld(scene, renderer) {
         let flat = slope(lx, lz) < 0.35;
         for (let q = 0; q < 6 && flat; q++) flat = Math.abs(terrainHeight(lx + Math.cos(q * 1.047) * 1.2, lz + Math.sin(q * 1.047) * 1.2) - ly) < 0.5;
         if (!flat) continue;
-        if (ly > 5 && ly < 18 && !blocked(lx, lz) && terrainHeight(lx + ca * 7, lz + sa * 7) < ly - 3) world.spawn.ledges.push({ x: lx, z: lz });
+        if (ly > 5 && ly < 18 && !blocked(lx, lz) && terrainHeight(lx + ca * 7, lz + sa * 7) < ly - 3) world.spawn.ledges.push({ x: lx, z: lz, zone: zoneOf(lx, lz).id });
         break;
       }
       break;
@@ -827,14 +1056,16 @@ export function createWorld(scene, renderer) {
   for (const [name, list] of species) species.set(name, list.filter(it => !nearLedge(it)));
   for (const name in rocks) rocks[name] = rocks[name].filter(it => it.cy < 2 || !nearLedge(it));
   // the trees round a landing site stand back from it, so their tops must not roof it over either
-  for (const s of SITES) clearCanopy(s.x, s.z, s.r);
+  for (const s of SITES) clearCanopy(s.x, s.z, s.r + 3);
+  for (const zone in zoneGroups) scene.add(zoneGroups[zone]);
+  world.zoneGroups = zoneGroups;
   const lodded = [];
   let plantCount = 0;
   for (const [name, list] of species) {
     const leaf = modelInfo(name).groups.filter(g => /^Leaf/.test(g.mat)).sort((a, b) => b.count - a.count)[0];
     const tiers = [name, name + '_far'].map((n, far) => {
       const g = geo(n);
-      const mesh = new THREE.InstancedMesh(g, g.userData.mats.map(mn => foliage(mn, /Tree[345]/.test(name))), list.length);
+      const mesh = new THREE.InstancedMesh(g, g.userData.mats.map(mn => foliage(mn, /Tree[345]/.test(name) ? 'spray' : /Pine/.test(name) ? (mn === 'Leaf2' ? 'needles' : 'core') : '')), list.length);
       mesh.castShadow = !far; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.count = 0;
       if (!far) mesh.layers.set(PLANT_LAYER);      // (the near trees stay out of the water's mirror: it is the costliest thing in it)
       scene.add(mesh);
@@ -866,6 +1097,23 @@ export function createWorld(scene, renderer) {
     scene.add(mesh);
     rockSets.push({ mesh, list });
   }
+  // plants and rocks gathered into squares of the map, each with a sphere round all of it, so a view skips whole
+  // squares it cannot see (or that are too far for anything but a lump) without looking at every plant in them
+  const CELL = 80;
+  const cellsOf = list => {
+    const map = new Map();
+    for (const it of list) { const key = Math.floor(it.x / CELL) * 1000 + Math.floor(it.z / CELL); if (!map.has(key)) map.set(key, []); map.get(key).push(it); }
+    return [...map.values()].map(items => {
+      let cx = 0, cy = 0, cz = 0;
+      for (const it of items) { cx += it.x; cy += it.cy; cz += it.z; }
+      cx /= items.length; cy /= items.length; cz /= items.length;
+      let r = 0;
+      for (const it of items) r = Math.max(r, Math.hypot(it.x - cx, it.cy - cy, it.z - cz) + it.r);
+      return { items, sph: new THREE.Sphere(new THREE.Vector3(cx, cy, cz), r) };
+    });
+  };
+  for (const L of lodded) L.cells = cellsOf(L.list);
+  for (const R of rockSets) R.cells = cellsOf(R.list);
   world.counts = { plants: plantCount, rocks: Object.values(rocks).reduce((n, l) => n + l.length, 0) };
 
   world.setDetail = (near, far) => { NEAR = near; FAR = far; };
@@ -874,36 +1122,53 @@ export function createWorld(scene, renderer) {
   // the bay the sparser copy and the far hills' a lump. The view's shadow and mirror passes use the same choice.
   const frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _sph = new THREE.Sphere(), MARGIN = 14;
   const seen = it => { _sph.center.set(it.x, it.cy, it.z); _sph.radius = it.r + MARGIN; return frustum.intersectsSphere(_sph); };
+  const cellSeen = c => { _sph.copy(c.sph); _sph.radius += MARGIN; return frustum.intersectsSphere(_sph); };
   world.cull = function (cam) {
     frustum.setFromProjectionMatrix(_pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     const px = cam.position.x, pz = cam.position.z, near2 = NEAR * NEAR, far2 = FAR * FAR;
+    // (the sea's grid is finest in its middle: it travels with the camera, in whole steps so its waves do not swim)
+    water.position.set(Math.round(px / 32) * 32, 0, Math.round(pz / 32) * 32);
+    // (a zone's buildings drawn only within 300 m of it, and in the water's mirror only from close by)
+    for (const Z of ZONES) {
+      const zg = zoneGroups[Z.id]; if (!zg) continue;
+      const d = Math.hypot(Z.x - px, Z.z - pz) - Z.r, mirrored = d < 120;
+      zg.visible = d < 300;
+      if (zg.visible && zg.userData.mirrored !== mirrored) { zg.userData.mirrored = mirrored; for (const c of zg.children) c.layers.set(mirrored ? 0 : PLANT_LAYER); }
+    }
+    // small things (gulls, friends and what they float on, boats) are not drawn from further off than they can be seen
+    for (const o of scene.children) { const fh = o.userData.farHide; if (fh) o.visible = (o.position.x - px) ** 2 + (o.position.z - pz) ** 2 < fh * fh; }
     let nl = 0;
     for (const L of lodded) {
       let n0 = 0, n1 = 0;
       const [t0, t1] = L.tiers;
-      for (const it of L.list) {
-        const dx = it.x - px, dz = it.z - pz, d2 = dx * dx + dz * dz;
-        if ((d2 >= far2 && L.bushy) || !seen(it)) continue;
-        if (d2 < near2) t0.setMatrixAt(n0++, it.m);
-        else if (d2 < far2) t1.setMatrixAt(n1++, it.m);
-        else { lumps.setMatrixAt(nl, it.lump); lumps.setColorAt(nl++, it.col); }
+      for (const c of L.cells) {
+        if (!cellSeen(c)) continue;
+        if (L.bushy && Math.hypot(c.sph.center.x - px, c.sph.center.z - pz) - c.sph.radius > FAR) continue;
+        for (const it of c.items) {
+          const dx = it.x - px, dz = it.z - pz, d2 = dx * dx + dz * dz;
+          if ((d2 >= far2 && L.bushy) || !seen(it)) continue;
+          if (d2 < near2) t0.setMatrixAt(n0++, it.m);
+          else if (d2 < far2) t1.setMatrixAt(n1++, it.m);
+          else { lumps.setMatrixAt(nl, it.lump); lumps.setColorAt(nl++, it.col); }
+        }
       }
-      t0.count = n0; t1.count = n1;
+      // (an empty batch still costs a draw call in every pass, so it is hidden instead)
+      t0.count = n0; t1.count = n1; t0.visible = n0 > 0; t1.visible = n1 > 0;
       t0.instanceMatrix.needsUpdate = t1.instanceMatrix.needsUpdate = true;
     }
-    lumps.count = nl; lumps.instanceMatrix.needsUpdate = true;
+    lumps.count = nl; lumps.visible = nl > 0; lumps.instanceMatrix.needsUpdate = true;
     if (lumps.instanceColor) lumps.instanceColor.needsUpdate = true;
     for (const R of rockSets) {
       let n = 0;
-      for (const it of R.list) if (seen(it)) R.mesh.setMatrixAt(n++, it.m);
-      R.mesh.count = n; R.mesh.instanceMatrix.needsUpdate = true;
+      for (const c of R.cells) if (cellSeen(c)) for (const it of c.items) if (seen(it)) R.mesh.setMatrixAt(n++, it.m);
+      R.mesh.count = n; R.mesh.visible = n > 0; R.mesh.instanceMatrix.needsUpdate = true;
     }
   };
 
   // ---------- open-sea spawn points
   let guard = 0;
   while (world.spawn.sea.length < 60 && guard++ < 5000) {
-    const a = rnd() * 6.283, d = 70 + rnd() * (WORLD_R - 100);
+    const a = rnd() * 6.283, d = 70 + rnd() * (HOME_R - 100);
     const x = Math.cos(a) * d, z = Math.sin(a) * d;
     let ok = terrainHeight(x, z) < -5;       // (a sandbar is small enough to sit inside the ring below)
     for (let k = 0; k < 8 && ok; k++) if (terrainHeight(x + Math.cos(k * 0.785) * 14, z + Math.sin(k * 0.785) * 14) > -5) ok = false;
@@ -911,7 +1176,35 @@ export function createWorld(scene, renderer) {
     if (ok) world.spawn.sea.push({ x, z });
   }
 
+  // ...and in each far zone, open water inside it for those afloat there
+  world.spawn.zoneSea = {};
+  for (const Z of ZONES) if (Z.id !== 'home') {
+    const list = world.spawn.zoneSea[Z.id] = [];
+    for (let g = 0; list.length < 36 && g < 6000; g++) {
+      const a = rnd() * 6.283, d = Math.sqrt(rnd()) * (Z.r + 15), x = Z.x + Math.cos(a) * d, z = Z.z + Math.sin(a) * d;
+      if (zoneOf(x, z) !== Z || Math.hypot(x, z) > WORLD_R - 45 || terrainHeight(x, z) > -5) continue;
+      let ok = true;
+      for (let k = 0; k < 8 && ok; k++) if (terrainHeight(x + Math.cos(k * 0.785) * 14, z + Math.sin(k * 0.785) * 14) > -5) ok = false;
+      if (ok && OBSTACLES.some(o => Math.hypot(x - o.x, z - o.z) < (o.wr || o.r) + 14)) ok = false;
+      if (ok && SHOALS.some(o => Math.hypot(x - o.x, z - o.z) < o.r + 10)) ok = false;
+      if (ok && list.some(q => Math.hypot(x - q.x, z - q.z) < 12)) ok = false;
+      if (ok) list.push({ x, z });
+    }
+  }
+
+  // ---------- the volcano's crater, glowing
+  {
+    const floor = terrainHeight(CRATER.x, CRATER.z);
+    const lavaMat = new THREE.MeshStandardMaterial({ color: 0x1a0602, emissive: 0xff4a10, emissiveIntensity: 2.2, roughness: 0.6 });
+    world.nightMats.push({ mat: lavaMat, max: 6, min: 2.2 });
+    const lava = new THREE.Mesh(new THREE.CircleGeometry(CRATER.r * 0.72, 28), lavaMat);
+    lava.rotation.x = -Math.PI / 2; lava.position.set(CRATER.x, floor + 0.6, CRATER.z);
+    scene.add(lava);
+    world.crater = { x: CRATER.x, y: floor, z: CRATER.z };
+  }
+
   // ---------- presets
+
   world.applyPreset = function (p) {
     world.preset = p;
     skyUniforms.uZenith.value.copy(p.zenith); skyUniforms.uHorizon.value.copy(p.horizon);
@@ -954,6 +1247,22 @@ export function createWorld(scene, renderer) {
     windUniform.value = t;
     beamPivot.rotation.y = t * 0.5;
     beaconMat.emissiveIntensity = (t % 1.4) < 0.25 ? 6 : 0;
+  };
+
+  // The shadow pass builds the depth shaders of whatever casts a shadow the first time it meets it, a stall in the middle
+  // of play. While the game loads, one shadow pass over the whole map with one of every plant and rock in it builds
+  // them all at once (into target, the buffer the game really draws into).
+  world.prewarmShadows = function (target, cam) {
+    const sc = sun.shadow.camera, keep = [sc.left, sc.right, sc.top, sc.bottom, sc.far];
+    sc.left = sc.bottom = -TSPAN * 0.75; sc.right = sc.top = TSPAN * 0.75; sc.far = 3000; sc.updateProjectionMatrix();
+    world.aimSun(new THREE.Vector3(0, 0, 0));
+    sun.position.copy(world.preset.sunDir).multiplyScalar(1400); sun.updateMatrixWorld();      // (far enough back that nothing is behind it)
+    for (const L of lodded) for (const m of L.tiers) { m.setMatrixAt(0, L.list[0].m); m.count = 1; m.visible = true; m.instanceMatrix.needsUpdate = true; }
+    for (const R of rockSets) { R.mesh.setMatrixAt(0, R.list[0].m); R.mesh.count = 1; R.mesh.visible = true; R.mesh.instanceMatrix.needsUpdate = true; }
+    for (const id in zoneGroups) { zoneGroups[id].visible = true; for (const c of zoneGroups[id].children) c.layers.set(0); zoneGroups[id].userData.mirrored = true; }
+    renderer.shadowMap.needsUpdate = true;
+    renderer.setRenderTarget(target); renderer.render(scene, cam); renderer.setRenderTarget(null);
+    [sc.left, sc.right, sc.top, sc.bottom, sc.far] = keep; sc.updateProjectionMatrix();
   };
 
   // point the shadow camera at whatever a viewport is looking at
@@ -999,17 +1308,45 @@ function leafSpray() {
   sprayTex.flipY = false;
   return sprayTex;
 }
+// a fir bough: a twig with short needles bristling down both sides of it, worn by every card of the pines
+let needleTex;
+function needleSpray() {
+  if (needleTex) return needleTex;
+  const rnd = mulberry(5151);
+  needleTex = canvasTex(256, 256, (g, w) => {
+    g.clearRect(0, 0, w, w);
+    const twig = (x0, y0, x1, y1, len, n) => {
+      g.strokeStyle = 'rgb(80,62,40)'; g.lineWidth = 2.5; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      const dx = x1 - x0, dy = y1 - y0, l = Math.hypot(dx, dy), ux = dx / l, uy = dy / l;
+      for (let i = 0; i < n; i++) {
+        const k = i / n, x = x0 + dx * k, y = y0 + dy * k, side = i % 2 ? 1 : -1, nl = len * (1 - k * 0.45) * (0.75 + rnd() * 0.5);
+        const ax = ux * 0.55 + -uy * side, ay = uy * 0.55 + ux * side, al = Math.hypot(ax, ay), shade = 120 + rnd() * 110;
+        g.strokeStyle = `rgb(${shade * 0.62 | 0},${shade | 0},${shade * 0.66 | 0})`; g.lineWidth = 1.6 + rnd();
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + ax / al * nl, y + ay / al * nl); g.stroke();
+      }
+    };
+    // (a main stem along the card, v running from the trunk end to the tip, with side shoots off it)
+    twig(w / 2, w * 0.02, w / 2, w * 0.98, 30, 120);
+    for (let s = 0; s < 7; s++) {
+      const y = w * (0.12 + s * 0.12), side = s % 2 ? 1 : -1;
+      twig(w / 2, y, w / 2 + side * w * (0.42 - s * 0.03), y + w * 0.16, 18, 42);
+    }
+  });
+  needleTex.flipY = false;
+  return needleTex;
+}
 function foliage(name, cards) {
-  const key = name + (cards ? '+cards' : '');
+  const key = name + (cards ? '+' + cards : '');
   if (foliageCache.has(key)) return foliageCache.get(key);
   const base = look(name);
   if (!/^Leaf/.test(name)) { foliageCache.set(key, base); return base; }
-  const mat = new THREE.MeshStandardMaterial({ color: base.color.clone().multiplyScalar(cards ? 2.1 : 0.85), roughness: 0.8, side: THREE.DoubleSide, envMapIntensity: 0.35 });
-  if (cards) { mat.map = leafSpray(); mat.alphaTest = 0.42; mat.alphaToCoverage = true; }
+  const mat = new THREE.MeshStandardMaterial({ color: base.color.clone().multiplyScalar(cards && cards !== 'core' ? 2.1 : 0.85), roughness: 0.8, side: THREE.DoubleSide, envMapIntensity: 0.35 });
+  if (cards === 'core') mat.color.multiplyScalar(0.3);         // (the shadowed heart of a pine, seen between its boughs)
+  else if (cards) { mat.map = cards === 'needles' ? needleSpray() : leafSpray(); mat.alphaTest = 0.42; mat.alphaToCoverage = true; }
   mat.onBeforeCompile = sh => {
-    sh.uniforms.uWind = windUniform; sh.uniforms.uGust = gustUniform;
+    sh.uniforms.uWind = windUniform; sh.uniforms.uGust = gustUniform; sh.uniforms.uSnowZ = zoneUniforms.uSnowZ;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uWind, uGust; varying float vHigh;')
+      .replace('#include <common>', '#include <common>\nuniform float uWind, uGust; varying float vHigh; varying vec3 vFW; varying float vUp;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         #ifdef USE_INSTANCING
           vec3 root = instanceMatrix[3].xyz;
@@ -1020,11 +1357,19 @@ function foliage(name, cards) {
         float gust = sin(uWind * 1.3 + root.x * 0.11 + root.z * 0.07) + 0.5 * sin(uWind * 2.9 + root.x * 0.31 + position.y);
         transformed.x += (gust + uGust * 0.6) * lift * 0.022 * uGust; transformed.z += (gust + uGust * 0.4) * lift * 0.014 * uGust;
         transformed.y += sin(uWind * (3.7 + uGust) + position.x * 2.1 + position.z * 1.7 + root.x) * 0.03 * uGust * min(lift, 2.0);
-        vHigh = clamp(position.y / 9.0, 0.0, 1.0);`);
+        vHigh = clamp(position.y / 9.0, 0.0, 1.0);
+        #ifdef USE_INSTANCING
+          vFW = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz; vUp = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal).y;
+        #else
+          vFW = (modelMatrix * vec4(transformed, 1.0)).xyz; vUp = normalize(mat3(modelMatrix) * objectNormal).y;
+        #endif`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vHigh;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uSnowZ; varying float vHigh; varying vec3 vFW; varying float vUp;')
       .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize(vNormal);')
-      .replace('#include <color_fragment>', 'diffuseColor.rgb *= 0.5 + 0.7 * vHigh;');      // dark in the heart of the crown, bright at the top
+      // dark in the heart of the crown, bright at the top; and in the snowy peaks, snow lying on the boughs' tops
+      .replace('#include <color_fragment>', `diffuseColor.rgb *= 0.5 + 0.7 * vHigh;
+        float snowy = (1.0 - smoothstep(uSnowZ.z, uSnowZ.z + 40.0, length(vFW.xz - uSnowZ.xy))) * smoothstep(0.35, 0.8, vUp) * smoothstep(1.5, 4.0, vFW.y);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.75, 0.8, 0.86), snowy * 0.85);`);
   };
   mat.customProgramCacheKey = () => 'foliage';
   foliageCache.set(key, mat);

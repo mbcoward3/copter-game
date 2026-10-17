@@ -23,8 +23,16 @@
   .pane .alt{display:none;position:absolute;left:14px;bottom:14px;padding:6px 12px;border-radius:12px;background:var(--glass);font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.5;}
   #divider{position:absolute;top:0;bottom:0;left:50%;width:4px;margin-left:-2px;background:linear-gradient(180deg,rgba(255,255,255,.0),rgba(255,255,255,.75),rgba(255,255,255,0));display:none;}
   #mission{position:absolute;top:14px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:9px 20px;border-radius:999px;background:var(--glass);backdrop-filter:blur(8px);font-weight:700;font-size:18px;white-space:nowrap;}
-  #mission .bar{width:150px;height:10px;border-radius:5px;background:rgba(255,255,255,.2);overflow:hidden;}
-  #mission .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffd23c,#ff8a3c);border-radius:5px;transition:width .5s;}
+  #mIcon{font-size:30px;line-height:1;}
+  #mSlots{display:flex;gap:6px;}
+  #mSlots span{width:34px;height:34px;border-radius:50%;border:2.5px dashed rgba(255,255,255,.55);display:flex;align-items:center;justify-content:center;font-size:24px;line-height:1;}
+  #mSlots span.got{border:2.5px solid #ffd23c;background:rgba(255,210,60,.22);}
+  #mSlots span.pop{animation:pop .6s cubic-bezier(.2,1.8,.4,1);}
+  @keyframes pop{0%{transform:scale(.2)}60%{transform:scale(1.35)}100%{transform:scale(1)}}
+  #mCount:empty{display:none;}
+  #stickers{display:flex;gap:10px;font-size:34px;}
+  #stickers span{filter:grayscale(1) brightness(.6);opacity:.45;}
+  #stickers span.got{filter:none;opacity:1;}
   #banner{position:absolute;top:24%;left:50%;transform:translate(-50%,-50%) scale(.8);text-align:center;opacity:0;transition:opacity .5s,transform .5s cubic-bezier(.2,1.6,.4,1);text-shadow:0 4px 24px rgba(0,0,0,.55);}
   #banner.show{opacity:1;transform:translate(-50%,-50%) scale(1);}
   #banner h1{font-size:clamp(34px,6vw,76px);font-weight:900;letter-spacing:.5px;}
@@ -83,7 +91,7 @@
     <canvas class="radar" width="336" height="336"></canvas>
   </div>
   <div id="divider"></div>
-  <div id="mission"><span id="mIcon">☀️</span><span id="mText">Mission 1</span><span class="bar"><i id="mBar"></i></span><span id="mCount">0 / 6</span></div>
+  <div id="mission"><span id="mIcon"></span><span id="mSlots"></span><span id="mCount"></span></div>
   <div id="banner"><h1></h1><p></p></div>
   <div id="buttons">
     <button class="btn" id="bP2" title="Add or remove player 2">+ Player 2</button>
@@ -102,6 +110,7 @@
     <button class="big" id="start1">1 Pilot</button>
     <button class="big two" id="start2">2 Pilots</button>
   </div>
+  <div id="stickers" title="Stickers: finish a mission in each place to collect them all"></div>
   <div class="row" id="resumeRow" style="display:none"><button class="big ghost" id="resume">▶ Keep flying</button></div>
   <div class="cards">
     <div class="card v-heli" style="--c:var(--p1)">

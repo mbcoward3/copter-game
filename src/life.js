@@ -21,7 +21,7 @@ export function createLife(scene, world, fx) {
 
   // ------------------------------------------------ patrol boat
   const boat = model('World_Boat2');       // the trawler SEA OTTER, bow toward +Z
-  boat.scale.setScalar(1.3); boat.rotation.order = 'YXZ';
+  boat.scale.setScalar(1.3); boat.rotation.order = 'YXZ'; boat.userData.farHide = 600;
   scene.add(boat);
   const boatState = { a: 0.6, near: new Set() };
   // her beat: a loop round the base that keeps to deep water, worked out once from the sea bed (and the stacks, arch
@@ -101,7 +101,7 @@ export function createLife(scene, world, fx) {
     for (let i = 0; i < 4; i++) {
       const g = new THREE.Group();
       const wl = model('World_GullWingL', { shadow: false }), wr = model('World_GullWingR', { shadow: false });
-      g.add(model('World_Gull', { shadow: false }), wl, wr); g.scale.setScalar(2.2); scene.add(g);
+      g.add(model('World_Gull', { shadow: false }), wl, wr); g.scale.setScalar(2.2); g.userData.farHide = 300; scene.add(g);
       const off = i * 0.32 + Math.random() * 0.1;          // (each starts on its circle, not down in the base)
       gulls.push({ g, wl, wr, flock, off, dy: i * 1.3, ph: Math.random() * 6, scat: 0, vel: new THREE.Vector3(),
         pos: new THREE.Vector3(flock.x + Math.cos(off) * flock.r, flock.y + i * 1.3, flock.z + Math.sin(off) * flock.r) });
@@ -127,8 +127,42 @@ export function createLife(scene, world, fx) {
   scene.add(whale.g);
   life.whale = whale;
 
+  // a flock or two go wherever the mission is
+  life.setZone = function (Z) {
+    const spots = world.spawn.zoneSea[Z.id];
+    if (!spots) return;
+    [2, 3].forEach((f, k) => {
+      const c = spots[(k * 11) % spots.length], F = gulls[f * 4].flock;
+      F.x = c.x; F.z = c.z; F.top = skyline(F.x, F.z, F.r); F.y = Math.max(22 + k * 10, F.top + 12);
+      for (const b of gulls) if (b.flock === F) b.pos.set(F.x + Math.cos(b.off) * F.r, F.y + b.dy, F.z + Math.sin(b.off) * F.r);
+    });
+  };
+
+  // ------------------------------------------------ the volcano's smoke
+  // A lazy plume from the crater, leaning with the weather, with a glowing ember thrown up now and then. Only puffed
+  // out while somebody is near enough to see it.
+  let puffT = 0;
+  const crater = world.crater;
+  function smoke(dt, players) {
+    if (!players.some(p => Math.hypot(p.pos.x - crater.x, p.pos.z - crater.z) < 700)) return;
+    puffT -= dt;
+    while (puffT <= 0) {
+      puffT += 0.14;
+      const k = (0.28 + Math.random() * 0.14) * (1 - 0.8 * world.preset.night);
+      fx.emit(crater.x + (Math.random() - 0.5) * 6, crater.y + 6, crater.z + (Math.random() - 0.5) * 6, 0.8 + (Math.random() - 0.5) * 1.5, 3.5 + Math.random() * 2, 0.4 + (Math.random() - 0.5) * 1.5,
+        k, k * 0.96, k * 0.93, 0.45, 6 + Math.random() * 4, 7 + Math.random() * 3, -0.25, 0.12);
+      if (Math.random() < 0.08) fx.emit(crater.x + (Math.random() - 0.5) * 4, crater.y + 3, crater.z + (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 6, 9 + Math.random() * 6, (Math.random() - 0.5) * 6, 1.6, 0.5, 0.1, 0.9, 0.5, 1.6, 9, 0.3);
+    }
+  }
+
   // ------------------------------------------------ update
   life.update = function (dt, t, players) {
+    smoke(dt, players);
+    // the boats tied up in the harbour ride the swell
+    for (const b of world.moored) {
+      const h = waveHeight(b.x, b.z, t);
+      b.m.position.y = h - 0.15; b.m.rotation.set((waveHeight(b.x + Math.sin(b.yaw) * 4, b.z + Math.cos(b.yaw) * 4, t) - h) * -0.15, b.yaw, Math.sin(t * 0.9 + b.x) * 0.03);
+    }
     // boat
     boatState.a += dt * 5.8 / beatAt(boatState.a);          // a steady 5.8 m/s however far out her beat swings
     const br = beatAt(boatState.a), bx = Math.cos(boatState.a) * br, bz = Math.sin(boatState.a) * br;

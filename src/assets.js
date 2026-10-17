@@ -27,7 +27,7 @@ export function geo(name) {
   const idx = m.wide ? new Uint32Array(DATA, m.idx, m.ni) : new Uint16Array(DATA, m.idx, m.ni);
   // a tree lit leaf by leaf is a flicker of light and dark cards; lit as if each leaf faced out of the crown it reads as a canopy
   const leafy = m.groups.filter(g => LEAFY.test(g.mat));
-  if (leafy.length && /Tree|Bush|Palm/.test(name)) {
+  if (leafy.length && /Tree|Bush|Palm|Pine/.test(name)) {
     const mid = new THREE.Vector3(); let count = 0;
     const seen = new Uint8Array(m.nv);
     for (const g of leafy) for (let i = g.start; i < g.start + g.count; i++) seen[idx[i]] = 1;

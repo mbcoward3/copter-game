@@ -2,6 +2,7 @@
 // nearest friend and home when full) without drawing it, and reports how it went. Paste into the page's console, or
 // run through the browser tools, after the game has loaded:
 //   soak('boat', 60)   -> { rescued, stuckPct, ... } after 60 simulated seconds (call again to keep going)
+//   soak('plane', 60, { pro: true, zone: 'snow' }) flies in Pilot mode, starting with the mission in the snowy peaks
 window.soak = (veh, seconds, opts = {}) => {
   const G = window.__game, p = G.players[0];
   G.debug.noDraw = true;
@@ -10,6 +11,7 @@ window.soak = (veh, seconds, opts = {}) => {
     document.querySelector('.veh[data-p="0"][data-v="' + veh + '"]').click();
     if (opts.pro) document.querySelector('.flt[data-p="0"][data-m="pro"]').click();
     document.querySelector('#start1').click();
+    if (opts.zone) G.debug.zone(opts.zone);       // (straight into the mission in that zone: 'forest', 'reef', ...)
   }
   const s = window.soak.stats || (window.soak.stats = { stuck: 0, steps: 0 });
   G.keys.add('KeyW');

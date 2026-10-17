@@ -4,7 +4,7 @@ import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER } from './world.js';
+import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER } from './world.js';
 import { buildHeli, buildBasket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
 import { model } from './assets.js';
 import { createFx } from './fx.js';
@@ -117,10 +117,21 @@ players.forEach(parkPlayer);
 const activePlayers = () => players.filter(p => p.active);
 
 // ================================================================= game state
-const game = { state: 'menu', paused: false, mission: 1, rescued: 0, goal: 5, total: 0, presetIdx: 0, celebrate: 0, fireT: 0, spawnT: 0, t: 0, boop: 0 };
+// Missions go round the zones: the home bay first, then out to each of the others in turn, a friend more each time round.
+const MISSION_ZONES = ['home', 'forest', 'reef', 'harbour', 'snow', 'volcano'].map(id => ZONES.find(Z => Z.id === id));
+const zoneFor = m => MISSION_ZONES[(m - 1) % MISSION_ZONES.length];
+const game = { state: 'menu', paused: false, mission: 1, zone: MISSION_ZONES[0], rescued: 0, goal: 5, saved: [], total: 0, presetIdx: 0, celebrate: 0, fireT: 0, spawnT: 0, t: 0, boop: 0 };
 const waiting = [], residents = [], hoppers = [];
-const goalFor = m => Math.min(4 + m * 2, 14);
-const maxWaiting = () => Math.min(3 + game.mission + (activePlayers().length > 1 ? 1 : 0), 8);
+const goalFor = m => Math.min(5 + Math.floor((m - 1) / MISSION_ZONES.length), 8);
+// friends this mission still needs found: the goal, less those already home, aboard, climbing aboard or hopping home
+function stillNeeded() {
+  let n = game.goal - game.rescued;
+  for (const p of players) n -= p.cargo.length + p.incoming;
+  for (const h of hoppers) if (h.state === 'hop') n--;
+  return n;
+}
+const maxWaiting = () => Math.max(0, Math.min(4 + (activePlayers().length > 1 ? 1 : 0), stillNeeded()));
+for (const s of SITES) s.zone = zoneOf(s.x, s.z).id;
 
 // ================================================================= input
 const keys = new Set();
@@ -209,10 +220,11 @@ function surfaceAt(x, z, t, out) {
 const SURF = { y: 0, land: false };
 
 const HANDS_OFF = { f: 0, t: 0, l: 0, horn: false };
-// friends a boat or a seaplane cannot get to: up at a landing site, or stuck on a cliff ledge
-const inland = an => an.kind === 'camp' || an.kind === 'ledge';
-// ...and one the seaplane cannot: on a hut porch in the little lagoon
-const outOfReach = (an, p) => inland(an) || (p.vehicle === 'plane' && an.kind === 'hut');
+// friends a boat or a seaplane cannot get to: up at a landing site, stuck on a cliff ledge, up the fire tower or on a
+// roof, or on the wreck out on the coral
+const inland = an => an.kind === 'camp' || an.kind === 'ledge' || an.kind === 'perch' || an.kind === 'wreck';
+// ...and one the seaplane cannot (on a hut porch in the little lagoon) or the boat cannot (on the forest's lake)
+const outOfReach = (an, p) => p.vehicle !== 'heli' && (inland(an) || (p.vehicle === 'plane' && an.kind === 'hut') || (p.vehicle === 'boat' && an.landlocked));
 // The lagoon is ringed by reef with one channel through it: anything on the water heading in or out goes by the channel.
 const LAGOON = { x: -165, z: 200, r: 26 }, CHANNEL = [{ x: -126, z: 152 }, { x: -151, z: 183 }];
 const LEG = new THREE.Vector3();
@@ -337,6 +349,8 @@ function updatePlayer(p, dt, t) {
     // (over the sea, hold height against the calm water line so the swell does not make it bob)
     // (and over forest, against the treetops)
     let ahead = p.overLand ? p.surfaceY + Math.max(0, canopyAt(p.pos.x, p.pos.z) - 4) : 0;
+    // (up over the fire tower or the roofs when someone is waiting up there, high enough for the basket to come down to them)
+    if (p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) if (an.kind === 'perch' && Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z) < 45) ahead = Math.max(ahead, an.pos.y + 9 - CRUISE);
     for (const sec of [0.6, 1.3, 2.2]) {
       const ax = p.pos.x + p.vel.x * sec, az = p.pos.z + p.vel.z * sec;
       surfaceAt(ax, az, t, SURF);
@@ -1027,16 +1041,21 @@ function campSpot(site) {
   let best = a0, bs = 1e9;
   for (let i = 0; i < 12; i++) {
     const a = a0 + i * 0.5236, ca = Math.cos(a), sa = Math.sin(a);
+    // (never in the doorway of the ski hut beside the pad)
+    if (site.block && Math.hypot(site.x + ca * d - site.block.x, site.z + sa * d - site.block.z) < site.block.r + 1.5) continue;
     let s = 0;
     for (const r of [site.r + 4, site.r + 9, site.r + 15]) { const x = site.x + ca * r, z = site.z + sa * r; s += canopyAt(x, z) + Math.max(0, terrainHeight(x, z) - site.y); }
     if (s < bs - 0.5) { bs = s; best = a; }
   }
   return { x: site.x + Math.cos(best) * d, z: site.z + Math.sin(best) * d };
 }
+const pickOf = list => (list && list.length ? list[(Math.random() * list.length) | 0] : null);
 function spawnAnimal(near) {
-  const maxD = near ? 130 : Math.min(150 + game.mission * 60, WORLD_R - 20);
+  if (game.zone.id !== 'home') { spawnInZone(game.zone); return; }
+  const maxD = near ? 130 : HOME_R - 20;
   const heliUp = activePlayers().some(p => p.vehicle === 'heli');
-  if (!near && !game.boat && Math.random() < 0.16 && waiting.length + 3 <= maxWaiting() && spawnBoat(maxD)) return;
+  if (!near && !game.boat && Math.random() < 0.16 && waiting.length + 3 <= maxWaiting() && spawnBoat(maxD, world.spawn.sea)) return;
+  const homeLedges = world.spawn.ledges.filter(l => l.zone === 'home'), homeStacks = world.spawn.stacks.filter(l => l.zone === 'home');
   let spot = null, kind = 'ring', site = null;
   for (let tries = 0; tries < 40 && !spot; tries++) {
     const r = Math.random();
@@ -1044,18 +1063,18 @@ function spawnAnimal(near) {
     site = null;
     if (r < 0.22 && heliUp && !near) {
       // someone waiting on an island, where only a landing will do
-      const free = SITES.filter(q => !q.busy);
+      const free = SITES.filter(q => !q.busy && q.zone === 'home');
       if (!free.length) continue;
       site = free[(Math.random() * free.length) | 0]; kind = 'camp';
       c = campSpot(site);
     }
-    else if (r < 0.3 && heliUp && !near && world.spawn.ledges.length) {
+    else if (r < 0.3 && heliUp && !near && homeLedges.length) {
       // a climber stuck on a sea cliff: only the basket can reach
-      c = world.spawn.ledges[(Math.random() * world.spawn.ledges.length) | 0]; kind = 'ledge';
+      c = pickOf(homeLedges); kind = 'ledge';
     }
     else if (r < 0.36 && !near && activePlayers().some(q => q.vehicle !== 'plane')) { c = HUTS[(Math.random() * HUTS.length) | 0].porch; kind = 'hut'; }
     else if (r < 0.5) { c = ISLETS[(Math.random() * ISLETS.length) | 0]; kind = 'islet'; }
-    else if (r < 0.56 && game.mission > 1 && world.spawn.stacks.length) { c = world.spawn.stacks[(Math.random() * world.spawn.stacks.length) | 0]; kind = 'raft'; }
+    else if (r < 0.56 && homeStacks.length) { c = pickOf(homeStacks); kind = 'raft'; }
     else if (r < 0.62) { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = 'kayak'; }
     else if (r < 0.68) { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = 'dinghy'; }
     else { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = r < 0.82 ? 'raft' : 'ring'; }
@@ -1071,13 +1090,78 @@ function spawnAnimal(near) {
   fx.emoji('\u2757', an.pos.x, an.pos.y + 5, an.pos.z, 3.5);
   sfx.mayday();
 }
+// What can happen in each far zone, and who can help: 'heli' only the helicopter's basket or a landing, 'fly' the
+// helicopter or the seaplane (the forest's lake, which no boat can get to), 'all' anybody.
+const AFLOAT = new Set(['raft', 'ring', 'kayak', 'dinghy', 'floe']);
+function zoneChoices(Z) {
+  const sea = world.spawn.zoneSea[Z.id] || [];
+  const sites = SITES.filter(s => s.zone === Z.id && !s.busy);
+  const ledges = world.spawn.ledges.filter(l => l.zone === Z.id), stacks = world.spawn.stacks.filter(l => l.zone === Z.id);
+  const islets = ZONE_ISLETS.filter(s => s.zone === Z.id && !s.head);
+  const C = [];
+  const add = (w, kind, spot, who = 'all', extra = null) => C.push({ w, kind, spot, who, extra });
+  add(1.5, 'raft', () => pickOf(sea)); add(0.8, 'kayak', () => pickOf(sea));
+  if (islets.length) add(1, 'islet', () => pickOf(islets));
+  if (sites.length) add(2, 'camp', () => { const s = pickOf(sites); return s && { ...campSpot(s), site: s }; }, 'heli');
+  if (ledges.length) add(1.5, 'ledge', () => pickOf(ledges), 'heli');
+  if (stacks.length) add(0.8, 'raft', () => pickOf(stacks));
+  if (Z.id === 'forest') {
+    add(2, 'perch', () => world.towerDeck, 'heli');
+    add(2.5, 'kayak', () => { const a = Math.random() * 6.283, d = Math.random() * LAKE.r * 0.45; return { x: LAKE.x + Math.cos(a) * d, z: LAKE.z + Math.sin(a) * d }; }, 'fly', { landlocked: true });
+    add(1.2, 'kayak', () => pickOf(sea));
+  } else if (Z.id === 'reef') {
+    add(2.5, 'ring', () => pickOf(sea)); add(1, 'islet', () => pickOf(islets));
+  } else if (Z.id === 'harbour') {
+    add(2.5, 'perch', () => pickOf(world.roofs), 'heli'); add(2, 'islet', () => world.breakwaterHead); add(1.5, 'dinghy', () => pickOf(sea));
+  } else if (Z.id === 'snow') {
+    add(3.5, 'floe', () => pickOf(sea));
+  } else if (Z.id === 'volcano') {
+    add(1.5, 'dinghy', () => pickOf(sea)); add(1, 'ring', () => pickOf(sea));
+  }
+  return C;
+}
+function spawnInZone(Z) {
+  const act = activePlayers(), heliUp = act.some(p => p.vehicle === 'heli'), flyUp = heliUp || act.some(p => p.vehicle === 'plane');
+  const room = maxWaiting() - waiting.length;
+  // the crew of the wreck on the reef, or a fishing boat broken down off the harbour
+  if (Z.id === 'reef' && heliUp && !world.wreck.crew && room >= 2 && Math.random() < 0.3 && spawnWreck()) return;
+  if ((Z.id === 'harbour' || Z.id === 'reef') && !game.boat && room >= 3 && Math.random() < 0.2 && spawnBoat(Infinity, world.spawn.zoneSea[Z.id])) return;
+  const C = zoneChoices(Z).filter(c => c.who === 'all' || (c.who === 'heli' ? heliUp : flyUp));
+  const total = C.reduce((n, c) => n + c.w, 0);
+  for (let tries = 0; tries < 40; tries++) {
+    let r = Math.random() * total, c = C[0];
+    for (const q of C) { r -= q.w; if (r <= 0) { c = q; break; } }
+    const s = c.spot();
+    if (!s) continue;
+    if (AFLOAT.has(c.kind) && !(c.extra && c.extra.landlocked) && rockNear(s.x, s.z, 8)) continue;
+    if (waiting.some(a => Math.hypot(a.pos.x - s.x, a.pos.z - s.z) < (c.kind === 'perch' ? 10 : 30))) continue;
+    const extra = { ...(c.extra || {}) };
+    if (s.site) extra.site = s.site;
+    if (c.kind === 'perch') extra.perchY = s.y;
+    if (c.kind === 'floe') extra.prefer = 'penguin';
+    const an = addWaiting(c.kind, s.x, s.z, extra);
+    if (s.site) s.site.busy = true;
+    fx.emoji('\u2757', an.pos.x, an.pos.y + 5, an.pos.z, 3.5);
+    sfx.mayday();
+    return;
+  }
+}
+// two of the wreck's old crew, back aboard her for a look and stranded when the tide came in: winched off one by one
+const WRECK_SPOTS = [[0.4, -4.4], [-0.3, -6.8]];
+function spawnWreck() {
+  const B = world.wreck;
+  for (let i = 0; i < 2; i++) { addWaiting('wreck', B.x, B.z, { boat: B, off: WRECK_SPOTS[i] }); B.crew++; }
+  fx.emoji('\u{1F198}', B.x, 12, B.z, 4.5);
+  sfx.mayday();
+  return true;
+}
 // A fishing boat broken down and smoking, with her crew waiting on deck to be winched off one by one.
 // When the last of them is safe she gets her engine going again and motors away.
 const DECK_SPOTS = [[1.3, -4.2], [-1.3, -6.6], [1.1, -8.6]];
-function spawnBoat(maxD) {
+function spawnBoat(maxD, list) {
   let spot = null;
-  for (let tries = 0; tries < 30 && !spot; tries++) {
-    const c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0];
+  for (let tries = 0; tries < 30 && !spot && list.length; tries++) {
+    const c = list[(Math.random() * list.length) | 0];
     if (Math.hypot(c.x, c.z) > maxD || Math.hypot(c.x, c.z) < 90 || rockNear(c.x, c.z, 24)) continue;
     if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 55)) continue;
     spot = c;
@@ -1085,7 +1169,7 @@ function spawnBoat(maxD) {
   if (!spot) return false;
   const hull = new THREE.Color().setHSL(Math.random(), 0.6, 0.22);
   const B = { x: spot.x, z: spot.z, y: 0, yaw: Math.random() * 6.283, deck: 1.7, crew: 0, leaving: 0, puff: 0, mesh: model('World_Boat', { tints: { Navy: hull } }) };
-  B.mesh.scale.setScalar(1.5); B.mesh.rotation.order = 'YXZ';
+  B.mesh.scale.setScalar(1.5); B.mesh.rotation.order = 'YXZ'; B.mesh.userData.farHide = 600;
   scene.add(B.mesh);
   game.boat = B;
   const n = 2 + (Math.random() < 0.5 ? 1 : 0);
@@ -1094,7 +1178,7 @@ function spawnBoat(maxD) {
   sfx.mayday();
   return true;
 }
-function boatFriendOff(B) { if (--B.crew <= 0) { B.leaving = 0.01; sfx.horn(); fx.emoji('\u{1F44B}', B.x, 12, B.z, 4); } }
+function boatFriendOff(B) { if (--B.crew <= 0 && !B.wreck) { B.leaving = 0.01; sfx.horn(); fx.emoji('\u{1F44B}', B.x, 12, B.z, 4); } }
 function updateBoatRescue(dt, t) {
   const B = game.boat; if (!B) return;
   if (B.leaving) {
@@ -1131,14 +1215,24 @@ function updateBoatRescue(dt, t) {
   B.mesh.rotation.set(-(hf - h0) / 7 * 0.8, B.yaw, (hs - h0) / 3 * 0.6);
 }
 const HIDDEN = new THREE.MeshBasicMaterial({ visible: false });
+// an ice floe: a thick slab of old ice, ragged round its edge
+const FLOE_MAT = new THREE.MeshStandardMaterial({ color: 0xe8f2fa, roughness: 0.4 });
+function buildFloe() {
+  const g = new THREE.CylinderGeometry(2.7, 3.1, 0.8, 11, 1), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) { const a = Math.atan2(p.getZ(i), p.getX(i)), k = 0.82 + 0.3 * Math.abs(Math.sin(a * 2.3 + 1.1) * Math.cos(a * 3.7)); p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); }
+  g.translate(0, -0.12, 0); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, FLOE_MAT); m.castShadow = m.receiveShadow = true;
+  const o = new THREE.Group(); o.add(m);
+  return o;
+}
 function addWaiting(kind, x, z, extra) {
-  const type = pickType();
+  const type = (extra && extra.prefer && !waiting.some(a => a.type.id === extra.prefer) && ANIMAL_TYPES.find(tp => tp.id === extra.prefer)) || pickType();
   const friend = buildAnimal(type.id);
   const an = {
     id: animalSerial++, type, model: friend, kind, state: 'waiting', pos: new THREE.Vector3(x, 0, z),
     phase: Math.random() * 6, callT: 3 + Math.random() * 6, excite: 0, exciteCd: 0, grow: 0, claimed: null, prop: null, ...extra,
   };
-  if (kind === 'ring') an.prop = buildRing(); else if (kind === 'raft') an.prop = buildRaft();
+  if (kind === 'ring') an.prop = buildRing(); else if (kind === 'raft') an.prop = buildRaft(); else if (kind === 'floe') an.prop = buildFloe();
   else if (kind === 'kayak') {
     an.prop = model('World_Kayak', { tints: { Tip: new THREE.Color().setHSL(Math.random(), 0.8, 0.45) } }); an.prop.scale.setScalar(1.9); an.prop.rotation.order = 'YXZ'; an.heading = Math.random() * 6.283;
     // (the paddle is modelled across the cockpit, where it would run through whoever sits there: it lies across the foredeck instead)
@@ -1148,12 +1242,13 @@ function addWaiting(kind, x, z, extra) {
     paddle.position.set(0, -0.27, 1.05); paddle.castShadow = true; an.prop.add(paddle);
   }
   else if (kind === 'dinghy') { an.prop = new THREE.Group(); const hull = model('World_Sail'); hull.scale.setScalar(1.5); hull.rotation.z = 1.45; hull.position.set(-0.6, 0.15, 0); an.prop.add(hull); an.prop.rotation.y = Math.random() * 6.283; }
-  if (an.prop) scene.add(an.prop);
+  if (an.prop) { an.prop.userData.farHide = 360; scene.add(an.prop); }
   an.beam = buildBeam(); scene.add(an.beam);
+  friend.userData.farHide = 360;
   scene.add(friend);
   waiting.push(an);
   placeWaiting(an, game.t, 0);
-  if (kind === 'ring' || kind === 'raft' || kind === 'kayak' || kind === 'dinghy') fx.splash(an.pos.x, an.pos.y, an.pos.z, 20);
+  if (AFLOAT.has(kind)) fx.splash(an.pos.x, an.pos.y, an.pos.z, 20);
   return an;
 }
 function placeWaiting(an, t, dt) {
@@ -1196,6 +1291,14 @@ function placeWaiting(an, t, dt) {
   } else if (an.kind === 'islet' || an.kind === 'camp' || an.kind === 'ledge') {
     an.pos.y = terrainHeight(x, z);
     m.position.set(x, an.pos.y + hop, z); m.rotation.x = m.rotation.z = 0;
+  } else if (an.kind === 'perch') {
+    // up on the fire tower's deck or a rooftop
+    an.pos.y = an.perchY;
+    m.position.set(x, an.pos.y + hop, z); m.rotation.x = m.rotation.z = 0;
+  } else if (an.kind === 'wreck') {
+    // on the wreck's sloping deck (the point on her deck worked out from the hull itself, listing as she is)
+    world.wreckMesh.localToWorld(an.pos.set(an.off[0] / 1.5, an.boat.deck / 1.5, an.off[1] / 1.5));
+    m.position.set(an.pos.x, an.pos.y + hop, an.pos.z); m.rotation.x = m.rotation.z = 0;
   } else if (an.kind === 'deck') {
     // on the deck of the stricken boat, riding the swell with her
     const B = an.boat, c = Math.cos(B.yaw), sn = Math.sin(B.yaw);
@@ -1240,7 +1343,7 @@ function seatRiders(p) {
 function board(an, p) {
   const i = waiting.indexOf(an); if (i < 0 || p.cargo.length + p.incoming >= MAX_CARGO) return;
   waiting.splice(i, 1);
-  const wet = an.kind === 'ring' || an.kind === 'raft' || an.kind === 'kayak' || an.kind === 'dinghy';
+  const wet = AFLOAT.has(an.kind);
   if (an.prop && !(an.kind === 'ring' && p.vehicle !== 'boat')) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }      // (a ring goes with them)
   scene.remove(an.beam);
   if (an.site) an.site.busy = false;
@@ -1250,7 +1353,7 @@ function board(an, p) {
   // How they get aboard. Into the basket: a short paddle to it and a scramble over the side. The boat throws them a
   // life ring on a line and tows them in to climb over the collar; the seaplane's friends swim to a float and climb
   // up it; anyone on a beach runs down and wades out first. Off a stricken boat's deck it is one big jump.
-  if (an.kind === 'deck' || an.kind === 'camp' || an.kind === 'hut' || an.kind === 'ledge') an.leg = 'climb';
+  if (an.kind === 'deck' || an.kind === 'camp' || an.kind === 'hut' || an.kind === 'ledge' || an.kind === 'perch' || an.kind === 'wreck') an.leg = 'climb';
   else if (p.vehicle === 'boat' && wet) an.leg = 'throw';
   else an.leg = 'travel';
   if (an.leg === 'climb') setClimb(an, p);
@@ -1342,7 +1445,7 @@ function updateBoarding(dt, t) {
     if (k >= 1) {
       hoppers.splice(i, 1);
       an.state = 'riding'; p.incoming--;
-      p.basket.add(m); p.cargo.push(an); seatRiders(p);
+      p.basket.add(m); m.visible = true; p.cargo.push(an); seatRiders(p);      // (seen with the machine now, however far it flies)
       p.basket.getWorldPosition(V);
       fx.hearts(V.x, V.y + 2.5, V.z, 4); fx.sparkle(V.x, V.y + 1.5, V.z, 14);
       if (p.vehicle === 'heli') p.bvel.y -= 2.5;                       // the basket dips under the new weight
@@ -1399,6 +1502,7 @@ function updateHoppers(dt, t) {
       fx.confetti(to.x, BASE_Y + 1.5, to.z, 50); fx.hearts(to.x, BASE_Y + 3, to.z, 3);
       animalVoice(an.type.id, true);
       an.by.rescued++; game.rescued++; game.total++;
+      game.saved.push(an.type.e);
       if (residents.length > 15) { const old = residents.shift(); old.state = 'leaving'; old.t = 0; hoppers.push(old); }
       if (game.rescued >= game.goal && game.celebrate <= 0) missionComplete();
       syncHud();
@@ -1449,22 +1553,82 @@ function banner(title, sub, secs = 3.5) {
 }
 function missionComplete() {
   game.celebrate = 8; game.fireT = 0;
-  const two = activePlayers().length > 1;
-  banner('Mission complete! 🎉', two ? 'Great teamwork!  🔴 ' + players[0].rescued + '   🔵 ' + players[1].rescued : 'Everyone is safe and sound', 6);
+  const two = activePlayers().length > 1, Z = game.zone;
+  banner(Z.icon + ' Hooray! 🎉', two ? 'Great teamwork!  🔴 ' + players[0].rescued + '   🔵 ' + players[1].rescued : 'Everyone in ' + Z.name + ' is safe', 6);
   sfx.fanfare();
+  // the zone's sticker goes in the book, and its picture showers down round every pilot
+  addSticker(Z.id);
+  for (const p of activePlayers()) for (let i = 0; i < 14; i++) setTimeout(() => fx.emoji(Z.icon, p.pos.x + (Math.random() - 0.5) * 30, p.pos.y + 6 + Math.random() * 8, p.pos.z + (Math.random() - 0.5) * 30, 3 + Math.random() * 2), i * 180);
+  fx.confetti(0, BASE_Y + 8, 0, 160);
 }
-function nextMission() {
-  game.mission++; game.rescued = 0; game.goal = goalFor(game.mission);
-  const fade = $('#fade');
-  fade.style.opacity = 1;
-  setTimeout(() => {
-    setPreset((game.presetIdx + 1) % PRESETS.length);
-    setWeather([0, 1, 0, 2][(game.mission - 1) % 4]);
-    fade.style.opacity = 0;
-    banner('Mission ' + game.mission, world.preset.icon + WEATHERS[weather.idx].icon + ' ' + world.preset.name + ', ' + WEATHERS[weather.idx].name.toLowerCase() + ' — rescue ' + game.goal + ' friends');
-    syncHud();
-  }, 750);
+// Friends left waiting somewhere nobody is heading any more wave and go home by themselves (reuses the hoppers list).
+function releaseWaiting(test) {
+  for (let i = waiting.length - 1; i >= 0; i--) {
+    const an = waiting[i];
+    if (!test(an)) continue;
+    waiting.splice(i, 1);
+    scene.remove(an.beam);
+    if (an.prop) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }
+    if (an.site) an.site.busy = false;
+    if (an.boat) boatFriendOff(an.boat);
+    for (const p of players) { if (p.pickup === an) p.pickup = null; if (p.target === an) p.target = null; }
+    an.claimed = null; an.state = 'bye'; an.t = 0;
+    fx.emoji('\u{1F44B}', an.pos.x, an.pos.y + 4.5, an.pos.z, 3);
+    hoppers.push(an);
+  }
 }
+function setZone(m) {
+  game.mission = m; game.zone = zoneFor(m); game.rescued = 0; game.goal = goalFor(m); game.saved = [];
+  releaseWaiting(an => zoneOf(an.pos.x, an.pos.z) !== game.zone);
+  life.setZone(game.zone);
+  placeZoneBeam();
+  syncHud();
+}
+function zoneBanner() {
+  const Z = game.zone, pro = activePlayers().some(p => p.pro);
+  banner(Z.icon + ' ' + Z.name, (pro ? world.preset.icon + WEATHERS[weather.idx].icon + ' ' + WEATHERS[weather.idx].name + ' — ' : '') + 'Help ' + game.goal + ' friends' + (Z.id === 'home' ? ' and bring them home' : ' and fly them home'));
+}
+// (the screen fades out, the next mission is set up behind it, and it fades back in: on game time, so pausing waits)
+function nextMission() { $('#fade').style.opacity = 1; game.switchT = 0.75; }
+function switchMission(dt) {
+  if (!(game.switchT > 0) || (game.switchT -= dt) > 0) return;
+  setZone(game.mission + 1);
+  setPreset((game.presetIdx + 1) % PRESETS.length);
+  setWeather([0, 1, 0, 2][(game.mission - 1) % 4]);
+  $('#fade').style.opacity = 0;
+  zoneBanner();
+  syncHud();
+}
+// ---- the light that stands over the zone a mission is in, seen from anywhere, fading as a pilot gets there
+const ZONE_HUB = { forest: TOWER, reef: { x: -335, z: 385 }, harbour: { x: 492, z: -160 }, snow: SITES.find(s => s.name === 'Ski hut'), volcano: CRATER };
+const zoneBeam = buildBeam();
+zoneBeam.scale.set(3.5, 2.6, 3.5); zoneBeam.visible = false;
+scene.add(zoneBeam);
+function placeZoneBeam() {
+  const hub = ZONE_HUB[game.zone.id];
+  zoneBeam.visible = !!hub;
+  if (!hub) return;
+  zoneBeam.position.set(hub.x, terrainHeight(hub.x, hub.z), hub.z);
+  zoneBeam.material.color.set(game.zone.color);
+}
+function updateZoneBeam(t) {
+  if (!zoneBeam.visible) return;
+  let nd = 1e9;
+  for (const p of activePlayers()) nd = Math.min(nd, Math.hypot(p.pos.x - zoneBeam.position.x, p.pos.z - zoneBeam.position.z));
+  zoneBeam.material.opacity = clamp((nd - 110) / 160, 0, 1) * (0.1 + 0.03 * Math.sin(t * 2)) * (game.state === 'play' ? 1 : 0);
+}
+// ---- stickers: one for each zone a mission has been finished in, kept on this computer
+const stickers = new Set();
+try { for (const id of JSON.parse(localStorage.getItem('rescue-squad-stickers') || '[]')) stickers.add(id); } catch (e) { /* (private window) */ }
+function addSticker(id) {
+  stickers.add(id);
+  try { localStorage.setItem('rescue-squad-stickers', JSON.stringify([...stickers])); } catch (e) { /* (private window) */ }
+  showStickers();
+}
+function showStickers() {
+  $('#stickers').innerHTML = MISSION_ZONES.map(Z => '<span class="' + (stickers.has(Z.id) ? 'got' : '') + '" title="' + Z.name + '">' + Z.icon + '</span>').join('');
+}
+showStickers();
 function setPreset(i) {
   game.presetIdx = i;
   const p = PRESETS[i];
@@ -1476,15 +1640,23 @@ function setPreset(i) {
     pl.heli.lampMat.emissiveIntensity = pl.plane.lampMat.emissiveIntensity = pl.boat.lampMat.emissiveIntensity = p.night > 0 ? 8 : 0.5;
     pl.heli.tipRingMat.color.setHex(0xffd23c).multiplyScalar(1 - 0.85 * p.night);
   }
-  $('#bTime').textContent = p.icon; $('#mIcon').textContent = p.icon;
+  $('#bTime').textContent = p.icon;
 }
 function cyclePreset() { setPreset((game.presetIdx + 1) % PRESETS.length); banner(world.preset.icon + ' ' + world.preset.name, '', 1.6); }
 
 // ================================================================= HUD
+// The mission's progress, for pilots who cannot read yet: the zone's picture, then a ring for each friend to find, which
+// fills with that friend's face (with a bounce) as they get home. Grown-up pilots get the numbers as well.
 function syncHud() {
-  $('#mText').textContent = 'Mission ' + game.mission;
-  $('#mCount').textContent = Math.min(game.rescued, game.goal) + ' / ' + game.goal;
-  $('#mBar').style.width = Math.min(100, (game.rescued / game.goal) * 100) + '%';
+  $('#mIcon').textContent = game.zone.icon;
+  const row = $('#mSlots');
+  while (row.children.length < game.goal) row.appendChild(document.createElement('span'));
+  while (row.children.length > game.goal) row.lastChild.remove();
+  [...row.children].forEach((el, i) => {
+    const e = game.saved[i] || '';
+    if (el.textContent !== e) { el.textContent = e; el.classList.toggle('got', !!e); if (e) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); } }
+  });
+  $('#mCount').textContent = activePlayers().some(p => p.pro) ? Math.min(game.rescued, game.goal) + ' / ' + game.goal : '';
   for (const p of players) {
     p.ui.score.textContent = '🐾 ' + p.rescued + (p.pro ? '  \u2605 ' + p.style : '');
     p.ui.slots.forEach((el, i) => { const a = p.cargo[i]; el.textContent = a ? a.type.e : ''; el.classList.toggle('full', !!a); });
@@ -1542,6 +1714,13 @@ function drawRadar(p) {
   };
   // base
   plot(0, 0, (x, y) => { g.fillStyle = '#5dff8f'; g.beginPath(); g.arc(x, y, 13, 0, 7); g.fill(); g.fillStyle = '#0b3'; g.font = 'bold 17px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#063'; g.fillText('H', x, y + 1); });
+  // the zone this mission is in, when the pilot is not there yet: its picture on a disc of its colour, at the radar's rim
+  const Z = game.zone;
+  if (Z.id !== 'home' && Math.hypot(p.pos.x - Z.x, p.pos.z - Z.z) > Z.r * 0.7) plot(Z.x, Z.z, (x, y) => {
+    g.fillStyle = Z.color; g.globalAlpha = 0.9; g.beginPath(); g.arc(x, y, 19, 0, 7); g.fill(); g.globalAlpha = 1;
+    g.strokeStyle = '#fff'; g.lineWidth = 3; g.stroke();
+    g.font = '22px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(Z.icon, x, y + 1);
+  });
   // animals
   const pulse = 0.5 + 0.5 * Math.sin(game.t * 5);
   for (const a of waiting) plot(a.pos.x, a.pos.z, (x, y, edge) => {
@@ -1589,18 +1768,7 @@ function applyVehicleChoices() { for (const p of players) if (p.vehicle !== vehi
 // so they neither wait for ever nor hold up new rescues
 function releaseStranded() {
   const act = activePlayers();
-  for (let i = waiting.length - 1; i >= 0; i--) {
-    const an = waiting[i];
-    if (act.some(p => !outOfReach(an, p))) continue;
-    waiting.splice(i, 1);
-    scene.remove(an.beam);
-    if (an.prop) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }
-    if (an.site) an.site.busy = false;
-    for (const p of players) { if (p.pickup === an) p.pickup = null; if (p.target === an) p.target = null; }
-    an.claimed = null; an.state = 'bye'; an.t = 0;
-    fx.emoji('\u{1F44B}', an.pos.x, an.pos.y + 4.5, an.pos.z, 3);
-    hoppers.push(an);
-  }
+  releaseWaiting(an => !act.some(p => !outOfReach(an, p)));
 }
 function startGame(n) {
   audio.unlock();
@@ -1611,9 +1779,9 @@ function startGame(n) {
   if ((n === 2) !== players[1].active) setP2(n === 2, true);
   releaseStranded();
   if (fresh) {
-    game.mission = 1; game.rescued = 0; game.goal = goalFor(1);
+    setZone(1);
     spawnAnimal(true); spawnAnimal(true); spawnAnimal(false);
-    banner('Mission 1', 'Rescue ' + game.goal + ' friends and bring them home');
+    zoneBanner();
   }
   game.state = 'play'; game.paused = false;
   menu.classList.add('hidden');
@@ -1894,8 +2062,21 @@ addEventListener('resize', onResize);
 const debug = {
   view: null,
   // put a rescue where it can be looked at: a stricken boat, or a friend at landing site number i
-  boat: () => spawnBoat(400),
+  boat: () => spawnBoat(400, world.spawn.sea),
+  wreck: () => spawnWreck(),
+  // start the mission in a zone ('forest', 'reef', ...), and put the red pilot there
+  zone(id) { setZone(MISSION_ZONES.findIndex(Z => Z.id === id) + 1); },
+  goto(id, d = 70) {
+    const Z = ZONES.find(q => q.id === id), p = players[0], l = Math.hypot(Z.x, Z.z) || 1;
+    p.pos.set(Z.x - Z.x / l * (Z.r + d), p.vehicle === 'heli' ? 30 : p.pos.y, Z.z - Z.z / l * (Z.r + d));
+    p.vel.set(0, 0, 0); p.yaw = Math.atan2(Z.x - p.pos.x, Z.z - p.pos.z);
+    p.parked = p.landed = p.grounded = false; p.camPos.set(p.pos.x - Math.sin(p.yaw) * 20, p.pos.y + 8, p.pos.z - Math.cos(p.yaw) * 20);
+  },
   add(kind, i = 0) {
+    if (kind === 'tower') return addWaiting('perch', world.towerDeck.x, world.towerDeck.z, { perchY: world.towerDeck.y });
+    if (kind === 'roof') { const r = world.roofs[i]; return addWaiting('perch', r.x, r.z, { perchY: r.y }); }
+    if (kind === 'floe') { const f = world.spawn.zoneSea.snow[i]; return addWaiting('floe', f.x, f.z, { prefer: 'penguin' }); }
+    if (kind === 'lake') return addWaiting('kayak', LAKE.x, LAKE.z, { landlocked: true });
     const c = kind === 'hut' ? HUTS[i].porch : kind === 'ledge' ? world.spawn.ledges[i] : world.spawn.sea[i];
     return addWaiting(kind, c.x, c.z);
   },
@@ -1959,6 +2140,8 @@ function tick(now) {
       if (waiting.length < maxWaiting() && game.spawnT <= 0 && game.celebrate <= 0) { spawnAnimal(false); game.spawnT = 4 + Math.random() * 4; }
     }
     updateBoatRescue(dt, t);
+    updateZoneBeam(t);
+    switchMission(dt);
     for (const an of waiting) placeWaiting(an, t, dt);
     updateLeaving(dt); updateBoarding(dt, t); updateSinking(dt);
     updateHoppers(dt, t);
@@ -2016,9 +2199,12 @@ renderer.setRenderTarget(composer.renderTarget1);
 const warmUp = Promise.all([renderer.compileAsync(scene, menuCam), renderer.compileAsync(postScene, menuCam)]);
 renderer.setRenderTarget(null);
 warmUp.catch(() => {}).then(() => {
+  world.prewarmShadows(composer.renderTarget1, menuCam);
+  // (and one whole frame drawn, mirror and all, for the few shaders only a real frame builds)
+  composer.render();
   requestAnimationFrame(frame);
   requestAnimationFrame(() => canvas.classList.add('ready'));
 });
 
 // tiny debug handle (also handy for automated checks)
-window.__game = { life, terrainHeight, quality, setQuality, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };
+window.__game = { life, terrainHeight, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };

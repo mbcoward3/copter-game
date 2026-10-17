@@ -48,6 +48,9 @@ export function createFx(scene) {
     emojiTex.set(e, t); return t;
   }
   const sprites = [];
+  // Each emoji's material is thrown away when it fades, and with the last of them three would throw away their shader
+  // too, to build it again for the next one. This one is drawn once (while the game loads) and kept, which keeps it.
+  let keeper = null;
 
   const fx = {
     material: mat,
@@ -111,6 +114,7 @@ export function createFx(scene) {
         col[i * 4 + 3] = alpha0[i] * Math.min(1, k * 2.5);
       }
       geo.attributes.position.needsUpdate = true; geo.attributes.aColor.needsUpdate = true; geo.attributes.aSize.needsUpdate = true;
+      if (keeper) keeper.visible = false;
       for (let i = sprites.length - 1; i >= 0; i--) {
         const o = sprites[i]; o.t += dt;
         const k = o.t / o.dur;
@@ -122,5 +126,8 @@ export function createFx(scene) {
       }
     },
   };
+  keeper = new THREE.Sprite(new THREE.SpriteMaterial({ map: texFor('❗'), transparent: true, depthWrite: false, fog: false }));
+  keeper.scale.setScalar(0.001); keeper.position.set(0, 9, 0);
+  scene.add(keeper);
   return fx;
 }
