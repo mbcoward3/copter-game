@@ -6,6 +6,9 @@ import { sfx } from './audio.js';
 
 export function createLife(scene, world, fx) {
   const life = {};
+  // how loud something at (x, z) is for whoever is nearest to it: full close by, nothing from a few hundred metres
+  let ears = [];
+  const hear = (x, z, range = 260) => { let d = 1e9; for (const p of ears) d = Math.min(d, Math.hypot(p.pos.x - x, p.pos.z - z)); return Math.max(0, 1 - d / range) ** 1.5; };
   const seaSpot = () => world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0];
   // open water: deeper than `deep` here and nearly so for m metres all round, and m clear of every rock, stack and hut
   const open = (x, z, m, deep) => {
@@ -177,7 +180,7 @@ export function createLife(scene, world, fx) {
     // a toot and a wave for each helicopter that comes down to say hello (once a visit, not on and on while it hovers)
     for (const p of players) {
       const d = Math.hypot(p.pos.x - bx, p.pos.z - bz);
-      if (!boatState.near.has(p) && d < 32 && p.pos.y < 40) { boatState.near.add(p); sfx.horn(); fx.emoji('👋', bx, h0 + 8, bz, 3); }
+      if (!boatState.near.has(p) && d < 32 && p.pos.y < 40) { boatState.near.add(p); sfx.shipHorn(); fx.emoji('👋', bx, h0 + 8, bz, 3); }
       else if (boatState.near.has(p) && (d > 55 || p.pos.y > 50)) boatState.near.delete(p);
     }
 
@@ -202,7 +205,7 @@ export function createLife(scene, world, fx) {
       b.g.rotation.set(0, Math.atan2(-Math.sin(a) * dir, Math.cos(a) * dir), 0); b.g.rotation.z = -0.3 * dir;
       for (const p of players) {
         if (p.pos.distanceTo(b.pos) < 16) {
-          b.scat = 3.5; b.vel.copy(b.pos).sub(p.pos).setY(0).normalize().multiplyScalar(22); b.vel.y = 9; sfx.chirp();
+          b.scat = 3.5; b.vel.copy(b.pos).sub(p.pos).setY(0).normalize().multiplyScalar(22); b.vel.y = 9; if (!b.flock.calledT || t - b.flock.calledT > 2) { b.flock.calledT = t; sfx.gulls(); }
           break;
         }
       }
@@ -234,7 +237,7 @@ export function createLife(scene, world, fx) {
         const b = (k - 0.4) / 0.22;
         y = w - 2 + Math.sin(b * Math.PI) * 9; pitch = -1.1 + b * 2.0;
         whale.g.rotation.z = b * 1.6;
-        if (b > 0.8 && whale.blown < 2) { whale.blown = 2; fx.splash(x, w, z, 120, 2.6); sfx.splash(); }
+        if (b > 0.8 && whale.blown < 2) { whale.blown = 2; fx.splash(x, w, z, 120, 2.6); sfx.splash(hear(x, z, 400), true); }
       } else {
         // a long, slow roll: the back breaks the surface, then the tail lifts as she dives
         y = w - 4 + Math.sin(Math.min(k / 0.9, 1) * Math.PI) * 3.6; pitch = Math.cos(Math.min(k / 0.9, 1) * Math.PI) * 0.25;
@@ -275,7 +278,7 @@ export function createLife(scene, world, fx) {
       const k = d.t / JT;
       const px = d.x + d.dx * JL * k, pz = d.z + d.dz * JL * k;
       const wy = waveHeight(px, pz, t);
-      if (was === 0) { fx.splash(px, wy, pz, 14, 0.8); sfx.splash(); }
+      if (was === 0) { fx.splash(px, wy, pz, 14, 0.8); sfx.splash(0.6 * hear(px, pz, 200)); }
       if (k >= 1) {
         fx.splash(px, wy, pz, 18, 0.9);
         d.g.visible = false; d.jumps--;

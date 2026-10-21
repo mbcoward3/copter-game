@@ -8,4 +8,5 @@ unreal/
 .claude/
 .mcp.json
 src/assets/pictures.js
+src/assets/sfx.js
 build/

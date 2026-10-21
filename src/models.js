@@ -78,6 +78,26 @@ export function buildBasket(accent) {
   return g;
 }
 
+// A firefighting bucket on the winch cable: orange fabric on a dark rim, four straps up to the hook ring
+export function buildBucket() {
+  const g = new THREE.Group();
+  const orange = std(0xd8471e, { roughness: 0.8 }), dark = std(0x24262a, { roughness: 0.6 });
+  mesh(new THREE.CylinderGeometry(1.15, 0.8, 1.7, 18), orange, 0, 0.85, 0, g);
+  mesh(new THREE.TorusGeometry(1.15, 0.08, 6, 20), dark, 0, 1.7, 0, g).rotation.x = Math.PI / 2;
+  const inside = mesh(new THREE.CircleGeometry(1.08, 18), dark, 0, 1.705, 0, g); inside.rotation.x = -Math.PI / 2;
+  const water = mesh(new THREE.CircleGeometry(1.05, 18), std(0x2f7f9c, { roughness: 0.08 }), 0, 1.0, 0, g); water.rotation.x = -Math.PI / 2;
+  water.position.y = 1.71; water.visible = false;
+  for (let i = 0; i < 4; i++) {
+    const a = i * Math.PI / 2 + Math.PI / 4, x = Math.cos(a) * 1.1, z = Math.sin(a) * 1.1;
+    const from = new THREE.Vector3(x, 1.7, z), to = new THREE.Vector3(0, BASKET_TOP, 0), len = from.distanceTo(to);
+    const strap = mesh(new THREE.CylinderGeometry(0.035, 0.035, len, 4), dark, 0, 0, 0, g);
+    strap.position.copy(from).lerp(to, 0.5);
+    strap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), to.clone().sub(from).normalize());
+  }
+  g.userData.water = water;
+  return g;
+}
+
 export function buildRing() {
   const g = new THREE.Group();
   const cols = [0xff5a1f, 0xffffff];

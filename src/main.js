@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER } from './world.js';
-import { buildHeli, buildBasket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
+import { buildHeli, buildBasket, buildBucket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
 import { model } from './assets.js';
 import { createFx } from './fx.js';
 import { createLife } from './life.js';
@@ -55,6 +55,8 @@ function makePlayer(idx) {
   boat.group.rotation.order = 'YXZ'; boat.group.visible = false;
   scene.add(boat.group);
   const basket = buildBasket(P_COL[idx]); scene.add(basket);
+  // the fire bucket hangs from the same cable; it takes the basket's place while the helicopter is fighting a fire
+  const cage = basket.children[0], bucket = buildBucket(); bucket.visible = false; basket.add(bucket);
   const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1, 6), new THREE.MeshStandardMaterial({ color: 0x33383f, roughness: 0.7 }));
   rope.castShadow = true; scene.add(rope);
   const cam = new THREE.PerspectiveCamera(60, 1, 0.5, 9000);
@@ -65,7 +67,7 @@ function makePlayer(idx) {
   scene.add(spotStandIn);
   const pane = $('#pane' + idx);
   const p = {
-    idx, model, basket, rope, cam, pane, spotStandIn, active: false,
+    idx, model, basket, rope, cam, pane, spotStandIn, active: false, cage, bucket, water: 0, pour: 0, fireJob: null, spray: null,
     vehicle: 'heli', heli: model, heliBasket: basket, plane, boat, fs: 0, afloat: true, sea: 1, hoist: 0, manualT: 0, hook: new THREE.Vector3(),
     pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, yawVel: 0, pitch: 0, roll: 0,
     spin: 0, landed: true, grounded: true, clearance: 0, surfaceY: 0, overLand: true,
@@ -92,7 +94,7 @@ function showVehicle(p, on) {
 }
 function setVehicle(p, kind) {
   if (p.pickup) { p.pickup.claimed = null; p.pickup = null; }
-  p.target = null;
+  p.target = null; p.fireJob = null; p.water = 0; p.pour = 0;
   while (p.cargo.length) deliverOne(p);
   p.vehicle = kind;
   p.model = p[kind];
@@ -119,11 +121,15 @@ const activePlayers = () => players.filter(p => p.active);
 
 // ================================================================= game state
 // Missions go round the zones: the home bay first, then out to each of the others in turn, a friend more each time round.
+// Two of them are fire missions, nothing but fires to put out (see the fires section): the forest's and the volcano's.
 const MISSION_ZONES = ['home', 'forest', 'reef', 'harbour', 'snow', 'volcano'].map(id => ZONES.find(Z => Z.id === id));
-const zoneFor = m => MISSION_ZONES[(m - 1) % MISSION_ZONES.length];
-const game = { state: 'menu', paused: false, mission: 1, zone: MISSION_ZONES[0], rescued: 0, goal: 5, saved: [], total: 0, presetIdx: 0, celebrate: 0, fireT: 0, spawnT: 0, t: 0, boop: 0 };
+const MISSIONS = [['home'], ['forest'], ['forest', true], ['reef'], ['harbour'], ['snow'], ['volcano'], ['volcano', true]]
+  .map(([id, fire]) => ({ zone: ZONES.find(Z => Z.id === id), fire: !!fire }));
+const missionFor = m => MISSIONS[(m - 1) % MISSIONS.length];
+const zoneFor = m => missionFor(m).zone;
+const game = { state: 'menu', paused: false, mission: 1, zone: MISSION_ZONES[0], fire: false, rescued: 0, goal: 5, saved: [], total: 0, presetIdx: 0, celebrate: 0, fireT: 0, spawnT: 0, t: 0, boop: 0 };
 const waiting = [], residents = [], hoppers = [];
-const goalFor = m => Math.min(5 + Math.floor((m - 1) / MISSION_ZONES.length), 8);
+const goalFor = m => { const round = Math.floor((m - 1) / MISSIONS.length); return missionFor(m).fire ? Math.min(3 + round, 5) : Math.min(5 + round, 8); };
 // friends this mission still needs found: the goal, less those already home, aboard, climbing aboard or hopping home
 function stillNeeded() {
   let n = game.goal - game.rescued;
@@ -131,7 +137,7 @@ function stillNeeded() {
   for (const h of hoppers) if (h.state === 'hop') n--;
   return n;
 }
-const maxWaiting = () => Math.max(0, Math.min(4 + (activePlayers().length > 1 ? 1 : 0), stillNeeded()));
+const maxWaiting = () => Math.max(0, Math.min((game.fire ? 2 : 4) + (activePlayers().length > 1 ? 1 : 0), stillNeeded()));
 for (const s of SITES) s.zone = zoneOf(s.x, s.z).id;
 
 // ================================================================= input
@@ -225,7 +231,12 @@ const HANDS_OFF = { f: 0, t: 0, l: 0, horn: false };
 // roof, or on the wreck out on the coral
 const inland = an => an.kind === 'camp' || an.kind === 'ledge' || an.kind === 'perch' || an.kind === 'wreck';
 // ...and one the seaplane cannot (on a hut porch in the little lagoon) or the boat cannot (on the forest's lake)
-const outOfReach = (an, p) => p.vehicle !== 'heli' && (inland(an) || (p.vehicle === 'plane' && an.kind === 'hut') || (p.vehicle === 'boat' && an.landlocked));
+const outOfReach = (an, p) => an.fire ? !canFight(p, an.fire) : p.vehicle !== 'heli' && (inland(an) || (p.vehicle === 'plane' && an.kind === 'hut') || (p.vehicle === 'boat' && an.landlocked));
+// a friend with a fire burning beside them (see the fires section): nobody picks them up, the fire is put out and then
+// they are safe where they are. The helicopter can always help (its bucket), the seaplane when there is open sea to
+// scoop from, the boat only when the fire is close enough to the water for its cannon.
+const burning = an => !!(an.fire && !an.fire.out);
+const canFight = (p, F) => p.vehicle === 'heli' || (p.vehicle === 'plane' ? !!F.scoop : !!F.shore);
 // The lagoon is ringed by reef with one channel through it: anything on the water heading in or out goes by the channel.
 const LAGOON = { x: -165, z: 200, r: 26 }, CHANNEL = [{ x: -126, z: 152 }, { x: -151, z: 183 }];
 const LEG = new THREE.Vector3();
@@ -234,6 +245,7 @@ function nearestFor(p) {
   let best = null, bd = 1e9;
   for (const an of waiting) {
     if (outOfReach(an, p) || (an.claimed && an.claimed !== p)) continue;
+    if (an.fire && (p.cargo.length || p.incoming)) continue;      // (nobody goes firefighting with friends aboard)
     const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
     if (d < bd) { bd = d; best = an; }
   }
@@ -285,16 +297,17 @@ function aground(pos, px, pz, fx_, fz_, lead) {
   return true;
 }
 function updatePlayer(p, dt, t) {
+  updateFireJob(p);
   // A friend waiting at a landing site: once the helicopter is overhead it sets itself down beside them, they climb
   // aboard, and then it sits there until the pilot presses go again.
   if (p.pickup && p.pickup.state !== 'waiting') p.pickup = null;
   if (!p.pro && !p.pickup && !p.grounded && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
-    if (an.kind !== 'camp' || (an.claimed && an.claimed !== p)) continue;
+    if (an.kind !== 'camp' || an.fire || (an.claimed && an.claimed !== p)) continue;
     if (Math.hypot(an.site.x - p.pos.x, an.site.z - p.pos.z) < 8) { p.pickup = an; an.claimed = p; p.parked = true; sfx.winch(); break; }
   }
   // (a pilot flying it properly has to put it down at the site themselves)
   if (p.pro && p.grounded && Math.hypot(p.vel.x, p.vel.z) < 1.5 && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
-    if (an.kind === 'camp' && Math.hypot(an.site.x - p.pos.x, an.site.z - p.pos.z) < an.site.r + 1) { board(an, p); break; }
+    if (an.kind === 'camp' && !an.fire && Math.hypot(an.site.x - p.pos.x, an.site.z - p.pos.z) < an.site.r + 1) { board(an, p); break; }
   }
   const held = p.pickup || (p.grounded && p.incoming > 0);
   const inp = held ? HANDS_OFF : p.input;
@@ -309,8 +322,8 @@ function updatePlayer(p, dt, t) {
     // ---- flown properly: tilt pushes, the machine has weight, height is the pilot's, and the wind is felt in full
     const busy = inp.f !== 0 || inp.s !== 0 || inp.t !== 0 || inp.l !== 0;
     if (busy) p.idleT = 0; else p.idleT += dt;
-    if (p.parked && inp.l > 0) { p.parked = false; if (p.grounded && p.spin < 0.6) sfx.engineStart(p.spin); }
-    if (!p.parked && p.grounded && p.idleT > 3.5) { p.parked = true; sfx.engineStop(); }
+    if (p.parked && inp.l > 0) { p.parked = false; }
+    if (!p.parked && p.grounded && p.idleT > 3.5) { p.parked = true; }
     const spooling = !p.parked && p.grounded && p.spin < 0.93, live = !p.parked && !spooling && !p.grounded;
     p.yawVel += (inp.t * (p.grounded ? 0 : 1.55) - p.yawVel) * damp(4, dt);
     p.yaw += p.yawVel * dt;
@@ -339,7 +352,7 @@ function updatePlayer(p, dt, t) {
     // The helicopter looks after its own height: it cruises a little above whatever is below,
     // takes off when you steer and settles back onto a helipad when left alone above one.
     const busy = inp.f !== 0 || inp.t !== 0 || inp.l !== 0;
-    if (busy) { p.idleT = 0; if (p.parked && (inp.f !== 0 || inp.t !== 0 || inp.l > 0)) { p.parked = false; p.altOff = 0; if (p.grounded && p.spin < 0.6) sfx.engineStart(p.spin); } }
+    if (busy) { p.idleT = 0; if (p.parked && (inp.f !== 0 || inp.t !== 0 || inp.l > 0)) { p.parked = false; p.altOff = 0; } }
     else p.idleT += dt;
     if (!p.parked) {
       p.altOff = clamp(p.altOff + inp.l * 16 * dt, -CRUISE, 70);
@@ -371,7 +384,8 @@ function updatePlayer(p, dt, t) {
     if (inp.f > 0 && inp.t === 0 && !p.grounded) {
       const room = p.cargo.length + p.incoming < MAX_CARGO, guide = room ? nearestFor(p) : null;
       const an = p.target || (guide && guide.an);
-      const goal = p.cargo.length && (!room || !guide || guide.d > 200) ? HOME_SPOT : an ? (an.kind === 'camp' ? an.site : an.pos) : null;
+      // (fighting a fire: to the nearest open water to fill the bucket, then over the flames)
+      const goal = p.fireJob ? (p.water >= 1 ? p.fireJob.fire : p.fireJob.fire.dip) : p.cargo.length && (!room || !guide || guide.d > 200) ? HOME_SPOT : an ? (an.kind === 'camp' ? an.site : an.pos) : null;
       if (goal) {
         gd = Math.hypot(goal.x - p.pos.x, goal.z - p.pos.z);
         off = angDiff(Math.atan2(goal.x - p.pos.x, goal.z - p.pos.z), p.yaw);
@@ -423,7 +437,6 @@ function updatePlayer(p, dt, t) {
       // touchdown: thump, dust ring, suspension bounce, camera jolt
       fx.dust(p.pos.x, SURF.y, p.pos.z, 60); sfx.touchdown();
       p.shake = 1; p.squash = 1;
-      if (p.parked) sfx.engineStop();
       if (p.pro && (PADS.some(pad => Math.hypot(p.pos.x - pad.x, p.pos.z - pad.z) < 8.5) || SITES.some(q => Math.hypot(p.pos.x - q.x, p.pos.z - q.z) < q.r))) {
         if (p.vel.y > -1.5) rate(p, 3, 'Greased it'); else if (p.vel.y > -3) rate(p, 2, 'Good landing'); else rate(p, 1, 'Firm one!');
       }
@@ -431,7 +444,7 @@ function updatePlayer(p, dt, t) {
     p.pos.y = floor; p.vel.y = Math.max(p.vel.y, 0);
     p.grounded = SURF.land;
   } else if (p.pos.y > floor + 0.15) {
-    if (p.grounded) { fx.dust(p.pos.x, SURF.y, p.pos.z, 50); sfx.liftoff(); p.shake = Math.max(p.shake, 0.45); }
+    if (p.grounded) { fx.dust(p.pos.x, SURF.y, p.pos.z, 50); p.shake = Math.max(p.shake, 0.45); }
     p.grounded = false;
   }
   p.clearance = p.pos.y - SKID - SURF.y;
@@ -477,7 +490,7 @@ function updatePlayer(p, dt, t) {
   // horn
   p.hornCd -= dt;
   if (inp.horn && p.hornCd <= 0) {
-    p.hornCd = 0.45; sfx.heliHorn(p.idx);
+    p.hornCd = 0.45; sfx.honk(p.vehicle, p.idx);
     fx.emoji('🎵', p.pos.x, p.pos.y + 4, p.pos.z, 2.2);
     for (const an of waiting) if (an.pos.distanceTo(p.pos) < 90) an.excite = 2.5;
   }
@@ -499,12 +512,13 @@ function blockedAt(p, fx_, fz_, dist, pad = 3) {
 }
 function updatePlane(p, dt, t) {
   const inp = p.input, m = p.plane;
+  updateFireJob(p);
   const busy = inp.f !== 0 || inp.t !== 0 || inp.l !== 0;
   // the pilot's own height: up/down keys move the cruising height; the autopilot's descents wait while they are in use
   // once the pilot touches the height keys, height stays theirs until the plane next comes to rest on the water
   if (inp.l !== 0) p.manualT = 1;
   if (p.parked || (p.afloat && Math.abs(p.fs) < 2 && inp.l === 0)) { p.altOff = 0; p.manualT = 0; }
-  if (busy) { p.idleT = 0; if (p.parked) { p.parked = false; if (p.spin < 0.6) sfx.engineStart(p.spin); } } else p.idleT += dt;
+  if (busy) { p.idleT = 0; if (p.parked) { p.parked = false; } } else p.idleT += dt;
   if (p.parked) p.spin = Math.max(0, p.spin - dt * (0.09 + p.spin * 0.28));
   else p.spin = Math.min(1, p.spin + dt * (0.18 + p.spin * 0.5));
   const ready = !p.parked && p.spin > 0.9;
@@ -516,10 +530,10 @@ function updatePlane(p, dt, t) {
 
   // who to scoop up: someone roughly ahead, or anyone close by
   if (p.target && (p.target.state !== 'waiting' || Math.hypot(p.target.pos.x - p.pos.x, p.target.pos.z - p.pos.z) > 110)) { if (p.target.claimed === p) p.target.claimed = null; p.target = null; }
-  if (!p.pro && !p.target && ready && room) {
+  if (!p.pro && !p.target && !p.fireJob && ready && room) {
     let bd = 120;
     for (const an of waiting) {
-      if (outOfReach(an, p) || (an.claimed && an.claimed !== p)) continue;
+      if (an.fire || outOfReach(an, p) || (an.claimed && an.claimed !== p)) continue;
       const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
       const off = Math.abs(angDiff(Math.atan2(an.pos.x - p.pos.x, an.pos.z - p.pos.z), p.yaw));
       if (d < bd && (off < 1.0 || d < 45)) { bd = d; p.target = an; }
@@ -530,7 +544,9 @@ function updatePlane(p, dt, t) {
   // ---- where the autopilot would like to go: the friend, or the dock when carrying friends home
   // (full up, or nobody left to fetch: home from anywhere)
   const guide = !p.pro && !p.target && room ? nearestFor(p) : null;
-  const goal = p.pro ? null : p.target ? p.target.pos : p.cargo.length && (!room || !guide || guide.d > 180 || p.cargo.length > 1) ? DOCK : guide ? guide.an.pos : null;
+  // (a water bomber: down onto the sea to skim a load into the tank, then up and over the fire)
+  const fireGoal = !p.pro && p.fireJob ? (p.water >= 1 ? p.fireJob.fire : p.fireJob.fire.scoop) : null;
+  const goal = p.pro ? null : fireGoal || (p.target ? p.target.pos : p.cargo.length && (!room || !guide || guide.d > 180 || p.cargo.length > 1) ? DOCK : guide ? guide.an.pos : null);
   let assist = 0, gd = 1e9, off = 0, cap = PL.max, glide = PL.cruise;
   if (goal && ready) {
     gd = Math.hypot(goal.x - p.pos.x, goal.z - p.pos.z);
@@ -538,9 +554,12 @@ function updatePlane(p, dt, t) {
     // steer toward it unless it has slipped behind us at close range (then fly on and come round again)
     if (gd > 12 && (Math.abs(off) < 1.8 || gd > 45)) assist = clamp(off * 1.5, -1, 1);
     // a straight glide slope that reaches the water a little before the friend, so the pickup is always a skim
-    const reach = p.target ? (p.target.kind === 'islet' ? 66 : 58) : 36;      // (down on the water well short of them, to taxi the last bit)
+    const reach = fireGoal ? (p.water >= 1 ? -1e9 : 10) : p.target ? (p.target.kind === 'islet' ? 66 : 58) : 36;      // (down on the water well short of them, to taxi the last bit)
     glide = clamp((gd - reach) * 0.2, 0, PL.cruise);
     cap = Math.min(PL.max, p.target ? (p.afloat ? 2.5 + Math.max(0, gd - 11) * 0.22 : 15 + Math.max(0, gd - 70) * 0.22) : 3 + Math.max(0, gd - 16) * 0.33);
+    // (scooping: keep skimming along the water until the tank is full; with a full tank, straight there at speed)
+    // (and keeps flying speed until it is down on the water: slower than that it would settle wherever it is)
+    if (fireGoal) cap = p.water >= 1 ? PL.max : p.afloat ? 11 : Math.max(PL.fly + 4, cap);
   }
 
   // ---- turning: one smoothed turn rate; the bank comes from it
@@ -596,7 +615,7 @@ function updatePlane(p, dt, t) {
     let vyT = 0;
     if (p.afloat) {
       // (with a friend close by and room aboard, W taxis up to them; otherwise it is take-off power)
-      const taxi = room && waiting.some(an => !outOfReach(an, p) && Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z) < 45);
+      const taxi = room && waiting.some(an => !an.fire && !outOfReach(an, p) && Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z) < 45);
       const want = !ready || p.incoming ? 0 : inp.f > 0 ? (taxi ? 6 : 30) : inp.f < 0 ? -3 : 0;
       p.fs += clamp(want - p.fs, -7 * dt, 7 * dt);
       if (inp.f > 0 && !taxi && p.fs > 19) vyT = 7;                             // rotate and climb away
@@ -625,6 +644,8 @@ function updatePlane(p, dt, t) {
     const mine = clamp(PL.cruise + p.altOff, 0, 76);
     if (inp.f > 0) wantAlt = p.manualT > 0 ? mine : Math.min(mine, glide);
     if (landAhead > -1e8) wantAlt = Math.max(wantAlt, landAhead + 9);        // never let a hill come to us
+    // (a tank of water for a fire: over the treetops it is burning in, low enough to drop it there)
+    if (fireGoal && p.water >= 1 && gd < 220) wantAlt = Math.max(wantAlt, p.fireJob.fire.y + 10 - PLANE_FLOAT);
   }
   vyT = p.manualT > 0 ? clamp((wantAlt - alt) * 2.2, -9, 9) : clamp((wantAlt - alt) * 2.2, -6.5, 7);
   if (flying && inp.l !== 0) {
@@ -656,13 +677,13 @@ function updatePlane(p, dt, t) {
     if (!wasAfloat && !SURF.land && p.fs > 7) {
       // splashdown
       for (const sx of [-1.8, 1.8]) fx.splash(p.pos.x - nfz * sx, wave, p.pos.z + nfx * sx, 34, 1.3);
-      sfx.splash(); sfx.touchdown(); p.shake = 0.6; p.squash = 1;
+      sfx.splash(1, true); p.shake = 0.6; p.squash = 1;
       if (p.pro) { if (p.descent > -1.5) rate(p, 3, 'Greased it'); else if (p.descent > -3.2) rate(p, 2, 'Good landing'); else rate(p, 1, 'Firm splashdown!'); }
     }
     p.pos.y = floor; p.vel.y = Math.max(p.vel.y, 0);
   }
   p.afloat = !SURF.land && p.pos.y - floor < 0.25;
-  if (wasAfloat && !p.afloat && p.fs > PL.fly - 2) { sfx.liftoff(); fx.splash(p.pos.x, wave, p.pos.z, 26, 1.1); }
+  if (wasAfloat && !p.afloat && p.fs > PL.fly - 2) { fx.splash(p.pos.x, wave, p.pos.z, 26, 1.1); }
   p.surfaceY = SURF.y; p.overLand = SURF.land; p.clearance = p.pos.y - floor;
   p.grounded = p.afloat && Math.abs(p.fs) < 8;
   p.landed = p.parked; p.ropeLen = 0.6;
@@ -674,14 +695,25 @@ function updatePlane(p, dt, t) {
   }
   // (a pilot taxis right up to them and stops; they swim over)
   if (p.pro && p.afloat && Math.abs(p.fs) < 7.5 && room) for (const an of waiting) {
-    if (outOfReach(an, p)) continue;
+    if (an.fire || outOfReach(an, p)) continue;
     const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
     if (d < (an.kind === 'islet' ? 24 : 12)) { board(an, p); if (an.kind === 'islet' || d < 7) rate(p, 3, 'Right alongside'); else if (d < 10) rate(p, 2, 'Nice taxiing'); else rate(p, 1, 'A long swim!'); break; }
+  }
+  // ---- the water bomber: skimming fast along the sea fills the tank; passing low over the fire empties it onto them
+  if (p.fireJob && p.water < 1 && p.afloat && p.fs > 6) {
+    p.water = Math.min(1, p.water + dt / 2.2);
+    if (Math.random() < 0.6) fx.emit(p.pos.x - nfx * 2, wave + 0.2, p.pos.z - nfz * 2, (Math.random() - 0.5) * 3 - nfx * 2, 2 + Math.random() * 3, (Math.random() - 0.5) * 3 - nfz * 2, 0.92, 0.97, 1, 0.7, 0.5 + Math.random() * 0.5, 0.9, 9, 1);
+    if (p.water >= 1) waterAboard(p);
+  }
+  if (p.water >= 1 && !p.afloat) for (const an of waiting) {
+    if (!burning(an)) continue;
+    const F = an.fire, ahead = p.fs * 0.55;          // (let go a little before: the water carries on forward as it falls)
+    if (Math.hypot(p.pos.x + nfx * ahead - F.x, p.pos.z + nfz * ahead - F.z) < F.r + 12 && p.pos.y - F.y < 55 && p.pos.y > F.y - 3) { dump(p, an, V.set(p.pos.x, p.pos.y - 1.3, p.pos.z)); break; }
   }
   // ---- home: friends hop out along the pier
   p.dropCd -= dt;
   if (p.cargo.length && p.afloat && dockD < (p.pro ? 22 : 34) && Math.abs(p.fs) < (p.pro ? 7 : 12) && p.dropCd <= 0) { if (p.pro) rate(p, dockD < 10 ? 3 : 2, dockD < 10 ? 'Neat mooring' : 'Moored'); deliverOne(p); p.dropCd = 0.45; }
-  if (!p.parked && p.afloat && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; sfx.engineStop(); }
+  if (!p.parked && p.afloat && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; }
   p.mode = p.target || p.incoming ? 'pickup' : (p.cargo.length && dockD < 130 ? 'deliver' : 'idle');
 
   // ---- how it looks: coordinated bank, nose follows the flight path, floats ride the swell
@@ -720,7 +752,7 @@ function updatePlane(p, dt, t) {
   // horn
   p.hornCd -= dt;
   if (inp.horn && p.hornCd <= 0) {
-    p.hornCd = 0.45; sfx.heliHorn(p.idx);
+    p.hornCd = 0.45; sfx.honk(p.vehicle, p.idx);
     fx.emoji('\u{1F3B5}', p.pos.x, p.pos.y + 4, p.pos.z, 2.2);
     for (const an of waiting) if (an.pos.distanceTo(p.pos) < 90) an.excite = 2.5;
   }
@@ -733,8 +765,9 @@ function updatePlane(p, dt, t) {
 const BT = { max: 30 };
 function updateBoat(p, dt, t) {
   const inp = p.input, m = p.boat;
+  updateFireJob(p);
   const busy = inp.f !== 0 || inp.t !== 0;
-  if (busy) { p.idleT = 0; if (p.parked) { p.parked = false; if (p.spin < 0.6) sfx.engineStart(p.spin); } } else p.idleT += dt;
+  if (busy) { p.idleT = 0; if (p.parked) { p.parked = false; } } else p.idleT += dt;
   if (p.parked) p.spin = Math.max(0, p.spin - dt * (0.15 + p.spin * 0.5));
   else p.spin = Math.min(1, p.spin + dt * (0.3 + p.spin * 0.8));
   const ready = !p.parked && p.spin > 0.9;
@@ -743,10 +776,10 @@ function updateBoat(p, dt, t) {
   const room = p.cargo.length + p.incoming < MAX_CARGO;
 
   if (p.target && (p.target.state !== 'waiting' || Math.hypot(p.target.pos.x - p.pos.x, p.target.pos.z - p.pos.z) > 90)) { if (p.target.claimed === p) p.target.claimed = null; p.target = null; }
-  if (!p.pro && !p.target && ready && room) {
+  if (!p.pro && !p.target && !p.fireJob && ready && room) {
     let bd = 110;
     for (const an of waiting) {
-      if (outOfReach(an, p) || (an.claimed && an.claimed !== p)) continue;
+      if (an.fire || outOfReach(an, p) || (an.claimed && an.claimed !== p)) continue;
       const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
       const off = Math.abs(angDiff(Math.atan2(an.pos.x - p.pos.x, an.pos.z - p.pos.z), p.yaw));
       if (d < bd && (off < 1.1 || d < 40)) { bd = d; p.target = an; }
@@ -754,14 +787,16 @@ function updateBoat(p, dt, t) {
     if (p.target) p.target.claimed = p;
   }
   const guide = !p.pro && !p.target && room ? nearestFor(p) : null;
-  const goal0 = p.pro ? null : p.target ? p.target.pos : p.cargo.length && (!room || !guide || guide.d > 160) ? DOCK : guide ? guide.an.pos : null;
+  // (a fire by the shore: in close to the water's edge below it, for the cannon)
+  const fj = !p.pro && p.fireJob;
+  const goal0 = p.pro ? null : fj ? fj.fire.shore : p.target ? p.target.pos : p.cargo.length && (!room || !guide || guide.d > 160) ? DOCK : guide ? guide.an.pos : null;
   const goal = goal0 && waterRoute(p, goal0);
   let assist = 0, gd = 1e9, cap = BT.max;
   if (goal && ready) {
     gd = Math.hypot(goal.x - p.pos.x, goal.z - p.pos.z);
     const off = angDiff(Math.atan2(goal.x - p.pos.x, goal.z - p.pos.z), p.yaw);
     if (gd > 9 && (Math.abs(off) < 1.9 || gd > 35)) assist = clamp(off * 1.6, -1, 1);
-    cap = Math.min(BT.max, p.target ? 5 + Math.max(0, gd - 9) * 0.5 : 2 + Math.max(0, gd - 15) * 0.4);
+    cap = Math.min(BT.max, p.target || fj ? 5 + Math.max(0, gd - 9) * 0.5 : 2 + Math.max(0, gd - 15) * 0.4);
   }
 
   // steering bites harder once the boat has some way on
@@ -789,6 +824,8 @@ function updateBoat(p, dt, t) {
     p.wedgeT = 0; (p.wedgeAt || (p.wedgeAt = new THREE.Vector3())).copy(p.pos);
   }
   if (p.backT > 0) { p.backT -= dt; turnCmd = p.avoidDir || 1; }
+  // (while the cannon is going, it swings its bow round to face the fire, so the fire is in the picture)
+  if (!p.pro && p.spray && inp.t === 0) { const F = p.spray.fire; turnCmd = clamp(angDiff(Math.atan2(F.x - p.pos.x, F.z - p.pos.z), p.yaw) * 1.6, -1, 1); }
   const bite = clamp(Math.abs(p.fs) / 9, 0.45, 1) * (p.fs < -0.5 ? -1 : 1) * (p.pro ? 1.15 - clamp((Math.abs(p.fs) - 20) / 40, 0, 0.35) : 1);
   p.yawVel += (clamp(turnCmd, -1, 1) * (ready ? 1.35 * bite : 0) - p.yawVel) * damp(2.5, dt);
   p.yaw += p.yawVel * dt;
@@ -798,7 +835,7 @@ function updateBoat(p, dt, t) {
   let shore = 1;
   if (p.pro) shore = 1;
   else if (blockedAt(p, fx_ * dir, fz_ * dir, 7, 1.5)) shore = 0; else if (blockedAt(p, fx_ * dir, fz_ * dir, 15, 1.5)) shore = 0.3;
-  const atDock = (!p.pro && !p.target && p.cargo.length > 0 && dockD < 15) || p.incoming > 0;      // (and it lies stopped while someone comes aboard)
+  const atDock = (!p.pro && !p.target && p.cargo.length > 0 && dockD < 15) || p.incoming > 0 || (fj && gd < 12) || !!p.spray;      // (and it lies stopped while someone comes aboard, or while the cannon is going)
   let want = 0;
   if (ready && !atDock) want = inp.f > 0 ? cap : inp.f < 0 ? -7 : 0;
   if (p.backT > 0) want = -6;
@@ -823,7 +860,7 @@ function updateBoat(p, dt, t) {
   const rideY = wave * 0.75;
   p.bvy = p.bvy || 0;
   if (p.pos.y <= rideY + 0.02) {
-    if (p.air > 0.5 && Math.abs(p.fs) > 12) { fx.splash(p.pos.x, wave, p.pos.z, 30, 1.2); sfx.splash(); p.squash = 1; p.shake = 0.6; if (p.pro) rate(p, p.air > 0.8 ? 3 : 2, p.air > 0.8 ? 'Big air!' : 'Airborne!'); }
+    if (p.air > 0.5 && Math.abs(p.fs) > 12) { fx.splash(p.pos.x, wave, p.pos.z, 30, 1.2); sfx.splash(0.8, true); p.squash = 1; p.shake = 0.6; if (p.pro) rate(p, p.air > 0.8 ? 3 : 2, p.air > 0.8 ? 'Big air!' : 'Airborne!'); }
     p.bvy = (rideY - p.pos.y) / Math.max(dt, 1e-3) * 0.5 + Math.max(0, (waveHeight(p.pos.x + Math.sin(p.yaw) * p.fs * 0.05, p.pos.z + Math.cos(p.yaw) * p.fs * 0.05, t) * 0.75 - rideY) / 0.05) * 0.35;
     p.pos.y = rideY; p.air = 0;
   } else { p.bvy -= 9.8 * dt; p.pos.y += p.bvy * dt; p.air += dt; if (p.pos.y < rideY) p.pos.y = rideY - 0.001; }
@@ -837,17 +874,32 @@ function updateBoat(p, dt, t) {
   // (a pilot comes alongside, stops and throws the ring)
   p.throwCd = Math.max(0, (p.throwCd || 0) - dt);
   // (stopped right beside someone, the crew throws without being asked)
-  const autoThrow = p.pro && Math.abs(p.fs) < 2 && waiting.some(an => !outOfReach(an, p) && Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z) < 11);
+  const autoThrow = p.pro && Math.abs(p.fs) < 2 && waiting.some(an => !an.fire && !outOfReach(an, p) && Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z) < 11);
   if (p.pro && (inp.w || autoThrow) && p.throwCd <= 0 && room) {
     p.throwCd = 0.8;
     let best = null, bd = 1e9;
-    for (const an of waiting) { if (inland(an)) continue; const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z); if (d < bd) { bd = d; best = an; } }
+    for (const an of waiting) { if (inland(an) || an.fire) continue; const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z); if (d < bd) { bd = d; best = an; } }
     if (best && bd < (best.kind === 'islet' ? 26 : 17) && Math.abs(p.fs) < 4) { board(best, p); if (bd < 8) rate(p, 3, 'Right alongside'); else if (bd < 12) rate(p, 2, 'Good throw'); else rate(p, 1, 'Long throw!'); }
-    else if (inp.w) sfx.boop();
+  }
+  // ---- the water cannon: stopped (or nearly) close enough to a fire, the crew plays it on the flames until it is out
+  const was = p.spray;
+  p.spray = null;
+  if (ready && Math.abs(p.fs) < 4.5 && !p.cargo.length && !p.incoming) for (const an of waiting) {
+    if (burning(an) && an.fire.shore && Math.hypot(an.fire.x - p.pos.x, an.fire.z - p.pos.z) < 52) { p.spray = an; break; }
+  }
+  if (p.spray) {
+    const F = p.spray.fire;
+    if (!was) sfx.splash();
+    F.heat -= dt / 2.4; F.hiss = Math.max(F.hiss, 0.5);
+    p.sprayT = (p.sprayT || 0) - dt;
+    if (p.sprayT <= 0) { p.sprayT = 0.9; sfx.hiss(0.45); }
+    // (from the monitor on the foredeck, in a high arc)
+    waterArc(V.set(p.pos.x + nfx * 2.6, p.pos.y + 2.4, p.pos.z + nfz * 2.6), F, 1.35, dt * 160, 0.2);
+    if (F.heat <= 0) fireOut(p.spray, p);
   }
   p.dropCd -= dt;
   if (p.cargo.length && dockD < (p.pro ? 14 : 30) && Math.abs(p.fs) < (p.pro ? 2.5 : 10) && p.dropCd <= 0) { if (p.pro) rate(p, dockD < 8 ? 3 : 2, dockD < 8 ? 'Neat docking' : 'Docked'); deliverOne(p); p.dropCd = 0.45; }
-  if (!p.parked && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; sfx.engineStop(); }
+  if (!p.parked && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; }
   p.mode = p.target || p.incoming ? 'pickup' : (p.cargo.length && dockD < 120 ? 'deliver' : 'idle');
 
   // how it sits: bow lifts as it gets on the plane, leans into turns, rides the swell fore-and-aft and side-to-side
@@ -881,7 +933,7 @@ function updateBoat(p, dt, t) {
   p.cargo.forEach((an, i) => { if (an.state !== 'riding') return; an.model.position.y = SLOTS[i][1] + Math.abs(Math.sin(t * 5 + an.phase)) * 0.12; an.model.rotation.z = Math.sin(t * 4 + an.phase) * 0.08; });
   p.hornCd -= dt;
   if (inp.horn && p.hornCd <= 0) {
-    p.hornCd = 0.45; sfx.heliHorn(p.idx);
+    p.hornCd = 0.45; sfx.honk(p.vehicle, p.idx);
     fx.emoji('\u{1F3B5}', p.pos.x, p.pos.y + 4, p.pos.z, 2.2);
     for (const an of waiting) if (an.pos.distanceTo(p.pos) < 90) an.excite = 2.5;
   }
@@ -891,8 +943,12 @@ function updateBoat(p, dt, t) {
 // ================================================================= winch + basket
 function updateWinch(p, dt, t) {
   p.dropCd -= dt;
+  // fighting a fire (and nobody aboard): the bucket is on the cable instead of the basket
+  const bucket = !p.cargo.length && !p.incoming && (!!p.fireJob || p.water > 0);
+  p.cage.visible = !bucket; p.bucket.visible = bucket;
+  if (bucket) { const w = p.bucket.userData.water; w.visible = p.water > 0.03; w.position.y = 0.25 + 1.3 * p.water; }
   // door slides open and the boom swings out whenever there is someone to fetch or carry
-  const needHoist = !p.grounded && (p.target || p.incoming > 0 || p.cargo.length > 0 || (p.pro && (p.input.w || p.winch > 0.1)));
+  const needHoist = !p.grounded && (p.target || bucket || p.incoming > 0 || p.cargo.length > 0 || (p.pro && (p.input.w || p.winch > 0.1)));
   const was = p.hoist;
   p.hoist = clamp(p.hoist + (needHoist ? dt / 0.55 : -dt / 0.9), 0, 1);
   if (needHoist && was === 0) sfx.door();
@@ -912,10 +968,10 @@ function updateWinch(p, dt, t) {
   // choose who to help: the nearest friend in reach. Once chosen we stick with them until they're aboard.
   if (p.target && (p.target.state !== 'waiting' || Math.hypot(p.target.pos.x - p.pos.x, p.target.pos.z - p.pos.z) > 48)) { if (p.target.claimed === p) p.target.claimed = null; p.target = null; }
   if (p.pro) { if (p.target) { p.target.claimed = null; p.target = null; } }
-  else if (!p.target && !p.parked && p.cargo.length + p.incoming < MAX_CARGO) {
+  else if (!p.target && !p.parked && !bucket && p.cargo.length + p.incoming < MAX_CARGO) {
     let bd = 20;
     for (const an of waiting) {
-      if (an.kind === 'camp' || (an.claimed && an.claimed !== p)) continue;      // (campers are fetched by landing, not by basket)
+      if (an.kind === 'camp' || an.fire || (an.claimed && an.claimed !== p)) continue;      // (campers are fetched by landing, not by basket)
       const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
       if (d < bd && hookY - an.pos.y > 2) { bd = d; p.target = an; }
     }
@@ -931,6 +987,11 @@ function updateWinch(p, dt, t) {
     if (p.incoming === 0) p.winch = clamp(p.winch + (p.input.w && ready ? 7 : -9) * dt, 0, 60);
     if (p.incoming > 0) om = 0;
     else { ty -= p.winch; om = 12 / (1 + p.winch * 0.13); if (p.input.w) mode = 'pickup'; }
+  } else if (bucket && ready) {
+    // empty and over the sea, going slowly: the bucket goes down into the water; otherwise it hangs a little below
+    surfaceAt(p.hook.x, p.hook.z, t, SURF2);
+    if (p.water < 1 && !SURF2.land && Math.hypot(p.vel.x, p.vel.z) < 9) { mode = 'dip'; ty = SURF2.y - 1.0; om = 4.5; }
+    else { ty -= 2.5; om = 6; }
   } else if (p.target && ready) {
     mode = 'pickup'; om = 5.5;
     tx = p.target.pos.x; ty = p.target.pos.y + 0.1; tz = p.target.pos.z;
@@ -947,7 +1008,7 @@ function updateWinch(p, dt, t) {
     b.addScaledVector(bv, dt);
   } else bv.set(0, 0, 0);
   const bs = surfaceAt(b.x, b.z, t, SURF2);
-  const bFloor = bs.y + (bs.land ? 0.05 : -0.3);
+  const bFloor = bs.y + (bs.land ? 0.05 : bucket && p.water < 1 ? -1.3 : -0.3);
   if (b.y < bFloor) { b.y = bFloor; bv.y = Math.max(bv.y, 0); if (p.pro) p.winch = Math.min(p.winch, hookY - 0.6 - BASKET_TOP - bFloor + 0.4); }
   if (b.y > hookY - 0.6 - BASKET_TOP) b.y = hookY - 0.6 - BASKET_TOP;
   p.ropeLen = Math.max(0.6, hookY - b.y - BASKET_TOP);
@@ -966,10 +1027,23 @@ function updateWinch(p, dt, t) {
   p.rope.scale.set(1, Math.max(rl, 0.01), 1);
   if (rl > 0.01) p.rope.quaternion.setFromUnitVectors(UP, V2.sub(V).multiplyScalar(1 / rl));
 
+  // the bucket fills while it is under water, and empties itself once it is over a fire
+  if (bucket) {
+    if (p.water < 1 && !bs.land && b.y < bs.y + 0.1) {
+      p.water = Math.min(1, p.water + dt / 0.9);
+      if (Math.random() < 0.5) fx.splash(b.x, bs.y, b.z, 3, 0.5);
+      if (p.water >= 1) { waterAboard(p); bv.y -= 2.5; fx.splash(b.x, bs.y, b.z, 22, 0.9); }
+    }
+    if (p.water >= 1) for (const an of waiting) {
+      if (!burning(an)) continue;
+      const F = an.fire;
+      if (Math.hypot(b.x - F.x, b.z - F.z) < F.r + 3.5 && b.y < F.y + 45 && b.y > F.y - 2) { dump(p, an, V.set(b.x, b.y + 0.4, b.z)); bv.y += 3; break; }
+    }
+  }
   // friend hops aboard as soon as the basket is close
   if (p.target && Math.hypot(b.x - p.target.pos.x, b.z - p.target.pos.z) < 3.2 && Math.abs(b.y - p.target.pos.y) < 2.6) { board(p.target, p); p.target = null; }
-  if (p.pro && p.winch > 1 && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
-    if (an.kind === 'camp' || Math.hypot(b.x - an.pos.x, b.z - an.pos.z) > 3.2 || Math.abs(b.y - an.pos.y) > 2.6) continue;
+  if (p.pro && p.winch > 1 && !bucket && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
+    if (an.kind === 'camp' || an.fire || Math.hypot(b.x - an.pos.x, b.z - an.pos.z) > 3.2 || Math.abs(b.y - an.pos.y) > 2.6) continue;
     const sp = Math.hypot(p.vel.x, p.vel.z);
     board(an, p);
     if (sp < 1.5) rate(p, 3, 'Rock-steady hover'); else if (sp < 4) rate(p, 2, 'Nice pickup'); else rate(p, 1, 'Snatched it!');
@@ -1068,6 +1142,8 @@ function campSpot(site) {
 }
 const pickOf = list => (list && list.length ? list[(Math.random() * list.length) | 0] : null);
 function spawnAnimal(near) {
+  // (if again and again no fire can be laid there that anyone flying now can reach, one breaks out in the home bay instead)
+  if (game.fire) { if (spawnFire(game.zone)) game.fireMiss = 0; else if (++game.fireMiss >= 3 && spawnFire(ZONES[0])) game.fireMiss = 0; return; }
   if (game.zone.id !== 'home') { spawnInZone(game.zone); return; }
   const maxD = near ? 130 : HOME_R - 20;
   const heliUp = activePlayers().some(p => p.vehicle === 'heli');
@@ -1105,7 +1181,7 @@ function spawnAnimal(near) {
   const an = addWaiting(kind, spot.x, spot.z, site ? { site } : null);
   if (site) site.busy = true;
   fx.emoji('\u2757', an.pos.x, an.pos.y + 5, an.pos.z, 3.5);
-  sfx.mayday();
+  sfx.newFriend();
 }
 // What can happen in each far zone, and who can help: 'heli' only the helicopter's basket or a landing, 'fly' the
 // helicopter or the seaplane (the forest's lake, which no boat can get to), 'all' anybody.
@@ -1159,7 +1235,7 @@ function spawnInZone(Z) {
     const an = addWaiting(c.kind, s.x, s.z, extra);
     if (s.site) s.site.busy = true;
     fx.emoji('\u2757', an.pos.x, an.pos.y + 5, an.pos.z, 3.5);
-    sfx.mayday();
+    sfx.newFriend();
     return;
   }
 }
@@ -1169,7 +1245,7 @@ function spawnWreck() {
   const B = world.wreck;
   for (let i = 0; i < 2; i++) { addWaiting('wreck', B.x, B.z, { boat: B, off: WRECK_SPOTS[i] }); B.crew++; }
   fx.emoji('\u{1F198}', B.x, 12, B.z, 4.5);
-  sfx.mayday();
+  sfx.newFriend();
   return true;
 }
 // A fishing boat broken down and smoking, with her crew waiting on deck to be winched off one by one.
@@ -1192,10 +1268,10 @@ function spawnBoat(maxD, list) {
   const n = 2 + (Math.random() < 0.5 ? 1 : 0);
   for (let i = 0; i < n; i++) { addWaiting('deck', B.x, B.z, { boat: B, off: DECK_SPOTS[i] }); B.crew++; }
   fx.emoji('\u{1F198}', B.x, 12, B.z, 4.5);
-  sfx.mayday();
+  sfx.newFriend();
   return true;
 }
-function boatFriendOff(B) { if (--B.crew <= 0 && !B.wreck) { B.leaving = 0.01; sfx.horn(); fx.emoji('\u{1F44B}', B.x, 12, B.z, 4); } }
+function boatFriendOff(B) { if (--B.crew <= 0 && !B.wreck) { B.leaving = 0.01; sfx.shipHorn(); fx.emoji('\u{1F44B}', B.x, 12, B.z, 4); } }
 function updateBoatRescue(dt, t) {
   const B = game.boat; if (!B) return;
   if (B.leaving) {
@@ -1230,6 +1306,183 @@ function updateBoatRescue(dt, t) {
   B.y = h0 - 0.15;
   B.mesh.position.set(B.x, B.y, B.z);
   B.mesh.rotation.set(-(hf - h0) / 7 * 0.8, B.yaw, (hs - h0) / 3 * 0.6);
+}
+// ================================================================= fires
+// A fire in the trees at the edge of an island landing site, with a friend waiting on the site, or on a rooftop in
+// Harbour Town with a friend on the roof next door. The helicopter dips its bucket in the sea and drops it on the
+// flames; the seaplane skims a tankful off the sea and drops it from overhead; the boat comes in close below and plays
+// its water cannon on it. When the last of it is out, the friend is safe where they are and counts as helped.
+const fading = [];
+const jit = (a = 1) => (Math.random() - 0.5) * 2 * a;
+function openWater(x, z, clear) {
+  if (Math.hypot(x, z) > WORLD_R - 45 || terrainHeight(x, z) > -2.5 || rockNear(x, z, clear)) return false;
+  for (let k = 0; k < 6; k++) { const a = k * 1.047; if (terrainHeight(x + Math.cos(a) * clear, z + Math.sin(a) * clear) > -1.5) return false; }
+  return true;
+}
+// the nearest open water between `from` and `to` metres from (x, z); `skip` turns down some of it
+function nearestWater(x, z, from, to, clear, skip) {
+  for (let r = from; r <= to; r += 5) for (let k = 0; k < 24; k++) {
+    const a = k * 0.2618 + r * 0.37, wx = x + Math.cos(a) * r, wz = z + Math.sin(a) * r;
+    if (openWater(wx, wz, clear) && !(skip && skip(wx, wz))) return { x: wx, z: wz };
+  }
+  return null;
+}
+const inLagoon = (x, z) => Math.hypot(x - LAGOON.x, z - LAGOON.z) < LAGOON.r + 8;
+const inLake = (x, z) => Math.hypot(x - LAKE.x, z - LAKE.z) < LAKE.r + 10;
+function makeFire(x, z, y, r) {
+  // where to fill up (not in the atoll's lagoon, which the seaplane cannot get into), and where the boat can lie to
+  // reach it with the cannon (not on the forest's lake, which no boat can get to)
+  const dip = nearestWater(x, z, 14, 240, 12, inLagoon);
+  if (!dip) return null;
+  const shore = nearestWater(x, z, 10, 40, 6, (wx, wz) => inLake(wx, wz));
+  // (the seaplane needs open sea with room to land, skim and take off again: not the forest's little lake)
+  const scoop = nearestWater(x, z, 30, 320, 24, (wx, wz) => inLagoon(wx, wz) || inLake(wx, wz));
+  return { x, y, z, r, heat: 3, max: 3, vis: 0, out: false, hiss: 0, acc: 0, smokeT: 0, dip, shore, scoop };
+}
+// in the trees at the edge of a landing site, the friend on the far side of the site from it
+function siteFire(s, wantShore) {
+  const a0 = Math.random() * 6.283;
+  let best = null, bs = -1e9;
+  for (let i = 0; i < 10; i++) {
+    const a = a0 + i * 0.628, d = s.r + 6.5, x = s.x + Math.cos(a) * d, z = s.z + Math.sin(a) * d, g = terrainHeight(x, z);
+    if (g < 1) continue;
+    const c = canopyAt(x, z), sc = Math.min(c, 6) + (nearestWater(x, z, 10, 40, 6) ? (wantShore ? 20 : 4) : 0) + Math.random() * 2;      // (where the boat's cannon can reach it, when a boat is out)
+    if (sc > bs) { bs = sc; best = { a, x, z, y: g + Math.max(c - 2, 0.4) }; }
+  }
+  if (!best) return null;
+  const F = makeFire(best.x, best.z, best.y, 5.5);
+  if (!F) return null;
+  const fd = Math.min(7.5, s.r - 1.2);
+  return { kind: 'camp', x: s.x - Math.cos(best.a) * fd, z: s.z - Math.sin(best.a) * fd, extra: { site: s, fire: F } };
+}
+function roofFire() {
+  const R = world.roofs, r1 = pickOf(R);
+  if (!r1) return null;
+  const next = R.filter(q => { const d = Math.hypot(q.x - r1.x, q.z - r1.z); return d > 9 && d < 26; });
+  if (!next.length) return null;
+  const r2 = pickOf(next), F = makeFire(r1.x, r1.z, r1.y + 0.5, 4.2);
+  return F && { kind: 'perch', x: r2.x, z: r2.z, extra: { perchY: r2.y, fire: F } };
+}
+function spawnFire(Z) {
+  const act = activePlayers(), makers = [];
+  const wantShore = act.some(p => p.vehicle === 'boat');
+  for (const s of SITES) if (s.zone === Z.id && !s.busy && !s.block) makers.push(() => siteFire(s, wantShore));
+  if (Z.id === 'harbour') for (let i = 0; i < 4; i++) makers.push(roofFire);
+  for (let tries = 0; tries < 6 && makers.length; tries++) {
+    const r = makers.splice((Math.random() * makers.length) | 0, 1)[0]();
+    if (!r || !act.some(p => canFight(p, r.extra.fire))) continue;
+    if (waiting.some(a => Math.hypot(a.pos.x - r.x, a.pos.z - r.z) < 30)) continue;
+    const an = addWaiting(r.kind, r.x, r.z, r.extra);
+    if (r.extra.site) r.extra.site.busy = true;
+    an.beam.material.color.set(0xff7a3a);
+    fx.emoji('\u{1F525}', r.extra.fire.x, r.extra.fire.y + 6, r.extra.fire.z, 4.5);
+    sfx.newFriend();
+    return true;
+  }
+  return false;
+}
+// who this pilot is fighting a fire for: the nearest friend in need, when that is someone with a fire beside them
+function updateFireJob(p) {
+  const j = p.fireJob;
+  if (j && (!burning(j) || j.state !== 'waiting' || p.cargo.length || p.incoming || !canFight(p, j.fire))) p.fireJob = null;
+  if (!p.fireJob && !p.cargo.length && !p.incoming && !p.target && !p.pickup) {
+    const g = nearestFor(p);
+    if (g && burning(g.an)) p.fireJob = g.an;
+  }
+}
+function waterAboard(p) { sfx.splash(); }
+// water from s (a bucket, a tank, a cannon) in an arc that comes down on the fire about tau seconds later
+function waterArc(s, F, tau, n, spread) {
+  F.acc2 = (F.acc2 || 0) + n;
+  while (F.acc2 > 1) {
+    F.acc2 -= 1;
+    const tx = F.x + jit(F.r * 0.6), tz = F.z + jit(F.r * 0.6), tt = tau * (0.85 + Math.random() * 0.3);
+    fx.emit(s.x + jit(spread), s.y + jit(spread * 0.5), s.z + jit(spread), (tx - s.x) / tt, (F.y - s.y) / tt + 4.5 * tt, (tz - s.z) / tt, 0.82, 0.92, 1, 0.7, 0.3 + Math.random() * 0.45, tt * 1.05, 9, 0);
+  }
+}
+const pours = [];
+function dump(p, an, src) {
+  const F = an.fire;
+  p.water = 0;
+  pours.push({ s: src.clone(), F, an, p, t: 0, tau: Math.max(0.5, Math.sqrt(Math.max(0, src.y - F.y) / 4.5)) });
+  sfx.splash();
+}
+function fireOut(an, p) {
+  const F = an.fire;
+  F.out = true; F.t = 0; fading.push(F);
+  const i = waiting.indexOf(an); if (i >= 0) waiting.splice(i, 1);
+  scene.remove(an.beam);
+  if (an.site) an.site.busy = false;
+  for (const q of players) { if (q.fireJob === an) q.fireJob = null; if (q.target === an) q.target = null; if (q.pickup === an) q.pickup = null; }
+  // they are safe where they are: a cheer, and they count as helped
+  fx.hearts(an.pos.x, an.pos.y + 3, an.pos.z, 6); fx.confetti(an.pos.x, an.pos.y + 2.5, an.pos.z, 70); fx.sparkle(F.x, F.y + 2, F.z, 30);
+  animalVoice(an.type.id, true); sfx.chime(); sfx.hiss(1);
+  an.state = 'cheer'; an.t = 0; hoppers.push(an);
+  p.rescued++; game.rescued++; game.total++; game.saved.push(an.type.e);
+  if (game.rescued >= game.goal && game.celebrate <= 0) missionComplete();
+  syncHud();
+}
+function steam(F, dt, k) {
+  F.steamAcc = (F.steamAcc || 0) + dt * 30 * k;
+  while (F.steamAcc > 1) {
+    F.steamAcc -= 1;
+    const g = 0.78 + Math.random() * 0.15;
+    fx.emit(F.x + jit(F.r * 0.7), F.y + Math.random(), F.z + jit(F.r * 0.7), WIND.x * 0.3 + jit(0.8), 3 + Math.random() * 3, WIND.z * 0.3 + jit(0.8), g, g, g, 0.45 * Math.min(1, k + 0.2), -(2.5 + Math.random() * 2.5), 2.2 + Math.random() * 1.5, -1.2, 0.5);
+  }
+}
+let fireNear = 1e9;
+function updateFires(dt, t) {
+  let near = 1e9;
+  fireNear = 1e9;
+  for (const an of waiting) {
+    const F = an.fire; if (!F) continue;
+    F.vis += (Math.max(F.heat, 0) / F.max - F.vis) * damp(F.vis < 0.3 && F.heat > 0 ? 0.7 : 2, dt);
+    near = 1e9;
+    for (const p of activePlayers()) near = Math.min(near, Math.hypot(p.pos.x - F.x, p.pos.z - F.z));
+    if (near > 750) continue;
+    windAt(F.x, F.z, t, WIND);
+    const k = 0.25 + 0.75 * F.vis;
+    // flames: bright (they bloom at night), rising and licking downwind
+    F.acc += dt * 150 * k * (near < 260 ? 1 : 0.35);
+    while (F.acc > 1) {
+      F.acc -= 1;
+      const a = Math.random() * 6.283, d = Math.sqrt(Math.random()) * F.r * (0.6 + 0.4 * k), h = Math.random(), core = 1 - d / F.r;
+      // (taller and whiter in the middle, low and red at the edges)
+      fx.emit(F.x + Math.cos(a) * d, F.y - 0.5 + Math.random(), F.z + Math.sin(a) * d, WIND.x * 0.2 + jit(0.5), (3 + Math.random() * 5 * core) * (0.5 + 0.5 * k), WIND.z * 0.2 + jit(0.5),
+        4 + h * 3 + core * 2, 1 + h * 1.4 + core * 1.2, 0.15 + h * 0.35 * core, 0.85, (1.8 + Math.random() * 2.2) * (0.5 + 0.5 * k), 0.6 + Math.random() * 0.7 * (0.4 + core), -2.5, 1.2);
+    }
+    // (and a dull red glow low down among it, so it reads as a body of fire rather than sparks)
+    if (Math.random() < dt * 14 * k) fx.emit(F.x + jit(F.r * 0.5), F.y + 0.5, F.z + jit(F.r * 0.5), 0, 0.6, 0, 2.2, 0.55, 0.12, 0.5, -(F.r * 0.9), 1.2, -0.3, 1);
+    // a tall column of smoke, to find it by from far off
+    F.smokeT -= dt;
+    if (F.smokeT <= 0) {
+      F.smokeT = 0.1 / k;
+      const g = 0.08 + Math.random() * 0.07;
+      fx.emit(F.x + jit(F.r * 0.5), F.y + 2.5, F.z + jit(F.r * 0.5), WIND.x * 0.35 + jit(0.5), 3.2 + Math.random() * 1.5, WIND.z * 0.35 + jit(0.5), g, g * 0.97, g * 0.95, 0.45 * k, -(3.5 + Math.random() * 3), 6 + Math.random() * 3, -0.45, 0.22);
+    }
+    if (F.hiss > 0) { F.hiss -= dt; steam(F, dt, Math.min(1, F.hiss)); }
+    fireNear = Math.min(fireNear, near);
+  }
+  // water on its way down: it puts out a third of the fire when it lands
+  for (let i = pours.length - 1; i >= 0; i--) {
+    const w = pours[i]; w.t += dt;
+    if (w.t < 0.55) waterArc(w.s, w.F, w.tau, dt * 160, 1);
+    if (w.t >= w.tau && !w.hit) {
+      w.hit = true;
+      const F = w.F;
+      if (!F.out) {
+        F.heat -= w.p.vehicle === 'plane' ? 1.5 : 1; F.hiss = 1.8; sfx.hiss(0.8);      // (a water bomber's tank holds more than a bucket)
+        if (F.heat <= 0.01) { if (waiting.includes(w.an)) fireOut(w.an, w.p); }
+      }
+    }
+    if (w.t > w.tau + 0.2) pours.splice(i, 1);
+  }
+  // put out: steam, thinning away
+  for (let i = fading.length - 1; i >= 0; i--) {
+    const F = fading[i]; F.t += dt;
+    if (F.t > 5) { fading.splice(i, 1); continue; }
+    steam(F, dt, 1 - F.t / 5);
+  }
 }
 const HIDDEN = new THREE.MeshBasicMaterial({ visible: false });
 // an ice floe: a thick slab of old ice, ragged round its edge
@@ -1347,8 +1600,8 @@ function placeWaiting(an, t, dt) {
   an.beam.visible = fade > 0.01;
   // calling out
   an.exciteCd -= dt; an.callT -= dt;
-  if (nd < 45 && an.exciteCd <= 0) { an.exciteCd = 4; fx.emoji('💕', x, an.pos.y + 4.5, z, 2.4); animalVoice(an.type.id, false); }
-  if (nd >= 45 && an.callT <= 0) { an.callT = 7 + Math.random() * 7; fx.emoji('❗', x, an.pos.y + 4.5, z, 3); if (nd < 160) animalVoice(an.type.id, false); }
+  if (nd < 45 && an.exciteCd <= 0) { an.exciteCd = 4; fx.emoji('💕', x, an.pos.y + 4.5, z, 2.4); animalVoice(an.type.id, false, 1 - nd / 60); }
+  if (nd >= 45 && an.callT <= 0) { an.callT = 7 + Math.random() * 7; fx.emoji('❗', x, an.pos.y + 4.5, z, 3); if (nd < 160) animalVoice(an.type.id, false, 0.6 * (1 - nd / 170)); }
 }
 function seatRiders(p) {
   p.cargo.forEach((an, i) => {
@@ -1377,7 +1630,7 @@ function board(an, p) {
   if (wet && p.vehicle !== 'heli') { fx.splash(an.pos.x, an.pos.y, an.pos.z, 16); sfx.splash(); }
   p.incoming++;
   hoppers.push(an);
-  animalVoice(an.type.id, true); sfx.pop();
+  animalVoice(an.type.id, true);
   game.spawnT = Math.min(game.spawnT, 2 + Math.random() * 2);
   syncHud();
 }
@@ -1499,7 +1752,7 @@ function deliverOne(p) {
   { const d = Math.hypot(an.from.x, an.from.z); an.hdur = 0.95 + Math.max(0, d - 30) * 0.02; an.harc = 5 + Math.max(0, d - 30) * 0.22; }
   an.model.scale.setScalar(1.3); an.model.rotation.set(0, 0, 0);
   hoppers.push(an);
-  sfx.arpeggio();
+  sfx.chime();
 }
 function updateHoppers(dt, t) {
   for (let i = hoppers.length - 1; i >= 0; i--) {
@@ -1544,6 +1797,16 @@ function updateResidents(dt, t) {
 function updateLeaving(dt) {
   for (let i = hoppers.length - 1; i >= 0; i--) {
     const an = hoppers[i];
+    if (an.state === 'cheer') {
+      // (their fire is out: big happy jumps on the spot, a spin, then off home)
+      an.t += dt;
+      const k = Math.min(an.t / 3.2, 1);
+      an.model.position.y = an.pos.y + Math.abs(Math.sin(an.t * 6)) * 1.3 * (1 - k * 0.5);
+      an.model.rotation.y += dt * 4;
+      if (an.t > 3.2) an.model.scale.setScalar(Math.max(0.01, 1.7 * (1 - (an.t - 3.2) / 1)));
+      if (an.t >= 4.2) { scene.remove(an.model); hoppers.splice(i, 1); }
+      continue;
+    }
     if (an.state === 'bye') {
       // (a friend nobody can reach now heads off home: a happy hop on the spot as they shrink away)
       an.t += dt;
@@ -1569,13 +1832,14 @@ function banner(title, sub, secs = 3.5) {
   bannerEl.classList.add('show'); bannerT = secs;
 }
 function missionComplete() {
-  game.celebrate = 8; game.fireT = 0;
-  const two = activePlayers().length > 1, Z = game.zone;
-  banner(Z.icon + ' Hooray! 🎉', two ? 'Great teamwork!  🔴 ' + players[0].rescued + '   🔵 ' + players[1].rescued : 'Everyone in ' + Z.name + ' is safe', 6);
-  sfx.fanfare();
-  // the zone's sticker goes in the book, and its picture showers down round every pilot
-  addSticker(Z.id);
-  for (const p of activePlayers()) for (let i = 0; i < 14; i++) setTimeout(() => fx.emoji(Z.icon, p.pos.x + (Math.random() - 0.5) * 30, p.pos.y + 6 + Math.random() * 8, p.pos.z + (Math.random() - 0.5) * 30, 3 + Math.random() * 2), i * 180);
+  game.celebrate = 8; game.fireT = 0.9;
+  const two = activePlayers().length > 1, Z = game.zone, icon = game.fire ? FIRE_ICON : Z.icon;
+  banner(icon + ' Hooray! 🎉', two ? 'Great teamwork!  🔴 ' + players[0].rescued + '   🔵 ' + players[1].rescued : game.fire ? 'All the fires are out' : 'Everyone in ' + Z.name + ' is safe', 6);
+  // a little tune, then the cheering, then the fireworks
+  sfx.levelDone(); sfx.cheer(1.1);
+  // the mission's sticker goes in the book, and its picture showers down round every pilot
+  addSticker(game.fire ? 'fire' : Z.id);
+  for (const p of activePlayers()) for (let i = 0; i < 14; i++) setTimeout(() => fx.emoji(icon, p.pos.x + (Math.random() - 0.5) * 30, p.pos.y + 6 + Math.random() * 8, p.pos.z + (Math.random() - 0.5) * 30, 3 + Math.random() * 2), i * 180);
   fx.confetti(0, BASE_Y + 8, 0, 160);
 }
 // Friends left waiting somewhere nobody is heading any more wave and go home by themselves (reuses the hoppers list).
@@ -1588,22 +1852,26 @@ function releaseWaiting(test) {
     if (an.prop) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }
     if (an.site) an.site.busy = false;
     if (an.boat) boatFriendOff(an.boat);
-    for (const p of players) { if (p.pickup === an) p.pickup = null; if (p.target === an) p.target = null; }
+    if (an.fire && !an.fire.out) { an.fire.out = true; an.fire.t = 2; fading.push(an.fire); }
+    for (const p of players) { if (p.pickup === an) p.pickup = null; if (p.target === an) p.target = null; if (p.fireJob === an) p.fireJob = null; }
     an.claimed = null; an.state = 'bye'; an.t = 0;
     fx.emoji('\u{1F44B}', an.pos.x, an.pos.y + 4.5, an.pos.z, 3);
     hoppers.push(an);
   }
 }
 function setZone(m) {
-  game.mission = m; game.zone = zoneFor(m); game.rescued = 0; game.goal = goalFor(m); game.saved = [];
+  game.mission = m; game.zone = zoneFor(m); game.fire = missionFor(m).fire; game.fireMiss = 0; game.rescued = 0; game.goal = goalFor(m); game.saved = [];
   releaseWaiting(an => zoneOf(an.pos.x, an.pos.z) !== game.zone);
   life.setZone(game.zone);
   placeZoneBeam();
   syncHud();
 }
+const FIRE_ICON = '\u{1F692}';
 function zoneBanner() {
   const Z = game.zone, pro = activePlayers().some(p => p.pro);
-  banner(Z.icon + ' ' + Z.name, (pro ? world.preset.icon + WEATHERS[weather.idx].icon + ' ' + WEATHERS[weather.idx].name + ' — ' : '') + 'Help ' + game.goal + ' friends' + (Z.id === 'home' ? ' and bring them home' : ' and fly them home'));
+  const what = game.fire ? 'Put out ' + game.goal + ' fires' : 'Help ' + game.goal + ' friends' + (Z.id === 'home' ? ' and bring them home' : ' and fly them home');
+  banner(game.fire ? FIRE_ICON + ' ' + Z.name + ' fire!' : Z.icon + ' ' + Z.name, (pro ? world.preset.icon + WEATHERS[weather.idx].icon + ' ' + WEATHERS[weather.idx].name + ' — ' : '') + what);
+  sfx.levelStart();
 }
 // (the screen fades out, the next mission is set up behind it, and it fades back in: on game time, so pausing waits)
 function nextMission() { $('#fade').style.opacity = 1; game.switchT = 0.75; }
@@ -1643,7 +1911,8 @@ function addSticker(id) {
   showStickers();
 }
 function showStickers() {
-  $('#stickers').innerHTML = MISSION_ZONES.map(Z => '<span class="' + (stickers.has(Z.id) ? 'got' : '') + '" title="' + Z.name + '">' + Z.icon + '</span>').join('');
+  $('#stickers').innerHTML = [...MISSION_ZONES.map(Z => [Z.id, Z.name, Z.icon]), ['fire', 'Fire missions', FIRE_ICON]]
+    .map(([id, name, icon]) => '<span class="' + (stickers.has(id) ? 'got' : '') + '" title="' + name + '">' + icon + '</span>').join('');
 }
 showStickers();
 function setPreset(i) {
@@ -1665,7 +1934,7 @@ function cyclePreset() { setPreset((game.presetIdx + 1) % PRESETS.length); banne
 // The mission's progress, for pilots who cannot read yet: the zone's picture, then a ring for each friend to find, which
 // fills with that friend's face (with a bounce) as they get home. Grown-up pilots get the numbers as well.
 function syncHud() {
-  $('#mIcon').textContent = game.zone.icon;
+  $('#mIcon').textContent = game.fire ? FIRE_ICON : game.zone.icon;
   const row = $('#mSlots');
   while (row.children.length < game.goal) row.appendChild(document.createElement('span'));
   while (row.children.length > game.goal) row.lastChild.remove();
@@ -1700,6 +1969,11 @@ function hintFor(p) {
   if (!p.pro) return '';
   const key = (a, b) => (p.idx && !solo ? b : a);
   const full = p.cargo.length >= MAX_CARGO || (p.cargo.length && !waiting.length);
+  if (p.fireJob) {
+    if (p.vehicle === 'heli') return p.water < 1 ? 'Fire! Hover low over the sea and hold ' + key('R', 'Ctrl') + ' to fill the bucket' : 'Fly over the fire — the bucket empties itself';
+    if (p.vehicle === 'plane') return p.water < 1 ? 'Fire! Skim along the sea to scoop up water' : 'Fly low over the fire to drop it';
+    return 'Fire! Stop near the shore below it and the cannon sprays it';
+  }
   if (p.vehicle === 'heli') {
     if (p.grounded) return p.incoming ? 'Climbing aboard…' : 'Hold ' + key('Space', 'Enter') + ' to lift off';
     if (full) return 'Full — land at the base, or winch them down by the paddock';
@@ -1741,7 +2015,7 @@ function drawRadar(p) {
   // animals
   const pulse = 0.5 + 0.5 * Math.sin(game.t * 5);
   for (const a of waiting) plot(a.pos.x, a.pos.z, (x, y, edge) => {
-    g.fillStyle = '#ffd23c'; g.beginPath(); g.arc(x, y, edge ? 8 : 10, 0, 7); g.fill();
+    g.fillStyle = burning(a) ? '#ff5a2a' : '#ffd23c'; g.beginPath(); g.arc(x, y, edge ? 8 : 10, 0, 7); g.fill();
     g.strokeStyle = 'rgba(255,210,60,' + (0.7 - pulse * 0.6) + ')'; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 12 + pulse * 12, 0, 7); g.stroke();
   });
   // the other pilot
@@ -1810,7 +2084,7 @@ function setP2(on, quiet) {
   if (on === p.active) return;
   if (on) {
     p.active = true; parkPlayer(p); showVehicle(p, true);
-    if (!quiet) { fx.confetti(p.pos.x, p.pos.y + 3, p.pos.z, 80); sfx.pop(); banner('Blue pilot joined! 🔵', 'Arrow keys to fly', 3); }
+    if (!quiet) { fx.confetti(p.pos.x, p.pos.y + 3, p.pos.z, 80); sfx.chime(); banner('Blue pilot joined! 🔵', 'Arrow keys to fly', 3); }
   } else {
     p.target = null; while (p.cargo.length) deliverOne(p);
     p.active = false; showVehicle(p, false);
@@ -2082,7 +2356,7 @@ const debug = {
   boat: () => spawnBoat(400, world.spawn.sea),
   wreck: () => spawnWreck(),
   // start the mission in a zone ('forest', 'reef', ...), and put the red pilot there
-  zone(id) { setZone(MISSION_ZONES.findIndex(Z => Z.id === id) + 1); },
+  zone(id, fire = false) { setZone(MISSIONS.findIndex(q => q.zone.id === id && q.fire === fire) + 1); },
   goto(id, d = 70) {
     const Z = ZONES.find(q => q.id === id), p = players[0], l = Math.hypot(Z.x, Z.z) || 1;
     p.pos.set(Z.x - Z.x / l * (Z.r + d), p.vehicle === 'heli' ? 30 : p.pos.y, Z.z - Z.z / l * (Z.r + d));
@@ -2098,6 +2372,8 @@ const debug = {
     return addWaiting(kind, c.x, c.z);
   },
   camp(i) { const site = SITES[i], c = campSpot(site); site.busy = true; return addWaiting('camp', c.x, c.z, { site }); },
+  // a fire in a zone ('home', 'forest', 'harbour', ...)
+  fire(id = 'home') { return spawnFire(ZONES.find(Z => Z.id === id)); },
   run(seconds = 0.1) { for (let i = 0; i < seconds * 30; i++) { last = performance.now() - 33; tick(performance.now()); } },
   // milliseconds a frame really takes to draw (reading a pixel back makes the graphics card finish first)
   time(frames = 40) {
@@ -2146,7 +2422,7 @@ function tick(now) {
         const push = (13 - d) * 6;
         if (!a.grounded) a.vel.addScaledVector(V, -push * dt * 4); if (!b.grounded) b.vel.addScaledVector(V, push * dt * 4);
         if (game.boop <= 0 && !a.grounded && !b.grounded) {
-          game.boop = 3; sfx.boop(); V.copy(a.pos).add(b.pos).multiplyScalar(0.5);
+          game.boop = 3; sfx.laugh(); V.copy(a.pos).add(b.pos).multiplyScalar(0.5);
           fx.hearts(V.x, V.y + 2, V.z, 6); fx.emoji('🙌', V.x, V.y + 4, V.z, 4);
         }
       }
@@ -2157,6 +2433,7 @@ function tick(now) {
       if (waiting.length < maxWaiting() && game.spawnT <= 0 && game.celebrate <= 0) { spawnAnimal(false); game.spawnT = 4 + Math.random() * 4; }
     }
     updateBoatRescue(dt, t);
+    updateFires(dt, t);
     updateZoneBeam(t);
     switchMission(dt);
     for (const an of waiting) placeWaiting(an, t, dt);
@@ -2171,7 +2448,7 @@ function tick(now) {
       if (game.fireT <= 0) {
         game.fireT = 0.28 + Math.random() * 0.3;
         fx.firework((Math.random() - 0.5) * 90, 34 + Math.random() * 30, (Math.random() - 0.5) * 90 - 10);
-        sfx.boom(); sfx.crackle();
+        sfx.firework(0.6 + Math.random() * 0.4);
       }
       if (game.celebrate <= 0) nextMission();
     }
@@ -2181,15 +2458,21 @@ function tick(now) {
     const two = activePlayers().length > 1;
     players.forEach((p, i) => {
       const u = world.waterUniforms;
-      if (!p.active) { u.uHeli.value[i].w = 0; u.uLamp.value[i].w = 0; audio.setRotor(i, 0, 0, 0, false); return; }
+      if (!p.active) { u.uHeli.value[i].w = 0; u.uLamp.value[i].w = 0; audio.setEngine(i, p.vehicle, 0, 0, 0, 0, false); return; }
       const alt = p.pos.y - (p.vehicle === 'plane' ? PLANE_FLOAT : p.vehicle === 'boat' ? 0 : SKID);
       u.uHeli.value[i].set(p.pos.x, p.pos.y, p.pos.z, p.landed || p.vehicle === 'boat' ? 0 : clamp(1 - (alt - 1) / 24, 0, 1) * p.spin * (p.vehicle === 'plane' ? 0.25 : 1));
       const off = alt * 0.53;
       u.uLamp.value[i].set(p.pos.x + Math.sin(p.yaw) * off, p.pos.z + Math.cos(p.yaw) * off, 3 + alt * 0.42, world.preset.night >= 1 ? clamp(1.1 - alt / 70, 0, 1) * 0.55 : 0);
       const load = clamp(Math.abs(p.input.l) * 0.6 + Math.hypot(p.vel.x, p.vel.z) / MAX_SPEED * 0.6, 0, 1);
-      audio.setRotor(i, p.spin, load, two ? (i ? 0.55 : -0.55) : 0, playing, p.vehicle !== 'heli');
+      // (how far off the ground or the water: the helicopter's skids, the seaplane's floats; the boat never leaves it)
+      const air = p.vehicle === 'heli' ? (p.grounded ? 0 : 1) : p.vehicle === 'plane' ? 1 - p.sea : 0;
+      const work = p.vehicle === 'boat' ? clamp(Math.abs(p.fs) / 30, 0, 1) : p.vehicle === 'plane' ? clamp(p.fs / 36, 0, 1) : load;
+      audio.setEngine(i, p.vehicle, p.spin, work, air, two ? (i ? 0.55 : -0.55) : 0, playing);
     });
-    audio.setOcean(playing ? 0.07 : 0.03);
+    // the sea, louder the lower the pilots are; wind and rain with the weather; the fire's crackle close to one
+    let low = 1e9;
+    for (const p of activePlayers()) low = Math.min(low, p.vehicle === 'boat' ? 0 : Math.max(0, p.pos.y - 2));
+    audio.setAmbient(playing ? clamp(1.1 - low / 60, 0.3, 1) : 0.5, weather.now, clamp((weather.now - 0.6) / 0.35, 0, 1), playing ? clamp(1 - fireNear / 110, 0, 1) : 0);
   }
 
   // menu camera: slow orbit of the base

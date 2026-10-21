@@ -1,7 +1,7 @@
 // Bundles src/main.js + three.js + the models and pictures in src/assets into one self-contained HTML file
 // that works by double-clicking it (no server, no internet needed).
 import { build } from 'esbuild';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 
 // the pictures in src/assets are carried inside the page; this lists them for src/assets.js
 const pics = dir => readdirSync('src/assets/' + dir).filter(f => f.endsWith('.jpg'));
@@ -13,6 +13,15 @@ writeFileSync('src/assets/pictures.js', [
   `export const GROUND = { ${names('ground', 'g')} };`, '',
 ].join('\n'));
 
+// ...and so are the sounds (tools/pack_audio.py), listed in src/assets/sfx.js
+for (const dir of ['sfx']) {
+  const clips = existsSync('src/assets/' + dir) ? readdirSync('src/assets/' + dir).filter(f => f.endsWith('.mp3')) : [];
+  writeFileSync(`src/assets/${dir}.js`, [
+    ...clips.map((f, i) => `import c${i} from './${dir}/${f}';`),
+    `export default { ${clips.map((f, i) => `'${f.slice(0, -4)}': c${i}`).join(', ')} };`, '',
+  ].join('\n'));
+}
+
 const result = await build({
   entryPoints: ['src/main.js'],
   bundle: true,
@@ -20,7 +29,7 @@ const result = await build({
   format: 'iife',
   target: 'es2020',
   write: false,
-  loader: { '.bin': 'binary', '.jpg': 'dataurl' },
+  loader: { '.bin': 'binary', '.jpg': 'dataurl', '.mp3': 'binary' },
 });
 const js = result.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
 const template = readFileSync('src/index.html', 'utf8');

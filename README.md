@@ -26,10 +26,21 @@ The original 2D game is still there as `helicopter-game.html`.
   Boat: `W`/`S` throttle, `A`/`D` steer, `R` throws the ring when you are stopped beside a friend; jump the swell for air.
   Seaplane: `W`/`S` move the throttle lever, `A`/`D` turn, `Space`/`Shift` climb and descend; it flies above about 15 m/s,
   taxi up to a friend and stop to let them swim over.
+- Fire missions: two of the missions (after the Pine Forest and after Volcano Isle) are fires to put out instead of friends
+  to fetch: fires in the trees beside the island landing sites, a friend waiting by each. Put it out and the friend is safe.
+  Helicopter: the basket is swapped for a water bucket; fly low over the sea to fill it, then over the fire to drop it.
+  Seaplane: skim along the sea to scoop a tankful, then fly low over the fire. Boat: stop near the shore below the fire
+  and the water cannon sprays it. In easy flying, holding go does all of this by itself.
 - Weather (corner button, and it changes by mission: calm, breezy, calm, stormy) raises the swell and the wind. Easy flying barely feels it; Pilot mode feels all of it.
 - Extras: `F` or `/` honk, `E`/`Q` or `Enter`/`Shift` higher/lower, gamepads.
 - Corner buttons (for grown-ups): add/remove player 2, time of day, weather, graphics (✨ automatic: steps detail down when the
   computer struggles and back up when it can; 💎 best; ⚡ fast), mute, pause.
+
+## Sounds
+Every sound is a real recording, cut into loops and one-shots by `tools/pack_audio.py` (sources listed at its top):
+recordings from [BigSoundBank](https://bigsoundbank.com) (CC0); the jingles between missions from Kenney's
+[Music Jingles](https://kenney.nl/assets/music-jingles) (CC0); and "Propeller-plane-flying-steady-01" by Versatile Virtuoso,
+[Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Propeller-plane-flying-steady-01.wav), CC BY-SA 4.0.
 
 ## Changing the game
 Source is in `src/`. The models and ground pictures are in `src/assets/`, packed from the Blender-made

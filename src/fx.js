@@ -110,7 +110,8 @@ export function createFx(scene) {
         vel[i * 3] *= d; vel[i * 3 + 2] *= d; vel[i * 3 + 1] = vel[i * 3 + 1] * d - grav[i] * dt;
         pos[i * 3] += vel[i * 3] * dt; pos[i * 3 + 1] += vel[i * 3 + 1] * dt; pos[i * 3 + 2] += vel[i * 3 + 2] * dt;
         const k = life[i] / maxLife[i];
-        size[i] = size0[i] * (0.6 + 0.4 * k);
+        // (a negative size is smoke or steam: it starts small and spreads out as it rises)
+        size[i] = size0[i] > 0 ? size0[i] * (0.6 + 0.4 * k) : -size0[i] * (2.4 - 1.4 * k);
         col[i * 4 + 3] = alpha0[i] * Math.min(1, k * 2.5);
       }
       geo.attributes.position.needsUpdate = true; geo.attributes.aColor.needsUpdate = true; geo.attributes.aSize.needsUpdate = true;
