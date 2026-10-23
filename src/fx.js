@@ -8,19 +8,34 @@ export function createFx(scene) {
   const vel = new Float32Array(MAX * 3), life = new Float32Array(MAX), maxLife = new Float32Array(MAX);
   const grav = new Float32Array(MAX), drag = new Float32Array(MAX), size0 = new Float32Array(MAX), alpha0 = new Float32Array(MAX);
   const geo = new THREE.BufferGeometry();
+  const shape = new Float32Array(MAX);
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
   geo.setAttribute('aColor', new THREE.BufferAttribute(col, 4).setUsage(THREE.DynamicDrawUsage));
   geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute('aShape', new THREE.BufferAttribute(shape, 1).setUsage(THREE.DynamicDrawUsage));
   const mat = new THREE.ShaderMaterial({
     uniforms: { uScale: { value: 600 } },
     vertexShader: /* glsl */`
-      attribute vec4 aColor; attribute float aSize; uniform float uScale; varying vec4 vColor;
-      void main(){ vColor = aColor; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      attribute vec4 aColor; attribute float aSize; attribute float aShape; uniform float uScale; varying vec4 vColor; varying float vShape;
+      void main(){ vColor = aColor; vShape = aShape; vec4 mv = modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = aSize * uScale / max(-mv.z, 0.1); gl_Position = projectionMatrix * mv; }`,
     fragmentShader: /* glsl */`
-      varying vec4 vColor;
-      void main(){ float d = length(gl_PointCoord - 0.5); float a = exp(-d * d * 14.0) * smoothstep(0.5, 0.42, d) * vColor.a * 1.15;      // soft-edged, so spray reads as spray
-        if (a < 0.01) discard; gl_FragColor = vec4(vColor.rgb, a); }`,
+      varying vec4 vColor; varying float vShape;
+      void main(){
+        vec2 q = gl_PointCoord - 0.5;
+        float d = length(q);
+        float a = exp(-d * d * 14.0) * (1.0 - smoothstep(0.42, 0.5, d)) * vColor.a * 1.15;
+        vec3 c = vColor.rgb;
+        if (vShape > 0.5) {
+          // Taper upward with a warm center and an orange edge; smoke and water retain their soft round shape.
+          float h = 1.0 - gl_PointCoord.y;
+          float width = mix(0.32, 0.025, h);
+          float bend = sin(h * 7.0) * 0.065 * h;
+          float edge = abs(q.x - bend) / width;
+          a = (1.0 - smoothstep(0.45, 1.0, edge)) * smoothstep(0.0, 0.16, h) * (1.0 - smoothstep(0.78, 1.0, h)) * vColor.a;
+          c *= mix(vec3(1.0, 0.45, 0.16), vec3(1.0, 1.0, 0.75), (1.0 - edge) * (1.0 - h));
+        }
+        if (a < 0.01) discard; gl_FragColor = vec4(c, a); }`,
     transparent: true, depthWrite: false,
   });
   const points = new THREE.Points(geo, mat);
@@ -28,12 +43,13 @@ export function createFx(scene) {
   scene.add(points);
 
   let cursor = 0;
-  function emit(x, y, z, vx, vy, vz, r, g, b, a, sz, lf, gr = 9, dr = 0.6) {
+  function emit(x, y, z, vx, vy, vz, r, g, b, a, sz, lf, gr = 9, dr = 0.6, kind = 0) {
     const i = cursor; cursor = (cursor + 1) % MAX;
     pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
     vel[i * 3] = vx; vel[i * 3 + 1] = vy; vel[i * 3 + 2] = vz;
     col[i * 4] = r; col[i * 4 + 1] = g; col[i * 4 + 2] = b; col[i * 4 + 3] = a;
     size0[i] = sz; alpha0[i] = a; life[i] = maxLife[i] = lf; grav[i] = gr; drag[i] = dr;
+    shape[i] = kind;
   }
   const R = (a = 1) => (Math.random() - 0.5) * 2 * a;
 
@@ -114,7 +130,7 @@ export function createFx(scene) {
         size[i] = size0[i] > 0 ? size0[i] * (0.6 + 0.4 * k) : -size0[i] * (2.4 - 1.4 * k);
         col[i * 4 + 3] = alpha0[i] * Math.min(1, k * 2.5);
       }
-      geo.attributes.position.needsUpdate = true; geo.attributes.aColor.needsUpdate = true; geo.attributes.aSize.needsUpdate = true;
+      geo.attributes.position.needsUpdate = true; geo.attributes.aColor.needsUpdate = true; geo.attributes.aSize.needsUpdate = true; geo.attributes.aShape.needsUpdate = true;
       if (keeper) keeper.visible = false;
       for (let i = sprites.length - 1; i >= 0; i--) {
         const o = sprites[i]; o.t += dt;

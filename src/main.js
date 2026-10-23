@@ -10,10 +10,14 @@ import { model } from './assets.js';
 import { createFx } from './fx.js';
 import { createLife } from './life.js';
 import { audio, sfx, animalVoice } from './audio.js';
+import { flightClearance } from './flight-safety.mjs';
+import { createPortraits } from './portraits.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const clamp = THREE.MathUtils.clamp, lerp = THREE.MathUtils.lerp;
 const damp = (rate, dt) => 1 - Math.exp(-rate * dt);
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let portraits = new Map();
 function angDiff(a, b) { let d = (a - b) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; }
 
 // ================================================================= renderer
@@ -77,7 +81,7 @@ function makePlayer(idx) {
     camPos: new THREE.Vector3(), camYaw: 0, camLook: new THREE.Vector3(),
     rescued: 0, hint: '', input: { f: 0, t: 0, l: 0, s: 0, w: 0, horn: false },
     pro: false, tiltF: 0, tiltS: 0, winch: 0, style: 0, flash: '', flashT: 0, rateCd: 0,
-    ui: { score: $('.score', pane), slots: [...pane.querySelectorAll('.slot')], hint: $('.hint', pane), alt: $('.alt', pane), radar: $('.radar', pane).getContext('2d') },
+    ui: { score: $('.score', pane), slots: [...pane.querySelectorAll('.slot')], hint: $('.hint', pane), alt: $('.alt', pane), water: $('.water', pane), fill: $('.water .fill', pane), radar: $('.radar', pane).getContext('2d') },
   };
   players.push(p);
   return p;
@@ -93,8 +97,7 @@ function showVehicle(p, on) {
   if (!on || p.vehicle !== 'heli') { p.heliBasket.visible = false; p.rope.visible = false; }
 }
 function setVehicle(p, kind) {
-  if (p.pickup) { p.pickup.claimed = null; p.pickup = null; }
-  p.target = null; p.fireJob = null; p.water = 0; p.pour = 0;
+  releasePilot(p);
   while (p.cargo.length) deliverOne(p);
   p.vehicle = kind;
   p.model = p[kind];
@@ -115,6 +118,7 @@ function parkPlayer(p) {
   p.surfaceY = p.vehicle === 'heli' ? PAD_Y : 0;
   p.bpos.copy(p.pos).y -= 3; p.bvel.set(0, 0, 0); p.ropeLen = 0.6; p.stow = 1;
   p.camYaw = 0; p.camPos.set(pad.x, PAD_Y + 12, pad.z - 24); p.camLook.copy(p.pos);
+  p.avoidT = p.backT = p.wedgeT = p.manualT = 0; p.wedgeAt = null; p.spray = null;
 }
 players.forEach(parkPlayer);
 const activePlayers = () => players.filter(p => p.active);
@@ -144,13 +148,15 @@ for (const s of SITES) s.zone = zoneOf(s.x, s.z).id;
 const keys = new Set();
 const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'KeyF', 'KeyR', 'KeyM', 'ControlRight', 'Numpad0', 'Space', 'ShiftLeft', 'ShiftRight', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Period', 'Comma', 'Slash', 'NumpadEnter']);
 addEventListener('keydown', e => {
-  if (e.target instanceof HTMLButtonElement && (e.code === 'Enter' || e.code === 'Space') && game.state === 'menu') return; // let menu buttons work
-  if (GAME_KEYS.has(e.code)) { e.preventDefault(); keys.add(e.code); audio.unlock(); }
+  if (e.target instanceof HTMLInputElement || (e.target.closest && e.target.closest('summary'))) return;
+  if (e.target instanceof HTMLButtonElement && (e.code === 'Enter' || e.code === 'Space')) return;
+  if (GAME_KEYS.has(e.code) && game.state === 'play') { e.preventDefault(); keys.add(e.code); audio.unlock(); }
   if (e.repeat) return;
   if (e.code === 'Escape') togglePause();   // everything else lives on the corner buttons, safe from little hands
 });
 addEventListener('keyup', e => keys.delete(e.code));
-addEventListener('blur', () => keys.clear());
+addEventListener('blur', () => { keys.clear(); if (game.started && game.state === 'play') togglePause(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); if (game.started && game.state === 'play') togglePause(); } });
 const k = c => (keys.has(c) ? 1 : 0);
 const dz = v => (Math.abs(v) < 0.18 ? 0 : v);
 
@@ -207,6 +213,7 @@ function windAt(x, z, t, out) {
 
 // ================================================================= flight
 const MAX_SPEED = 26, CEILING = 95, CRUISE = 13;
+const flightEnvelope = {};
 const V = new THREE.Vector3(), V2 = new THREE.Vector3();
 
 // a word and some stars for a piece of flying done well (only pilots flying it properly are marked)
@@ -370,7 +377,8 @@ function updatePlayer(p, dt, t) {
       surfaceAt(ax, az, t, SURF);
       if (SURF.land) ahead = Math.max(ahead, SURF.y + Math.max(0, canopyAt(ax, az) - 4));
     }
-    const wantY = p.parked ? p.surfaceY + SKID - 0.5 : ahead + SKID + CRUISE + p.altOff;
+    flightClearance(p.pos, p.yaw, Math.hypot(p.vel.x, p.vel.z), OBSTACLES, SKID, flightEnvelope);
+    const wantY = p.parked ? p.surfaceY + SKID - 0.5 : Math.max(ahead + SKID + CRUISE + p.altOff, flightEnvelope.height);
     // start-up: the rotor has to wind all the way up before the skids leave the ground
     const spooling = !p.parked && p.grounded && p.spin < 0.93;
     let lift = p.parked ? -0.5 : clamp((wantY - p.pos.y) * 0.16, -0.8, 1);
@@ -396,7 +404,7 @@ function updatePlayer(p, dt, t) {
     p.yaw += p.yawVel * dt;
     fx_ = Math.sin(p.yaw); fz_ = Math.cos(p.yaw);
     // ease off by itself near a friend who needs a lift, so the basket can reach
-    let top = MAX_SPEED;
+    let top = Math.min(MAX_SPEED, flightEnvelope.speed);
     if (p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
       const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
       if (d < 34) top = Math.min(top, 6 + d * 0.6);
@@ -1111,7 +1119,7 @@ function updateCamera(p, dt, t) {
   V.set(p.pos.x + Math.sin(p.yaw) * lead, p.pos.y + 1.2 - ext * 0.36, p.pos.z + Math.cos(p.yaw) * lead);
   p.camLook.lerp(V, damp(7, dt));
   p.cam.position.copy(p.camPos);
-  const sh = p.shake * p.shake * 0.5 + (p.grounded ? p.spin * (1.1 - 0.8 * p.spin) * 0.07 : 0);
+  const sh = reducedMotion.matches ? 0 : p.shake * p.shake * 0.5 + (p.grounded ? p.spin * (1.1 - 0.8 * p.spin) * 0.07 : 0);
   if (sh > 0) { p.cam.position.x += (Math.random() - 0.5) * sh; p.cam.position.y += (Math.random() - 0.5) * sh; p.cam.position.z += (Math.random() - 0.5) * sh; }
   p.cam.lookAt(p.camLook);
 }
@@ -1401,6 +1409,10 @@ function waterArc(s, F, tau, n, spread) {
   }
 }
 const pours = [];
+function removeBeam(an) {
+  if (!an.beam) return;
+  scene.remove(an.beam); an.beam.geometry.dispose(); an.beam.material.dispose(); an.beam = null;
+}
 function dump(p, an, src) {
   const F = an.fire;
   p.water = 0;
@@ -1411,7 +1423,7 @@ function fireOut(an, p) {
   const F = an.fire;
   F.out = true; F.t = 0; fading.push(F);
   const i = waiting.indexOf(an); if (i >= 0) waiting.splice(i, 1);
-  scene.remove(an.beam);
+  removeBeam(an);
   if (an.site) an.site.busy = false;
   for (const q of players) { if (q.fireJob === an) q.fireJob = null; if (q.target === an) q.target = null; if (q.pickup === an) q.pickup = null; }
   // they are safe where they are: a cheer, and they count as helped
@@ -1449,10 +1461,10 @@ function updateFires(dt, t) {
       const a = Math.random() * 6.283, d = Math.sqrt(Math.random()) * F.r * (0.6 + 0.4 * k), h = Math.random(), core = 1 - d / F.r;
       // (taller and whiter in the middle, low and red at the edges)
       fx.emit(F.x + Math.cos(a) * d, F.y - 0.5 + Math.random(), F.z + Math.sin(a) * d, WIND.x * 0.2 + jit(0.5), (3 + Math.random() * 5 * core) * (0.5 + 0.5 * k), WIND.z * 0.2 + jit(0.5),
-        4 + h * 3 + core * 2, 1 + h * 1.4 + core * 1.2, 0.15 + h * 0.35 * core, 0.85, (1.8 + Math.random() * 2.2) * (0.5 + 0.5 * k), 0.6 + Math.random() * 0.7 * (0.4 + core), -2.5, 1.2);
+        1.8 + h * 1.2 + core, 0.65 + h * 0.7 + core * 0.6, 0.06 + h * 0.14 * core, 0.85, (3 + Math.random() * 3) * (0.5 + 0.5 * k), 0.6 + Math.random() * 0.7 * (0.4 + core), -2.5, 1.2, 1);
     }
     // (and a dull red glow low down among it, so it reads as a body of fire rather than sparks)
-    if (Math.random() < dt * 14 * k) fx.emit(F.x + jit(F.r * 0.5), F.y + 0.5, F.z + jit(F.r * 0.5), 0, 0.6, 0, 2.2, 0.55, 0.12, 0.5, -(F.r * 0.9), 1.2, -0.3, 1);
+    if (Math.random() < dt * 14 * k) fx.emit(F.x + jit(F.r * 0.5), F.y + 0.5, F.z + jit(F.r * 0.5), 0, 0.6, 0, 1.2, 0.25, 0.04, 0.16, -(F.r * 0.6), 1.2, -0.3, 1);
     // a tall column of smoke, to find it by from far off
     F.smokeT -= dt;
     if (F.smokeT <= 0) {
@@ -1615,7 +1627,7 @@ function board(an, p) {
   waiting.splice(i, 1);
   const wet = AFLOAT.has(an.kind);
   if (an.prop && !(an.kind === 'ring' && p.vehicle !== 'boat')) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }      // (a ring goes with them)
-  scene.remove(an.beam);
+  removeBeam(an);
   if (an.site) an.site.busy = false;
   if (an.boat) boatFriendOff(an.boat);
   an.state = 'boarding'; an.t = 0; an.by = p; an.claimed = null; an.splashT = 0;
@@ -1834,12 +1846,12 @@ function banner(title, sub, secs = 3.5) {
 function missionComplete() {
   game.celebrate = 8; game.fireT = 0.9;
   const two = activePlayers().length > 1, Z = game.zone, icon = game.fire ? FIRE_ICON : Z.icon;
-  banner(icon + ' Hooray! 🎉', two ? 'Great teamwork!  🔴 ' + players[0].rescued + '   🔵 ' + players[1].rescued : game.fire ? 'All the fires are out' : 'Everyone in ' + Z.name + ' is safe', 6);
+  banner(icon + ' Hooray! 🎉', (two ? 'Great teamwork! ' : '') + (game.fire ? 'All the fires are out!' : 'Our friends are home!'), 6);
   // a little tune, then the cheering, then the fireworks
   sfx.levelDone(); sfx.cheer(1.1);
   // the mission's sticker goes in the book, and its picture showers down round every pilot
   addSticker(game.fire ? 'fire' : Z.id);
-  for (const p of activePlayers()) for (let i = 0; i < 14; i++) setTimeout(() => fx.emoji(icon, p.pos.x + (Math.random() - 0.5) * 30, p.pos.y + 6 + Math.random() * 8, p.pos.z + (Math.random() - 0.5) * 30, 3 + Math.random() * 2), i * 180);
+  game.stickerT = 0; game.stickerBursts = 14; game.stickerIcon = icon;
   fx.confetti(0, BASE_Y + 8, 0, 160);
 }
 // Friends left waiting somewhere nobody is heading any more wave and go home by themselves (reuses the hoppers list).
@@ -1848,7 +1860,7 @@ function releaseWaiting(test) {
     const an = waiting[i];
     if (!test(an)) continue;
     waiting.splice(i, 1);
-    scene.remove(an.beam);
+    removeBeam(an);
     if (an.prop) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }
     if (an.site) an.site.busy = false;
     if (an.boat) boatFriendOff(an.boat);
@@ -1869,7 +1881,7 @@ function setZone(m) {
 const FIRE_ICON = '\u{1F692}';
 function zoneBanner() {
   const Z = game.zone, pro = activePlayers().some(p => p.pro);
-  const what = game.fire ? 'Put out ' + game.goal + ' fires' : 'Help ' + game.goal + ' friends' + (Z.id === 'home' ? ' and bring them home' : ' and fly them home');
+  const what = game.fire ? 'Put out ' + game.goal + ' fires' : 'Help ' + game.goal + ' friends and bring them home';
   banner(game.fire ? FIRE_ICON + ' ' + Z.name + ' fire!' : Z.icon + ' ' + Z.name, (pro ? world.preset.icon + WEATHERS[weather.idx].icon + ' ' + WEATHERS[weather.idx].name + ' — ' : '') + what);
   sfx.levelStart();
 }
@@ -1933,6 +1945,16 @@ function cyclePreset() { setPreset((game.presetIdx + 1) % PRESETS.length); banne
 // ================================================================= HUD
 // The mission's progress, for pilots who cannot read yet: the zone's picture, then a ring for each friend to find, which
 // fills with that friend's face (with a bounce) as they get home. Grown-up pilots get the numbers as well.
+function setFace(el, emoji) {
+  const face = portraits.get(emoji);
+  if (el.dataset.face === emoji && (el.firstElementChild?.getAttribute('src') === face?.url)) return false;
+  el.dataset.face = emoji; el.textContent = emoji;
+  if (face) {
+    const img = document.createElement('img'); img.src = face.url; img.alt = face.name; img.draggable = false;
+    el.replaceChildren(img);
+  }
+  return true;
+}
 function syncHud() {
   $('#mIcon').textContent = game.fire ? FIRE_ICON : game.zone.icon;
   const row = $('#mSlots');
@@ -1940,12 +1962,12 @@ function syncHud() {
   while (row.children.length > game.goal) row.lastChild.remove();
   [...row.children].forEach((el, i) => {
     const e = game.saved[i] || '';
-    if (el.textContent !== e) { el.textContent = e; el.classList.toggle('got', !!e); if (e) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); } }
+    if (setFace(el, e)) { el.classList.toggle('got', !!e); if (e) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); } }
   });
   $('#mCount').textContent = activePlayers().some(p => p.pro) ? Math.min(game.rescued, game.goal) + ' / ' + game.goal : '';
   for (const p of players) {
     p.ui.score.textContent = '🐾 ' + p.rescued + (p.pro ? '  \u2605 ' + p.style : '');
-    p.ui.slots.forEach((el, i) => { const a = p.cargo[i]; el.textContent = a ? a.type.e : ''; el.classList.toggle('full', !!a); });
+    p.ui.slots.forEach((el, i) => { const a = p.cargo[i]; setFace(el, a ? a.type.e : ''); el.classList.toggle('full', !!a); });
   }
 }
 function layoutHud() {
@@ -1956,9 +1978,12 @@ function layoutHud() {
   p1.style.left = '50%'; p1.style.width = '50%';
   $('#divider').style.display = playing && two ? 'block' : 'none';
   $('#mission').style.display = playing ? '' : 'none';
-  $('#buttons').style.display = playing ? '' : 'none';
+  $('#banner').style.visibility = playing ? '' : 'hidden';
+  $('#controls').style.display = playing ? '' : 'none';
+  $('#controls').inert = !playing;
+  $('#hud').classList.toggle('two', two);
   $('#bP2').textContent = two ? '− Player 2' : '+ Player 2';
-  $('.label', p0).textContent = two ? 'Red' : 'Rescue 9';
+  $('.label', p0).textContent = two ? 'Red' : 'Rescue Squad';
   $('#mission').style.top = two ? '62px' : '14px';
 }
 // A line of guidance under each pilot's picture. Small pilots cannot read, so in easy flying it stays empty; in Pilot
@@ -2032,6 +2057,13 @@ function updateHud(dt) {
     drawRadar(p);
     p.flashT -= dt; p.rateCd -= dt;
     if (slow) {
+      const showWater = !!p.fireJob && p.vehicle !== 'boat';
+      p.ui.water.style.display = showWater ? 'flex' : 'none';
+      if (showWater) {
+        const fill = Math.round(clamp(p.water, 0, 1) * 100);
+        p.ui.fill.style.height = fill + '%'; p.ui.water.setAttribute('aria-valuenow', fill);
+        p.ui.water.setAttribute('aria-valuetext', fill >= 100 ? 'Full, ready to drop' : fill + '% full');
+      }
       const h = hintFor(p);
       if (h !== p.hint) { p.hint = h; p.ui.hint.textContent = h; }
       p.ui.alt.innerHTML = '↕ ' + Math.max(0, p.clearance).toFixed(0).padStart(2, ' ') + ' m<br>➤ ' + (Math.hypot(p.vel.x, p.vel.z) * 3.6).toFixed(0) + ' km/h';
@@ -2042,15 +2074,36 @@ function updateHud(dt) {
 // ================================================================= flow
 const menu = $('#menu');
 const vehicleChoice = ['heli', 'heli'];
+function savePilotChoices() {
+  try { localStorage.setItem('rescue-squad-pilots', JSON.stringify(players.map(p => ({ vehicle: vehicleChoice[p.idx], pro: p.pro })))); } catch { /* private browsing */ }
+}
+function syncPilotChoices() {
+  for (const p of players) {
+    const card = $('.card[data-pilot="' + p.idx + '"]');
+    if (card) card.className = 'card v-' + vehicleChoice[p.idx] + (p.pro ? ' pro' : '');
+    for (const b of document.querySelectorAll('.veh[data-p="' + p.idx + '"]')) {
+      const on = b.dataset.v === vehicleChoice[p.idx]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+    }
+    for (const b of document.querySelectorAll('.flt[data-p="' + p.idx + '"]')) {
+      const on = (b.dataset.m === 'pro') === p.pro; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+    }
+  }
+}
+try {
+  const choices = JSON.parse(localStorage.getItem('rescue-squad-pilots') || 'null');
+  if (Array.isArray(choices)) players.forEach((p, i) => {
+    if (choices[i] && ['heli', 'plane', 'boat'].includes(choices[i].vehicle)) vehicleChoice[i] = choices[i].vehicle;
+    p.pro = choices[i]?.pro === true;
+  });
+} catch { /* Keep the simple defaults when storage is unavailable. */ }
+syncPilotChoices();
 for (const b of document.querySelectorAll('.veh')) b.addEventListener('click', () => {
   const i = +b.dataset.p; vehicleChoice[i] = b.dataset.v;
-  const card = b.closest('.card'); card.classList.remove('v-heli', 'v-boat', 'v-plane'); card.classList.add('v-' + b.dataset.v);
-  for (const o of document.querySelectorAll('.veh[data-p="' + i + '"]')) o.classList.toggle('on', o === b);
+  syncPilotChoices(); savePilotChoices();
 });
 for (const b of document.querySelectorAll('.flt')) b.addEventListener('click', () => {
   const i = +b.dataset.p; players[i].pro = b.dataset.m === 'pro';
-  for (const o of document.querySelectorAll('.flt[data-p="' + i + '"]')) o.classList.toggle('on', o === b);
-  b.closest('.card').classList.toggle('pro', players[i].pro);
+  syncPilotChoices(); savePilotChoices();
   players[i].tiltF = players[i].tiltS = 0; players[i].winch = 0; players[i].altOff = 0;
   syncHud();
 });
@@ -2061,7 +2114,29 @@ function releaseStranded() {
   const act = activePlayers();
   releaseWaiting(an => !act.some(p => !outOfReach(an, p)));
 }
+// A departing pilot's half-finished pickup must be resolved before their machine is hidden or changed.
+function releasePilot(p) {
+  for (const an of waiting) if (an.claimed === p) an.claimed = null;
+  p.target = p.pickup = p.fireJob = p.spray = null; p.water = p.pour = 0;
+  for (let i = hoppers.length - 1; i >= 0; i--) {
+    const an = hoppers[i];
+    if (an.state !== 'boarding' || an.by !== p) continue;
+    hoppers.splice(i, 1);
+    if (an.prop) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }
+    p.basket.attach(an.model);
+    an.state = 'riding'; p.cargo.push(an);
+  }
+  p.incoming = 0;
+  if (lineRings[p.idx]) lineRings[p.idx].visible = false;
+  p.rope.visible = false;
+}
+function showMenu(show) {
+  menu.inert = !show; menu.setAttribute('aria-hidden', !show); menu.classList.toggle('hidden', !show);
+  if (!show) { $('#settings').open = false; canvas.focus({ preventScroll: true }); }
+  else $('#resume').focus({ preventScroll: true });
+}
 function startGame(n) {
+  audio.setPaused(false);
   audio.unlock();
   applyVehicleChoices();
   const fresh = game.state === 'menu' && !game.started;
@@ -2075,7 +2150,7 @@ function startGame(n) {
     zoneBanner();
   }
   game.state = 'play'; game.paused = false;
-  menu.classList.add('hidden');
+  showMenu(false);
   layoutHud(); syncHud(); onResize();
   document.activeElement && document.activeElement.blur();
 }
@@ -2086,7 +2161,7 @@ function setP2(on, quiet) {
     p.active = true; parkPlayer(p); showVehicle(p, true);
     if (!quiet) { fx.confetti(p.pos.x, p.pos.y + 3, p.pos.z, 80); sfx.chime(); banner('Blue pilot joined! 🔵', 'Arrow keys to fly', 3); }
   } else {
-    p.target = null; while (p.cargo.length) deliverOne(p);
+    releasePilot(p); while (p.cargo.length) deliverOne(p);
     p.active = false; showVehicle(p, false);
     releaseStranded();
   }
@@ -2095,10 +2170,14 @@ function setP2(on, quiet) {
 function toggleP2() { audio.unlock(); setP2(!players[1].active); }
 function togglePause() {
   if (!game.started) return;
-  if (game.state === 'play') { game.state = 'menu'; game.paused = true; $('#resumeRow').style.display = ''; menu.classList.remove('hidden'); layoutHud(); onResize(); }
+  if (game.state === 'play') {
+    game.state = 'menu'; game.paused = true; keys.clear(); audio.setPaused(true);
+    $('#resumeRow').style.display = ''; $('#start1').classList.add('ghost'); $('#start2').classList.add('ghost');
+    showMenu(true); layoutHud(); onResize();
+  }
   else resume();
 }
-function resume() { applyVehicleChoices(); releaseStranded(); game.state = 'play'; game.paused = false; menu.classList.add('hidden'); layoutHud(); onResize(); }
+function resume() { applyVehicleChoices(); releaseStranded(); keys.clear(); game.state = 'play'; game.paused = false; audio.setPaused(false); audio.unlock(); showMenu(false); layoutHud(); onResize(); }
 // ---- picture quality. Four steps from the full picture down to one any laptop can draw smoothly. On "auto" (the
 // default) the game watches how long frames really take and steps down when it is struggling, back up when there
 // is room to spare; the corner button can also pin it to the best or the fastest. maxPR caps the pixels drawn per
@@ -2168,7 +2247,17 @@ function watchFrames(ms) {
     setQuality(quality.level - 1); quality.fastT = 0; quality.coolT = 5; quality.justUp = true; quality.savedT = 0;
   } else if (quality.fastT > 8) quality.justUp = false;
 }
-function toggleMute() { audio.unlock(); $('#bMute').textContent = audio.toggleMute() ? '🔇' : '🔊'; }
+function syncSoundControls() {
+  const mute = $('#bMute');
+  mute.textContent = audio.muted || audio.volume === 0 ? '🔇' : '🔊';
+  mute.setAttribute('aria-pressed', audio.muted);
+  mute.setAttribute('aria-label', audio.muted ? 'Unmute sound' : 'Mute sound');
+  $('#volume').value = Math.round(audio.volume * 100);
+}
+function toggleMute() { audio.unlock(); audio.toggleMute(); syncSoundControls(); }
+syncSoundControls();
+$('#volume').addEventListener('input', e => { audio.unlock(); audio.setVolume(+e.target.value / 100); syncSoundControls(); });
+document.addEventListener('pointerdown', e => { if (!$('#settings').contains(e.target)) $('#settings').open = false; });
 
 $('#start1').addEventListener('click', () => startGame(1));
 $('#start2').addEventListener('click', () => startGame(2));
@@ -2444,6 +2533,11 @@ function tick(now) {
 
     // celebration
     if (game.celebrate > 0) {
+      game.stickerT -= dt;
+      if (game.stickerBursts > 0 && game.stickerT <= 0) {
+        game.stickerT += 0.18; game.stickerBursts--;
+        for (const p of activePlayers()) fx.emoji(game.stickerIcon, p.pos.x + (Math.random() - 0.5) * 30, p.pos.y + 6 + Math.random() * 8, p.pos.z + (Math.random() - 0.5) * 30, 3 + Math.random() * 2);
+      }
       game.celebrate -= dt; game.fireT -= dt;
       if (game.fireT <= 0) {
         game.fireT = 0.28 + Math.random() * 0.3;
@@ -2499,11 +2593,12 @@ renderer.setRenderTarget(composer.renderTarget1);
 const warmUp = Promise.all([renderer.compileAsync(scene, menuCam), renderer.compileAsync(postScene, menuCam)]);
 renderer.setRenderTarget(null);
 warmUp.catch(() => {}).then(() => {
+  try { portraits = createPortraits(renderer); syncHud(); } catch (e) { console.warn('Using rescue symbols for passenger pictures', e); }
   world.prewarmShadows(composer.renderTarget1, menuCam);
   // (and one whole frame drawn, mirror and all, for the few shaders only a real frame builds)
   composer.render();
   requestAnimationFrame(frame);
-  requestAnimationFrame(() => canvas.classList.add('ready'));
+  requestAnimationFrame(() => { canvas.classList.add('ready'); $('#loading').hidden = true; });
 });
 
 // tiny debug handle (also handy for automated checks)

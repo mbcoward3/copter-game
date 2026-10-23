@@ -18,13 +18,18 @@
   .pane .cargo{position:absolute;top:62px;left:14px;display:flex;gap:6px;}
   .pane .slot{width:44px;height:44px;border-radius:12px;background:var(--glass);border:2px dashed rgba(255,255,255,.35);display:flex;align-items:center;justify-content:center;font-size:26px;transition:transform .25s;}
   .pane .slot.full{border:2px solid var(--c);transform:scale(1.08);}
+  .slot img,#mSlots img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 1px 2px #0006);}
   .pane .radar{position:absolute;right:14px;bottom:14px;width:168px;height:168px;border-radius:50%;background:var(--glass);border:2px solid rgba(255,255,255,.35);backdrop-filter:blur(6px);}
-  .pane .hint{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);padding:9px 18px;border-radius:999px;background:var(--glass);backdrop-filter:blur(8px);font-size:18px;font-weight:600;white-space:nowrap;transition:opacity .4s;}
+  .pane .hint{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);max-width:calc(100% - 28px);padding:9px 18px;border-radius:18px;background:var(--glass);backdrop-filter:blur(8px);font-size:16px;font-weight:600;text-align:center;transition:opacity .4s;}
+  .pane .hint:empty{display:none;}
+  .pane .water{position:absolute;left:14px;top:116px;display:none;align-items:center;gap:8px;padding:7px 10px;border-radius:12px;background:var(--glass);font-size:24px;}
+  .water .tank{height:32px;width:22px;border:2px solid #c9edff;border-radius:5px;display:flex;align-items:flex-end;overflow:hidden;}
+  .water .fill{width:100%;background:#56caff;transition:height .2s;}
   .pane .alt{display:none;position:absolute;left:14px;bottom:14px;padding:6px 12px;border-radius:12px;background:var(--glass);font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.5;}
   #divider{position:absolute;top:0;bottom:0;left:50%;width:4px;margin-left:-2px;background:linear-gradient(180deg,rgba(255,255,255,.0),rgba(255,255,255,.75),rgba(255,255,255,0));display:none;}
   #mission{position:absolute;top:14px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:9px 20px;border-radius:999px;background:var(--glass);backdrop-filter:blur(8px);font-weight:700;font-size:18px;white-space:nowrap;}
   #mIcon{font-size:30px;line-height:1;}
-  #mSlots{display:flex;gap:6px;}
+  #mSlots{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;}
   #mSlots span{width:34px;height:34px;border-radius:50%;border:2.5px dashed rgba(255,255,255,.55);display:flex;align-items:center;justify-content:center;font-size:24px;line-height:1;}
   #mSlots span.got{border:2.5px solid #ffd23c;background:rgba(255,210,60,.22);}
   #mSlots span.pop{animation:pop .6s cubic-bezier(.2,1.8,.4,1);}
@@ -33,11 +38,17 @@
   #stickers{display:flex;gap:10px;font-size:34px;}
   #stickers span{filter:grayscale(1) brightness(.6);opacity:.45;}
   #stickers span.got{filter:none;opacity:1;}
-  #banner{position:absolute;top:24%;left:50%;transform:translate(-50%,-50%) scale(.8);text-align:center;opacity:0;transition:opacity .5s,transform .5s cubic-bezier(.2,1.6,.4,1);text-shadow:0 4px 24px rgba(0,0,0,.55);}
+  #banner{position:absolute;top:28%;left:50%;width:min(92vw,900px);transform:translate(-50%,-50%) scale(.8);text-align:center;opacity:0;transition:opacity .5s,transform .5s cubic-bezier(.2,1.6,.4,1);text-shadow:0 4px 24px rgba(0,0,0,.55);}
   #banner.show{opacity:1;transform:translate(-50%,-50%) scale(1);}
   #banner h1{font-size:clamp(34px,6vw,76px);font-weight:900;letter-spacing:.5px;}
   #banner p{font-size:clamp(16px,2.2vw,26px);font-weight:600;margin-top:6px;}
-  #buttons{position:absolute;top:14px;right:14px;display:flex;gap:8px;pointer-events:auto;}
+  #controls{position:absolute;top:14px;right:14px;display:flex;gap:8px;pointer-events:auto;z-index:2;}
+  #settings{position:relative;}
+  #settings summary{display:flex;align-items:center;justify-content:center;list-style:none;}
+  #settings summary::-webkit-details-marker{display:none;}
+  #buttons{position:absolute;top:52px;right:0;width:260px;max-width:calc(100vw - 28px);display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px;border-radius:18px;background:rgba(14,24,38,.97);box-shadow:0 8px 32px #0005;}
+  .sound-level{grid-column:1/-1;display:grid;gap:8px;font-size:14px;}
+  .sound-level input{width:100%;accent-color:#ff8a3c;min-height:28px;}
   .btn{min-width:44px;height:44px;padding:0 14px;border:none;border-radius:999px;background:var(--glass);backdrop-filter:blur(8px);color:#fff;font:700 15px "Segoe UI",system-ui,sans-serif;cursor:pointer;border:2px solid rgba(255,255,255,.25);}
   .btn:hover{background:rgba(40,60,90,.75);} .btn:active{transform:scale(.95);}
   .btn:focus-visible{outline:3px solid #ffd23c;outline-offset:2px;}
@@ -46,6 +57,7 @@
   #menu{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;overflow-y:auto;gap:22px;background:radial-gradient(ellipse at center,rgba(8,18,32,.25),rgba(8,18,32,.78));transition:opacity .5s;padding:20px;}
   @media (max-height:780px){#menu{gap:12px;}#menu .tip{font-size:12.5px;}}
   #menu.hidden{opacity:0;pointer-events:none;}
+  #menu[inert]{visibility:hidden;}
   #menu h1{font-size:clamp(40px,7.5vw,96px);font-weight:900;line-height:1;text-align:center;text-shadow:0 6px 30px rgba(0,0,0,.5);}
   #menu h1 span{display:block;font-size:.3em;font-weight:700;letter-spacing:.35em;color:#ffd23c;margin-bottom:.5em;}
   #menu .row{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;}
@@ -54,7 +66,7 @@
   .big.ghost{background:var(--glass);font-size:18px;padding:12px 22px;border-width:2px;}
   .big:hover{transform:translateY(-3px) scale(1.03);} .big:focus-visible{outline:4px solid #ffd23c;outline-offset:3px;}
   .cards{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;}
-  .card{background:var(--glass);backdrop-filter:blur(10px);border-radius:18px;padding:14px 20px;border:2px solid var(--c);width:min(360px,92vw);height:330px;box-sizing:border-box;}
+  .card{background:var(--glass);backdrop-filter:blur(10px);border-radius:18px;padding:14px 20px;border:2px solid var(--c);width:min(360px,calc(100vw - 40px));min-height:290px;box-sizing:border-box;}
   .card h3{font-size:18px;margin-bottom:8px;color:var(--c);}
   .card table{border-collapse:collapse;font-size:15px;}
   .card td{padding:3px 10px 3px 0;}
@@ -67,19 +79,31 @@
   .card.pro.v-heli .kp-heli,.card.pro.v-boat .kp-boat,.card.pro.v-plane .kp-plane{display:table;}
   .veh:focus-visible,.flt:focus-visible{outline:3px solid #ffd23c;outline-offset:2px;}
   .card tr.extra td{padding-top:8px;font-size:12.5px;opacity:.75;}
+  .card.v-boat tr.extra .height-keys{display:none;}
+  #setup>summary{cursor:pointer;text-align:center;padding:12px 20px;border:1px solid #ffffff55;border-radius:999px;background:var(--glass);font-weight:600;}
+  #setup[open]>summary{margin-bottom:16px;}
+  #setup>summary:focus-visible{outline:3px solid #ffd23c;outline-offset:3px;}
+  .go-tip{font-size:clamp(20px,3vw,28px);font-weight:700;text-align:center;line-height:1.6;}
+  .go-tip kbd{font-size:20px;min-width:42px;}
+  #loading{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);padding:8px 16px;border-radius:20px;background:#0e1826e8;font-size:14px;z-index:5;}
+  @media(max-width:1100px){#mission{top:118px!important;max-width:calc(100% - 28px);padding:8px 12px;gap:8px;}#banner{top:37%;}}
+  @media(max-width:600px){#menu{padding:20px 12px;gap:14px;}#menu h1{font-size:44px;}#menu h1 span{letter-spacing:.15em;font-size:.28em;}#stickers{gap:6px;font-size:28px;}.big{padding:14px 22px;font-size:22px;}#mSlots{gap:4px;}#mSlots span{width:25px;height:25px;font-size:20px;}#mIcon{font-size:25px;}#mission{font-size:14px;}.pane .tag{font-size:13px;padding:7px 9px;gap:6px;}.pane .slot{width:34px;height:34px;font-size:23px;}.pane .radar{width:112px;height:112px;}.pane .hint{bottom:140px;font-size:13px;padding:8px 12px;}.pane .alt{bottom:132px;}.pane .water{top:174px;font-size:19px;}#hud.two .pane .tag{top:66px;font-size:12px;gap:4px;}.pane .score{display:none;}#hud.two .pane .cargo{top:108px;gap:3px;}#hud.two .pane .slot{width:30px;height:30px;}#hud.two #mission{top:162px!important;}#hud.two #controls{top:14px;}#hud.two .pane .water{top:216px;}#hud.two #banner{top:44%;}.btn{padding:0 10px;}.pick{gap:5px;}.veh{font-size:12px;padding:9px 3px;}.flt{font-size:12px;white-space:normal;}}
+  @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;}}
   kbd{display:inline-block;min-width:28px;padding:3px 7px;border-radius:7px;background:#fff;color:var(--ink);font:700 13px "Segoe UI",system-ui,sans-serif;text-align:center;box-shadow:0 2px 0 #9fb0c4;margin:1px;}
   #menu .tip{font-size:16px;opacity:.9;text-align:center;max-width:720px;line-height:1.5;}
   #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:30px;text-align:center;font-size:20px;background:#0b1622;}
 </style>
 </head>
 <body>
-<canvas id="gl"></canvas>
+<canvas id="gl" tabindex="-1" aria-label="Rescue game. Hold W or the up arrow to go."></canvas>
+<div id="loading" role="status">Getting your rescue squad ready…</div>
 
 <div id="hud">
   <div class="pane" id="pane0" style="--c:var(--p1)">
     <div class="tag"><span class="dot"></span><span class="label">Red</span><span class="score">🐾 0</span></div>
     <div class="cargo"><div class="slot"></div><div class="slot"></div><div class="slot"></div></div>
     <div class="alt"></div>
+    <div class="water" role="meter" aria-label="Water supply" aria-valuemin="0" aria-valuemax="100"><span aria-hidden="true">💧</span><span class="tank" aria-hidden="true"><span class="fill"></span></span></div>
     <div class="hint"></div>
     <canvas class="radar" width="336" height="336"></canvas>
   </div>
@@ -87,62 +111,72 @@
     <div class="tag"><span class="dot"></span><span class="label">Blue</span><span class="score">🐾 0</span></div>
     <div class="cargo"><div class="slot"></div><div class="slot"></div><div class="slot"></div></div>
     <div class="alt"></div>
+    <div class="water" role="meter" aria-label="Water supply" aria-valuemin="0" aria-valuemax="100"><span aria-hidden="true">💧</span><span class="tank" aria-hidden="true"><span class="fill"></span></span></div>
     <div class="hint"></div>
     <canvas class="radar" width="336" height="336"></canvas>
   </div>
   <div id="divider"></div>
   <div id="mission"><span id="mIcon"></span><span id="mSlots"></span><span id="mCount"></span></div>
   <div id="banner"><h1></h1><p></p></div>
-  <div id="buttons">
+  <div id="controls">
+    <details id="settings">
+    <summary class="btn" aria-label="Game settings" title="Game settings">⚙️</summary>
+    <div id="buttons">
     <button class="btn" id="bP2" title="Add or remove player 2">+ Player 2</button>
-    <button class="btn" id="bTime" title="Change time of day">☀️</button>
-    <button class="btn" id="bWx" title="Change the weather">🍃</button>
-    <button class="btn" id="bGfx" title="Graphics quality (automatic / best / fast)">✨</button>
-    <button class="btn" id="bMute" title="Sound on/off">🔊</button>
-    <button class="btn" id="bPause" title="Pause (key: Esc)">⏸</button>
+    <button class="btn" id="bTime" aria-label="Change time of day" title="Change time of day">☀️</button>
+    <button class="btn" id="bWx" aria-label="Change weather" title="Change weather">🍃</button>
+    <button class="btn" id="bGfx" aria-label="Change graphics quality" title="Graphics quality (automatic / best / fast)">✨</button>
+    <label class="sound-level">Sound volume <input id="volume" type="range" min="0" max="100" value="75"></label>
+    </div>
+    </details>
+    <button class="btn" id="bMute" aria-label="Mute sound" aria-pressed="false" title="Sound on/off">🔊</button>
+    <button class="btn" id="bPause" aria-label="Pause game" title="Pause (key: Esc)">⏸</button>
   </div>
 </div>
 <div id="fade"></div>
 
 <div id="menu">
-  <h1><span>LITTLE RESCUE SQUAD</span>Helicopter Heroes 🚁</h1>
+  <h1><span>HOLD GO · HELP FRIENDS</span>Little Rescue Squad</h1>
+  <p class="go-tip">Hold <kbd>W</kbd> or <kbd>↑</kbd> to go.<br>Your crew helps with the rest.</p>
+  <div class="row" id="resumeRow" style="display:none"><button class="big" id="resume">▶ Keep playing</button></div>
   <div class="row">
-    <button class="big" id="start1">1 Pilot</button>
-    <button class="big two" id="start2">2 Pilots</button>
+    <button class="big" id="start1">Play solo</button>
+    <button class="big two" id="start2">Play together</button>
   </div>
   <div id="stickers" title="Stickers: finish a mission in each place to collect them all"></div>
-  <div class="row" id="resumeRow" style="display:none"><button class="big ghost" id="resume">▶ Keep flying</button></div>
+  <details id="setup"><summary>Choose vehicles and controls</summary>
   <div class="cards">
-    <div class="card v-heli" style="--c:var(--p1)">
+    <div class="card v-heli" data-pilot="0" style="--c:var(--p1)">
       <h3>🔴 Red pilot</h3>
       <div class="pick"><button class="veh on" data-p="0" data-v="heli">🚁 Helicopter</button><button class="veh" data-p="0" data-v="plane">🛩️ Seaplane</button><button class="veh" data-p="0" data-v="boat">🚤 Boat</button></div>
-      <div class="pick"><button class="flt on" data-p="0" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="0" data-m="pro">🎖️ Pilot</button></div>
+      <div class="pick"><button class="flt on" data-p="0" data-m="easy">🧸 Assisted</button><button class="flt" data-p="0" data-m="pro">🎖️ Manual controls</button></div>
       <table class="keysEasy">
-        <tr><td><kbd>W</kbd></td><td>go!</td></tr>
-        <tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn</td></tr>
-        <tr><td><kbd>S</kbd></td><td>back up</td></tr>
-        <tr class="extra"><td><kbd>F</kbd> honk</td><td><kbd>E</kbd><kbd>Q</kbd> higher / lower</td></tr>
+        <tr><td><kbd>W</kbd></td><td>hold to go and rescue</td></tr>
+        <tr><td><kbd>A</kbd><kbd>D</kbd></td><td>optional steering</td></tr>
+        <tr><td><kbd>S</kbd></td><td>slow / reverse</td></tr>
+        <tr class="extra"><td><kbd>F</kbd> honk</td><td><span class="height-keys"><kbd>E</kbd><kbd>Q</kbd> higher / lower</span></td></tr>
       </table>
       <table class="keysPro kp-heli"><tr><td><kbd>W</kbd><kbd>S</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn the nose</td></tr><tr><td><kbd>Q</kbd><kbd>E</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Space</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>R</kbd></td><td>hold to lower the basket</td></tr></table>
       <table class="keysPro kp-boat"><tr><td><kbd>W</kbd></td><td>throttle</td></tr><tr><td><kbd>S</kbd></td><td>slow / astern</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>steer</td></tr><tr><td></td><td>stop beside a friend to throw the ring</td></tr></table>
       <table class="keysPro kp-plane"><tr><td><kbd>W</kbd><kbd>S</kbd></td><td>boost / ease off (it cruises by itself)</td></tr><tr><td><kbd>A</kbd><kbd>D</kbd></td><td>turn</td></tr><tr><td><kbd>Space</kbd><kbd>Shift</kbd></td><td>climb / dive</td></tr><tr><td></td><td>fly down onto the water to land; hold W to take off again</td></tr></table>
     </div>
-    <div class="card v-heli" style="--c:var(--p2)">
+    <div class="card v-heli" data-pilot="1" style="--c:var(--p2)">
       <h3>🔵 Blue pilot</h3>
       <div class="pick"><button class="veh on" data-p="1" data-v="heli">🚁 Helicopter</button><button class="veh" data-p="1" data-v="plane">🛩️ Seaplane</button><button class="veh" data-p="1" data-v="boat">🚤 Boat</button></div>
-      <div class="pick"><button class="flt on" data-p="1" data-m="easy">🧸 Easy flying</button><button class="flt" data-p="1" data-m="pro">🎖️ Pilot</button></div>
+      <div class="pick"><button class="flt on" data-p="1" data-m="easy">🧸 Assisted</button><button class="flt" data-p="1" data-m="pro">🎖️ Manual controls</button></div>
       <table class="keysEasy">
-        <tr><td><kbd>↑</kbd></td><td>go!</td></tr>
-        <tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn</td></tr>
-        <tr><td><kbd>↓</kbd></td><td>back up</td></tr>
-        <tr class="extra"><td><kbd>/</kbd> honk</td><td><kbd>Enter</kbd><kbd>Shift</kbd> higher / lower</td></tr>
+        <tr><td><kbd>↑</kbd></td><td>hold to go and rescue</td></tr>
+        <tr><td><kbd>←</kbd><kbd>→</kbd></td><td>optional steering</td></tr>
+        <tr><td><kbd>↓</kbd></td><td>slow / reverse</td></tr>
+        <tr class="extra"><td><kbd>/</kbd> honk</td><td><span class="height-keys"><kbd>Enter</kbd><kbd>Shift</kbd> higher / lower</span></td></tr>
       </table>
       <table class="keysPro kp-heli"><tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>tilt forward / back</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn the nose</td></tr><tr><td><kbd>,</kbd><kbd>.</kbd></td><td>slide left / right</td></tr><tr><td><kbd>Enter</kbd><kbd>Shift</kbd></td><td>climb / descend</td></tr><tr><td><kbd>Ctrl</kbd></td><td>hold to lower the basket</td></tr></table>
       <table class="keysPro kp-boat"><tr><td><kbd>↑</kbd></td><td>throttle</td></tr><tr><td><kbd>↓</kbd></td><td>slow / astern</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>steer</td></tr><tr><td></td><td>stop beside a friend to throw the ring</td></tr></table>
       <table class="keysPro kp-plane"><tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>boost / ease off (it cruises by itself)</td></tr><tr><td><kbd>←</kbd><kbd>→</kbd></td><td>turn</td></tr><tr><td><kbd>Enter</kbd><kbd>Shift</kbd></td><td>climb / dive</td></tr><tr><td></td><td>fly down onto the water to land; hold ↑ to take off again</td></tr></table>
     </div>
   </div>
-  <p class="tip">Just fly! Everything stays up by itself. Fly to a golden light beam: the helicopter lowers its rescue basket,<br>the seaplane skims past and the boat pulls up alongside, and friends hop aboard. Then fly home and they hop out. Higher / lower keys work on both machines if you want them. Nothing can go wrong — explore anywhere.<br>Grown-ups: pick 🎖️ Pilot to do it all yourself — no autopilot, the wind to argue with, and stars for doing it well.</p>
+  </details>
+  <p class="tip">Hold go to collect friends and bring them home. Steering is optional.<br>Grown-ups: choose Manual controls for more hands-on flying and boating.</p>
 </div>
 <div id="err"></div>
 

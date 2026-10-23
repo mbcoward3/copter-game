@@ -6,10 +6,11 @@ Alternatively, open **`rescue-squad-3d.html`** after building (no server or inte
 The original 2D game is still there as `helicopter-game.html`.
 
 ## Playing
-- **Red:** `W` go, `A`/`D` turn, `S` back up. **Blue:** arrow keys. That is all a small pilot needs.
+- **Assisted controls:** hold `W` (or `↑` when playing solo) to go. Steering, rescues and the trip home are assisted;
+  you can keep holding go through the whole mission. **Red:** `A`/`D` optionally turn, `S` slow/reverse. **Blue:** arrow keys.
 - Press go on the pad and the engine starts up: the rotor winds up for about three seconds, then it lifts off.
 - The helicopter flies at a safe height by itself, slows near animals, drops its basket on its own,
-  turns back if it wanders too far, and lands itself when left alone over a helipad.
+  climbs over buildings and rock arches, turns back if it wanders too far, and lands itself when left alone over a helipad.
 - Each pilot picks a **helicopter**, a **seaplane** or a **fast boat** on the start screen (two players can mix).
 - Helicopter: fly to a golden light beam; the side door slides open and the rescue basket goes down. Carry up to 3, fly home and they hop out.
   A friend waiting on an island is fetched by landing: fly over them and the helicopter sets itself down, they climb in, press go to leave.
@@ -19,25 +20,31 @@ The original 2D game is still there as `helicopter-game.html`.
 - Friends turn up in all sorts of places: on rafts and life rings, in kayaks, sitting on capsized dinghies, on the deck of a smoking
   fishing boat, on the porches of the stilt huts in the atoll lagoon (boats get in through the channel in the reef), at island landing
   sites, and stuck on sea-cliff ledges where only the helicopter's basket can reach.
-- Pilot mode (per pilot, on the start screen) is for grown-ups, and works for all three machines. Helicopter: tilt to accelerate, turn the nose, slide sideways,
+- Manual controls (per pilot, under “Choose vehicles and controls”) are for grown-ups, and work for all three machines. Helicopter: tilt to accelerate, turn the nose, slide sideways,
   work the collective for height, land it yourself and hold a hover to winch. Landings and pickups are marked out of three stars.
   Keys: `W`/`S` tilt, `A`/`D` turn, `Q`/`E` slide, `Space`/`Shift` climb and descend, `R` winch (blue: arrows, `,`/`.`, `Enter`/`Shift`, `Ctrl`).
   Gamepad: left stick tilt, right stick turn, triggers climb and descend, A winch.
-  Boat: `W`/`S` throttle, `A`/`D` steer, `R` throws the ring when you are stopped beside a friend; jump the swell for air.
-  Seaplane: `W`/`S` move the throttle lever, `A`/`D` turn, `Space`/`Shift` climb and descend; it flies above about 15 m/s,
-  taxi up to a friend and stop to let them swim over.
+  Boat: `W`/`S` throttle, `A`/`D` steer; stop beside a friend and the crew throws a ring automatically (`R` can also throw it).
+  Seaplane: hold `W` on the water to take off; in the air it cruises by itself, with `W` boosting and `S` easing off.
+  `A`/`D` turn and `Space`/`Shift` climb and descend. Fly down to land on water, then taxi up to a friend and stop for boarding.
 - Fire missions: two of the missions (after the Pine Forest and after Volcano Isle) are fires to put out instead of friends
   to fetch: fires in the trees beside the island landing sites, a friend waiting by each. Put it out and the friend is safe.
   Helicopter: the basket is swapped for a water bucket; fly low over the sea to fill it, then over the fire to drop it.
   Seaplane: skim along the sea to scoop a tankful, then fly low over the fire. Boat: stop near the shore below the fire
   and the water cannon sprays it. In easy flying, holding go does all of this by itself.
 - Weather (corner button, and it changes by mission: calm, breezy, calm, stormy) raises the swell and the wind. Easy flying barely feels it; Pilot mode feels all of it.
-- Extras: `F` or `/` honk, `E`/`Q` or `Enter`/`Shift` higher/lower, gamepads.
-- Corner buttons (for grown-ups): add/remove player 2, time of day, weather, graphics (✨ automatic: steps detail down when the
-  computer struggles and back up when it can; 💎 best; ⚡ fast), mute, pause.
+- Extras: `F` or `/` honk; in assisted aircraft, `E`/`Q` or `Enter`/`Shift` adjust height; gamepads are supported in play.
+- The water gauge shows bucket/tank fill during fire missions. Boats use their existing water cannon directly.
+- The gear button opens settings for player 2, time of day, weather, graphics (✨ automatic: steps detail down when the
+  computer struggles and back up when it can; 💎 best; ⚡ fast), and volume. Mute and pause stay beside it.
+- Sound, vehicle and control preferences are remembered on this browser. The game pauses when the window loses focus;
+  choose **Keep playing** to resume. Progress within an outing is not yet saved across reloads.
+- Keyboard or gamepad is needed for driving; touch driving controls are not provided.
 
 ## Sounds
-Every sound is a real recording, cut into loops and one-shots by `tools/pack_audio.py` (sources listed at its top):
+Vehicle engines, ambience, animal calls and effects use real recordings, cut into loops and one-shots by
+`tools/pack_audio.py` (sources listed at its top). A soft synthesized thud accompanies touchdown; animals without a
+recorded call use a quiet chime acknowledgment. Sources:
 recordings from [BigSoundBank](https://bigsoundbank.com) (CC0); the jingles between missions from Kenney's
 [Music Jingles](https://kenney.nl/assets/music-jingles) (CC0); and "Propeller-plane-flying-steady-01" by Versatile Virtuoso,
 [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Propeller-plane-flying-steady-01.wav), CC BY-SA 4.0.
@@ -49,10 +56,15 @@ After editing:
 
     npm install        # first time only
     npm run build      # rebuilds rescue-squad-3d.html
+    npm test           # flight-clearance and audio-lifecycle regressions
     npm run serve      # optional dev server on http://localhost:5173
 
 `tools/build_vehicles.py` (Blender) makes the boat, seaplane, sea arch, stilt hut and kayak into `build/vehicles`; pack them with
 `blender --background --python tools/pack_models.py -- unreal/RescueSquad/Saved/Models src/assets build/vehicles`.
-`tools/soak.js` plays the game unattended in the browser and reports rescues and stuck time (see the comment at its top).
+`tools/soak.js` plays the game unattended in the browser and reports rescues and stuck time. Its default test holds only
+go, including at home: `soak('heli', 300)`. It does not steer on the pilot's behalf. See the comment at its top for options.
 
 Pushing `main` builds the game and updates the production content in the private `talos-cluster` GitOps repository.
+
+For a second local checkout, set `COPTER_PORT` before serving (PowerShell: `$env:COPTER_PORT=5174`).
+The development server listens on this machine only.

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 
-const PORT = 5173;
+const PORT = Number(process.env.COPTER_PORT || 5173);
 const ROOT = process.cwd();
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png' };
 
@@ -27,4 +27,4 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(404); res.end('not found');
   }
-}).listen(PORT, () => console.log('serving on http://localhost:' + PORT));
+}).listen(PORT, '127.0.0.1', () => console.log('serving on http://localhost:' + PORT));

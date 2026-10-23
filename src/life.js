@@ -160,6 +160,7 @@ export function createLife(scene, world, fx) {
 
   // ------------------------------------------------ update
   life.update = function (dt, t, players) {
+    ears = players;
     smoke(dt, players);
     // the boats tied up in the harbour ride the swell
     for (const b of world.moored) {
