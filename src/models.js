@@ -168,7 +168,10 @@ export function buildPlane(accent) {
   const beacon = mesh(new THREE.SphereGeometry(0.12, 8, 6), lightMat(0xff2030), 0, -0.78, 0.5, g); beacon.castShadow = false;
   const lampMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xdcecff, emissiveIntensity: 0 });
   mesh(new THREE.SphereGeometry(0.16, 10, 8), lampMat, 2.2, 1.1, 2.6, g).castShadow = false;
-  return { group: g, prop, discMat, bladeMat, strobe, beacon, lampMat, seat };
+  const fireTank = new THREE.Group(); g.add(fireTank); fireTank.visible = false;
+  const tank = mesh(new THREE.CylinderGeometry(0.65, 0.65, 2.7, 14), std(0xf1ba37), 0, -0.3, -0.2, fireTank); tank.rotation.x = Math.PI / 2;
+  mesh(new THREE.BoxGeometry(0.6, 0.3, 0.5), std(0x263b48), 0, -0.95, -0.2, fireTank);
+  return { group: g, prop, discMat, bladeMat, strobe, beacon, lampMat, seat, fireTank };
 }
 
 
@@ -190,5 +193,10 @@ export function buildBoat(accent) {
     motors.push(mo);
   }
   const seat = new THREE.Group(); seat.position.set(0, 0.66, -2.5); g.add(seat);
-  return { group: g, seat, strobe, beacon, lampMat, motors };
+  const monitor = new THREE.Group(); monitor.position.set(0, 2.25, 2.65); g.add(monitor); monitor.visible = false;
+  mesh(new THREE.CylinderGeometry(0.3, 0.4, 0.6, 12), std(0xff6838), 0, 0, 0, monitor);
+  const barrel = new THREE.Group(); barrel.position.y = 0.32; monitor.add(barrel);
+  const nozzle = mesh(new THREE.CylinderGeometry(0.15, 0.22, 1.45, 12), std(0xe4e8e9), 0, 0, 0.55, barrel); nozzle.rotation.x = Math.PI / 2;
+  mesh(new THREE.TorusGeometry(0.18, 0.055, 6, 12), std(0x2e3e48), 0, 0, 1.28, barrel);
+  return { group: g, seat, strobe, beacon, lampMat, motors, monitor, barrel };
 }

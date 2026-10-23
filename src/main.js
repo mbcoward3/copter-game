@@ -12,6 +12,9 @@ import { createNav, lookAhead, routeLeft } from './nav.js';
 import { createLife } from './life.js';
 import { audio, sfx, animalVoice } from './audio.js';
 import { flightClearance } from './flight-safety.mjs';
+import { createFireField, advanceFire, waterImpact, predictDrop, attackPoint, fireProgress, bombingRun, WATER } from './firefighting.mjs';
+import { buildFireScene, buildWaterStream } from './fire-scene.js';
+import { chooseMission, LOCATIONS, MODES } from './missions.mjs';
 import { createPortraits } from './portraits.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -42,6 +45,9 @@ const scene = new THREE.Scene();
 const world = createWorld(scene, renderer);
 const fx = createFx(scene);
 const life = createLife(scene, world, fx);
+// Keep the fire programs compiled from startup; the first dispatch should not pause to build its shaders.
+const firePrograms = buildFireScene(scene, { x: 0, z: 0, spacing: 1, cells: [{ x: 0, z: 0, y: -100, canopy: 0, heat: 0, wet: 0, everBurned: false }] });
+firePrograms.group.scale.setScalar(0.001);
 // charts of open water and of what stands up in the air, for the autopilots' routes (see nav.js)
 const navT0 = performance.now();
 const nav = createNav();
@@ -74,9 +80,18 @@ function makePlayer(idx) {
   // rebuild them all, a freeze of seconds on a small laptop. A dark stand-in light keeps the count while it is away.
   const spotStandIn = new THREE.SpotLight(0xffffff, 0); spotStandIn.visible = false;
   scene.add(spotStandIn);
+  const waterStream = buildWaterStream(scene);
+  const fillGuide = new THREE.Group();
+  const guideRing = new THREE.Mesh(new THREE.RingGeometry(7, 8, 48), new THREE.MeshBasicMaterial({ color: 0x56caff, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false }));
+  guideRing.rotation.x = -Math.PI / 2; fillGuide.add(guideRing);
+  const icon = document.createElement('canvas'); icon.width = icon.height = 128;
+  const ctx = icon.getContext('2d'); ctx.font = '90px "Segoe UI Emoji"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('💧', 64, 66);
+  const texture = new THREE.CanvasTexture(icon); texture.colorSpace = THREE.SRGBColorSpace;
+  const dropIcon = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthWrite: false })); dropIcon.scale.set(3.5, 3.5, 1); dropIcon.position.y = 5; fillGuide.add(dropIcon);
+  fillGuide.visible = false; scene.add(fillGuide);
   const pane = $('#pane' + idx);
   const p = {
-    idx, model, basket, rope, cam, pane, spotStandIn, active: false, cage, bucket, water: 0, pour: 0, fireJob: null, spray: null,
+    idx, model, basket, rope, cam, pane, fillGuide, waterStream, spotStandIn, active: false, cage, bucket, water: 0, pour: 0, attack: null, fireAim: null, fireJob: null, spray: null,
     vehicle: 'heli', heli: model, heliBasket: basket, plane, boat, fs: 0, afloat: true, sea: 1, hoist: 0, manualT: 0, hook: new THREE.Vector3(),
     pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, yawVel: 0, pitch: 0, roll: 0,
     spin: 0, landed: true, grounded: true, clearance: 0, surfaceY: 0, overLand: true,
@@ -129,16 +144,11 @@ players.forEach(parkPlayer);
 const activePlayers = () => players.filter(p => p.active);
 
 // ================================================================= game state
-// Missions go round the zones: the home bay first, then out to each of the others in turn, a friend more each time round.
-// Two of them are fire missions, nothing but fires to put out (see the fires section): the forest's and the volcano's.
+// Each outing stays in its selected mode. Fire districts have shore access for every vehicle.
 const MISSION_ZONES = ['home', 'forest', 'reef', 'harbour', 'snow', 'volcano'].map(id => ZONES.find(Z => Z.id === id));
-const MISSIONS = [['home'], ['forest'], ['forest', true], ['reef'], ['harbour'], ['snow'], ['volcano'], ['volcano', true]]
-  .map(([id, fire]) => ({ zone: ZONES.find(Z => Z.id === id), fire: !!fire }));
-const missionFor = m => MISSIONS[(m - 1) % MISSIONS.length];
-const zoneFor = m => missionFor(m).zone;
-const game = { state: 'menu', paused: false, mission: 1, zone: MISSION_ZONES[0], fire: false, rescued: 0, goal: 5, saved: [], total: 0, presetIdx: 0, celebrate: 0, fireT: 0, spawnT: 0, t: 0, boop: 0 };
+const game = { state: 'menu', mode: 'mixed', location: 'auto', paused: false, mission: 1, zone: MISSION_ZONES[0], fire: false, rescued: 0, goal: 5, saved: [], total: 0, presetIdx: 0, celebrate: 0, fireT: 0, spawnT: 0, t: 0, boop: 0 };
 const waiting = [], residents = [], hoppers = [];
-const goalFor = m => { const round = Math.floor((m - 1) / MISSIONS.length); return missionFor(m).fire ? Math.min(3 + round, 5) : Math.min(5 + round, 8); };
+const goalFor = m => game.fire ? 1 : Math.min(5 + Math.floor((m - 1) / MISSION_ZONES.length), 8);
 // friends this mission still needs found: the goal, less those already home, aboard, climbing aboard or hopping home
 function stillNeeded() {
   let n = game.goal - game.rescued;
@@ -256,7 +266,7 @@ const LAGOON = { x: -165, z: 200, r: 26 };
 function nearestFor(p) {
   let best = null, bd = 1e9;
   for (const an of waiting) {
-    if (outOfReach(an, p) || (an.claimed && an.claimed !== p)) continue;
+    if (outOfReach(an, p) || (!an.fire && an.claimed && an.claimed !== p)) continue;
     if (an.fire && (p.cargo.length || p.incoming)) continue;      // (nobody goes firefighting with friends aboard)
     const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
     if (d < bd) { bd = d; best = an; }
@@ -404,7 +414,7 @@ function updatePlayer(p, dt, t) {
       const room = p.cargo.length + p.incoming < MAX_CARGO, guide = room ? nearestFor(p) : null;
       const an = p.target || (guide && guide.an);
       // (fighting a fire: to the nearest open water to fill the bucket, then over the flames)
-      const goal = p.fireJob ? (p.water >= 1 ? p.fireJob.fire : p.fireJob.fire.dip) : p.cargo.length && (!room || !guide || guide.d > 200) ? HOME_SPOT : an ? (an.kind === 'camp' ? an.site : an.pos) : null;
+      const goal = p.fireJob ? (waterReady(p) ? { x: p.fireAim.x - (p.hook.x - p.pos.x), z: p.fireAim.z - (p.hook.z - p.pos.z) } : p.fireJob.fire.dip) : p.cargo.length && (!room || !guide || guide.d > 200) ? HOME_SPOT : an ? (an.kind === 'camp' ? an.site : an.pos) : null;
       if (goal) {
         gd = Math.hypot(goal.x - p.pos.x, goal.z - p.pos.z);
         off = angDiff(Math.atan2(goal.x - p.pos.x, goal.z - p.pos.z), p.yaw);
@@ -552,7 +562,7 @@ function laneAt(S, back, ahead, need, prefer) {
 // where to come down for S, and on what heading: at S itself if a lane runs into it, or else at the nearest open water
 // that has one (then taxi the rest)
 function landingFor(S, ahead, from, toward) {
-  // (straight in from where the plane is; or, for a scoop, pointing at the fire, so it comes off the water heading there)
+  // A scoop lines up toward the fire for its next pass.
   const prefer = toward ? Math.atan2(toward.x - S.x, toward.z - S.z) : Math.atan2(S.x - from.x, S.z - from.z);
   let h = nav.water.at(S.x, S.z) >= LANE.need ? laneAt(S, LANE.back, ahead, LANE.need, prefer) : null;
   if (h !== null) return { x: S.x, z: S.z, h };
@@ -588,7 +598,7 @@ function planePilot(p, t, dt, ready, room) {
   // ---- what it is doing: a friend, the pier, a fire (scoop or drop), or, let go in the air, just landing
   const F = p.fireJob && p.fireJob.fire;
   let kind, goal, key;
-  if (F) { kind = p.water >= 1 ? 'drop' : 'scoop'; goal = p.water >= 1 ? F : F.scoop; key = kind + F.x; }
+  if (F) { kind = waterReady(p) ? 'drop' : 'scoop'; goal = waterReady(p) ? p.fireAim : F.scoop; key = kind + F.x; }
   else if (p.target) { kind = 'pickup'; goal = p.target.pos; key = 'f' + p.target.id; }
   else if (p.cargo.length) { kind = 'dock'; goal = DOCK; key = 'dock'; }
   else if (p.input.f <= 0 && (A.park || !p.afloat)) {
@@ -598,7 +608,7 @@ function planePilot(p, t, dt, ready, room) {
     kind = 'park'; goal = A.park; key = 'park';
   } else { kind = 'free'; goal = null; key = 'free'; }
   if (p.input.f > 0 || (p.afloat && p.fs < 6)) A.park = null;          // (kept through the splash and roll-out)
-  if (key !== A.key) { A.key = key; A.land = null; A.final = false; A.air = null; A.arrived = false; }
+  if (key !== A.key) { A.key = key; A.land = null; A.final = false; A.air = null; A.bomb = null; A.arrived = false; A.stallT = null; A.stallAt = null; A.reverseUntil = 0; }
   if (!goal) {
     // nothing to fetch: go held, it takes off down a clear lane the way it is pointing and flies on wherever the pilot
     // steers it (the world's edge turns it back); let go on the water, it waits
@@ -610,11 +620,48 @@ function planePilot(p, t, dt, ready, room) {
     return out;
   }
 
+  // A scoop interrupted by a float catching a rock must not leave the crew applying power forever.
+  if (kind === 'scoop' && p.afloat && p.input.f > 0) {
+    if (game.t < A.reverseUntil) { out.aim = null; out.cap = -4; out.alt = 0; return out; }
+    if (!A.stallAt || Math.hypot(p.pos.x - A.stallAt.x, p.pos.z - A.stallAt.z) > 6) {
+      A.stallAt = { x: p.pos.x, z: p.pos.z }; A.stallT = game.t;
+    }
+    if (game.t - A.stallT > 5) {
+      A.reverseUntil = game.t + 2.5; A.stallT = null; A.stallAt = null;
+      A.run = null; A.final = false; A.land = null; A.air = null;
+      out.aim = null; out.cap = -4; out.alt = 0; return out;
+    }
+  } else { A.stallT = null; A.stallAt = null; }
+
   // ---- a fire with water aboard: by an air route over it, low enough to drop (the drop itself is in updatePlane)
   if (kind === 'drop') {
     if (p.afloat) return takeoff(p, A, out, goal);
-    airRoute(p, A, goal, out, 70);
-    out.over = F.y + 10 - PLANE_FLOAT;
+    if (!A.bomb) {
+      const aim = { ...p.fireAim };
+      const from = Math.hypot(p.pos.x - aim.x, p.pos.z - aim.z) > 130 ? p.pos : F.scoop;
+      A.bomb = bombingRun(aim, from, WORLD_R); A.bomb.since = t;
+      A.air = null;
+    }
+    const B = A.bomb; p.fireAim = B.aim;
+    const dx = B.aim.x - p.pos.x, dz = B.aim.z - p.pos.z, distance = Math.hypot(dx, dz);
+    if (B.stage === 'line-up') {
+      airRoute(p, A, B.entry, out, 50);
+      const entryD = Math.hypot(p.pos.x - B.entry.x, p.pos.z - B.entry.z);
+      if (entryD < 180) out.aim = B.entry;
+      out.cap = 25;
+      if (entryD < 42) { B.stage = 'run'; B.since = t; A.air = null; }
+    } else {
+      out.cap = 22; out.aim = B.lock || B.aim;
+      const error = Math.abs(angDiff(Math.atan2(dx, dz), p.yaw));
+      if (!B.lock && distance < 85 && error < 0.28) {
+        const h = Math.atan2(dx, dz);
+        B.lock = { x: B.aim.x + Math.sin(h) * 160, z: B.aim.z + Math.cos(h) * 160 };
+      }
+      if (!p.attack && ((B.lock && distance > 95 && (dx * Math.sin(p.yaw) + dz * Math.cos(p.yaw)) < 0) || t - B.since > 24)) {
+        A.bomb = null; A.air = null;
+      }
+    }
+    out.over = F.y + 12 - PLANE_FLOAT;
     return out;
   }
   // ---- on the water: taxi to it if it is near enough by water, or else take off (it stays down unless on a take-off run)
@@ -634,13 +681,15 @@ function planePilot(p, t, dt, ready, room) {
         A.final = false;
         out.aim = R.aim; out.near = R.left < 40;
         out.cap = clamp(1.5 + (R.left - (kind === 'dock' ? 6 : 10)) * 0.3, 0, 9);
-        // (as close as the water lets it get: a friend a little further off swims the rest)
         A.arrived = R.left < 6;
         return out;
       }
     }
     if (kind === 'park') { out.cap = 0; return out; }
-    return takeoff(p, A, out, goal);
+    const departure = takeoff(p, A, out, goal);
+    // Fill the tank on this water run before rotating; taking off with a partial load wastes a whole circuit.
+    if (kind === 'scoop' && !waterReady(p) && departure.run) { departure.cap = Math.min(departure.cap, 12); departure.alt = 0; }
+    return departure;
   }
   A.run = null;
 
@@ -738,7 +787,7 @@ function updatePlane(p, dt, t) {
   const cap = ap ? ap.cap : PL.max;
 
   // ---- turning: one smoothed turn rate; the bank comes from it. The pilot's own steering always wins outright.
-  const maxRate = p.afloat ? 1.15 : p.pro ? 1.5 : p.fireJob && p.water >= 1 ? 1.3 : 0.9;
+  const maxRate = p.afloat ? 1.15 : p.pro ? 1.5 : p.fireJob && waterReady(p) ? 1.3 : 0.9;
   let turnCmd = p.pro ? clamp(inp.t - inp.s, -1, 1) : inp.t !== 0 ? inp.t
     : ap && ap.aim ? clamp(angDiff(Math.atan2(ap.aim.x - p.pos.x, ap.aim.z - p.pos.z), p.yaw) * 1.7 - p.yawVel * 0.35, -1, 1) : 0;
   // far out to sea: lean back toward the islands
@@ -856,15 +905,17 @@ function updatePlane(p, dt, t) {
     if (d < (an.kind === 'islet' ? 24 : 12)) { board(an, p); if (an.kind === 'islet' || d < 7) rate(p, 3, 'Right alongside'); else if (d < 10) rate(p, 2, 'Nice taxiing'); else rate(p, 1, 'A long swim!'); break; }
   }
   // ---- the water bomber: skimming fast along the sea fills the tank; passing low over the fire empties it onto them
-  if (p.fireJob && p.water < 1 && p.afloat && p.fs > 6) {
+  if (p.fireJob && !p.attack && p.water < 1 && p.afloat && p.fs > 6) {
     p.water = Math.min(1, p.water + dt / 2.2);
     if (Math.random() < 0.6) fx.emit(p.pos.x - nfx * 2, wave + 0.2, p.pos.z - nfz * 2, (Math.random() - 0.5) * 3 - nfx * 2, 2 + Math.random() * 3, (Math.random() - 0.5) * 3 - nfz * 2, 0.92, 0.97, 1, 0.7, 0.5 + Math.random() * 0.5, 0.9, 9, 1);
     if (p.water >= 1) waterAboard(p);
   }
-  if (p.water >= 1 && !p.afloat) for (const an of waiting) {
-    if (!burning(an)) continue;
-    const F = an.fire, ahead = p.fs * 0.55;          // (let go a little before: the water carries on forward as it falls)
-    if (Math.hypot(p.pos.x + nfx * ahead - F.x, p.pos.z + nfz * ahead - F.z) < F.r + 12 && p.pos.y - F.y < 55 && p.pos.y > F.y - 3) { dump(p, an, V.set(p.pos.x, p.pos.y - 1.3, p.pos.z)); break; }
+  if (p.water >= 0.99 && !p.attack && !p.afloat && p.fireJob) {
+    const F = p.fireJob.fire, aim = p.fireAim;
+    const hit = predictDrop({ x: p.pos.x, y: p.pos.y - 1.3, z: p.pos.z }, p.vel, aim.y, 'plane', WIND);
+    // Start early: the tank lays a continuous strip across the front, rather than a single magic hit.
+    const ahead = Math.max(0, p.fs) * WATER.plane.duration * 0.45;
+    if ((Math.hypot(hit.x + nfx * ahead - aim.x, hit.z + nfz * ahead - aim.z) < 9 && p.pos.y > aim.y + 1) || (p.pro && inp.w)) dump(p, p.fireJob);
   }
   // ---- home: friends hop out along the pier
   p.dropCd -= dt;
@@ -1052,13 +1103,22 @@ function updateBoat(p, dt, t) {
   if (p.spray) {
     const F = p.spray.fire;
     if (!was) sfx.splash();
-    F.heat -= dt / 2.4; F.hiss = Math.max(F.hiss, 0.5);
+    const aim = attackPoint(F, p.idx, p.pos), src = { x: p.pos.x + nfx * 2.6, y: p.pos.y + 2.6, z: p.pos.z + nfz * 2.6 };
+    const distance = Math.hypot(aim.x - src.x, aim.z - src.z), tau = clamp(distance / 30, 0.45, 1.6);
+    const direction = Math.atan2(aim.x - src.x, aim.z - src.z), elevation = Math.atan2(aim.y - src.y + 4.905 * tau * tau, distance);
+    src.x += Math.sin(direction) * Math.cos(elevation) * 1.28; src.z += Math.cos(direction) * Math.cos(elevation) * 1.28; src.y += Math.sin(elevation) * 1.28;
+    if (F.active > 0) p.waterStream.update(src, { ...aim, time: tau }, 0.11, 0.28); else p.waterStream.hide();
+    p.jetAcc = (p.jetAcc || 0) + dt;
+    if (F.active > 0 && p.jetAcc >= 0.08) {
+      const dose = Math.min(p.jetAcc, 0.16); p.jetAcc = 0;
+      launchWater(p, p.spray, src, { ...aim, time: tau, radius: WATER.boat.radius }, WATER.boat.capacity * dose, 'jet');
+    }
+    p.boat.monitor.rotation.y = angDiff(Math.atan2(aim.x - src.x, aim.z - src.z), p.yaw);
+    p.boat.barrel.rotation.x = -Math.atan2(aim.y - src.y + 4.905 * tau * tau, distance);
     p.sprayT = (p.sprayT || 0) - dt;
-    if (p.sprayT <= 0) { p.sprayT = 0.9; sfx.hiss(0.45); }
-    // (from the monitor on the foredeck, in a high arc)
-    waterArc(V.set(p.pos.x + nfx * 2.6, p.pos.y + 2.4, p.pos.z + nfz * 2.6), F, 1.35, dt * 160, 0.2);
-    if (F.heat <= 0) fireOut(p.spray, p);
+    if (p.sprayT <= 0) { p.sprayT = 1.2; sfx.hiss(0.35); }
   }
+  if (!p.spray) p.waterStream.hide();
   p.dropCd -= dt;
   if (p.cargo.length && dockD < (p.pro ? 14 : 30) && Math.abs(p.fs) < (p.pro ? 2.5 : 10) && p.dropCd <= 0) { if (p.pro) rate(p, dockD < 8 ? 3 : 2, dockD < 8 ? 'Neat docking' : 'Docked'); deliverOne(p); p.dropCd = 0.45; }
   if (!p.parked && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; }
@@ -1152,7 +1212,7 @@ function updateWinch(p, dt, t) {
   } else if (bucket && ready) {
     // empty and over the sea, going slowly: the bucket goes down into the water; otherwise it hangs a little below
     surfaceAt(p.hook.x, p.hook.z, t, SURF2);
-    if (p.water < 1 && !SURF2.land && Math.hypot(p.vel.x, p.vel.z) < 9) { mode = 'dip'; ty = SURF2.y - 1.0; om = 4.5; }
+    if (!p.attack && p.water < 1 && !SURF2.land && Math.hypot(p.vel.x, p.vel.z) < 9) { mode = 'dip'; ty = SURF2.y - 1.0; om = 4.5; }
     else { ty -= 2.5; om = 6; }
   } else if (p.target && ready) {
     mode = 'pickup'; om = 5.5;
@@ -1191,17 +1251,18 @@ function updateWinch(p, dt, t) {
 
   // the bucket fills while it is under water, and empties itself once it is over a fire
   if (bucket) {
-    if (p.water < 1 && !bs.land && b.y < bs.y + 0.1) {
+    if (!p.attack && p.water < 1 && !bs.land && b.y < bs.y + 0.1) {
       p.water = Math.min(1, p.water + dt / 0.9);
       if (Math.random() < 0.5) fx.splash(b.x, bs.y, b.z, 3, 0.5);
       if (p.water >= 1) { waterAboard(p); bv.y -= 2.5; fx.splash(b.x, bs.y, b.z, 22, 0.9); }
     }
-    if (p.water >= 1) for (const an of waiting) {
-      if (!burning(an)) continue;
-      const F = an.fire;
-      if (Math.hypot(b.x - F.x, b.z - F.z) < F.r + 3.5 && b.y < F.y + 45 && b.y > F.y - 2) { dump(p, an, V.set(b.x, b.y + 0.4, b.z)); bv.y += 3; break; }
+    if (p.water >= 0.99 && !p.attack && p.fireJob) {
+      const aim = p.fireAim;
+      const hit = predictDrop({ x: b.x, y: b.y + 0.4, z: b.z }, p.vel, aim.y, 'heli', WIND);
+      if ((Math.hypot(hit.x - aim.x, hit.z - aim.z) < 5.5 && b.y > aim.y + 1 && b.y < aim.y + 45) || (p.pro && p.input.w && bs.land)) dump(p, p.fireJob);
     }
   }
+
   // friend hops aboard as soon as the basket is close
   if (p.target && Math.hypot(b.x - p.target.pos.x, b.z - p.target.pos.z) < 3.2 && Math.abs(b.y - p.target.pos.y) < 2.6) { board(p.target, p); p.target = null; }
   if (p.pro && p.winch > 1 && !bucket && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
@@ -1233,10 +1294,12 @@ function updateCamera(p, dt, t) {
   p.camG += ((p.grounded ? 1 : 0) - p.camG) * damp(p.grounded ? 1.3 : 0.9, dt);
   const pl = p.vehicle === 'plane', bt = p.vehicle === 'boat';
   const dist = lerp((pl ? 27 : bt ? 17 : 19) + ext * 0.42, pl ? 17 : bt ? 11.5 : 12.5, p.camG), height = lerp((pl ? 9 : bt ? 6 : 7.5) + ext * 0.3, pl ? 4.6 : bt ? 4 : 3.4, p.camG);
-  const back = dist + (pro ? sp * 0.2 : 0);
+  const incident = p.fireJob?.fire;
+  const fireView = incident && (waterReady(p) || p.spray || game.t < (p.waterViewUntil || 0)) ? clamp(1 - Math.hypot(p.pos.x - incident.x, p.pos.z - incident.z) / 90, 0, 1) : 0;
+  const back = dist + (pro ? sp * 0.2 : 0) + fireView * (bt ? 14 : 17);
   const vx = p.pos.x, vy = p.pos.y, vz = p.pos.z;
   let cx = vx - Math.sin(p.camYaw) * back, cz = vz - Math.cos(p.camYaw) * back;
-  let cy = vy + height + (pro ? sp * 0.04 : 0);
+  let cy = vy + height + (pro ? sp * 0.04 : 0) + fireView * 12;
   const fov = (activePlayers().length > 1 ? 66 : 58) + (pro ? sp * 0.36 : 0);
   if (Math.abs(p.cam.fov - fov) > 0.05) { p.cam.fov += (fov - p.cam.fov) * damp(3, dt); p.cam.updateProjectionMatrix(); }
   // Keep the view clear. Towers, rocks and huts: the camera steps sideways until the line from it to the machine
@@ -1271,6 +1334,7 @@ function updateCamera(p, dt, t) {
   p.camPos.lerp(V, damp(5, dt));
   const lead = p.vehicle === 'plane' ? 9 : p.vehicle === 'boat' ? 7 : 5;
   V.set(p.pos.x + Math.sin(p.yaw) * lead, p.pos.y + 1.2 - ext * 0.36, p.pos.z + Math.cos(p.yaw) * lead);
+  if (fireView > 0) { V.x = lerp(V.x, incident.x, fireView * 0.45); V.z = lerp(V.z, incident.z, fireView * 0.45); V.y = lerp(V.y, incident.y + 2, fireView * 0.3); }
   p.camLook.lerp(V, damp(7, dt));
   p.cam.position.copy(p.camPos);
   const sh = reducedMotion.matches ? 0 : p.shake * p.shake * 0.5 + (p.grounded ? p.spin * (1.1 - 0.8 * p.spin) * 0.07 : 0);
@@ -1304,8 +1368,9 @@ function campSpot(site) {
 }
 const pickOf = list => (list && list.length ? list[(Math.random() * list.length) | 0] : null);
 function spawnAnimal(near) {
-  // (if again and again no fire can be laid there that anyone flying now can reach, one breaks out in the home bay instead)
-  if (game.fire) { if (spawnFire(game.zone)) game.fireMiss = 0; else if (++game.fireMiss >= 3 && spawnFire(ZONES[0])) game.fireMiss = 0; return; }
+  if (waiting.length >= maxWaiting()) return;
+  // Retry locally; never send a fixed-location outing to another region.
+  if (game.fire) { if (spawnFire(game.zone)) game.fireMiss = 0; else game.fireMiss++; return; }
   if (game.zone.id !== 'home') { spawnInZone(game.zone); return; }
   const maxD = near ? 130 : HOME_R - 20;
   const heliUp = activePlayers().some(p => p.vehicle === 'heli');
@@ -1491,15 +1556,21 @@ function nearestWater(x, z, from, to, clear, skip) {
 }
 const inLagoon = (x, z) => Math.hypot(x - LAGOON.x, z - LAGOON.z) < LAGOON.r + 8;
 const inLake = (x, z) => Math.hypot(x - LAKE.x, z - LAKE.z) < LAKE.r + 10;
-function makeFire(x, z, y, r) {
-  // where to fill up (not in the atoll's lagoon, which the seaplane cannot get into), and where the boat can lie to
-  // reach it with the cannon (not on the forest's lake, which no boat can get to)
-  const dip = nearestWater(x, z, 14, 240, 12, inLagoon);
+function makeFire(x, z, y, r, roof = false, asset = null) {
+  const dip = nearestWater(x, z, 22, 240, 12, inLagoon);
   if (!dip) return null;
   const shore = nearestWater(x, z, 10, 40, 6, (wx, wz) => inLake(wx, wz));
-  // (the seaplane needs open sea with room to land, skim and take off again: not the forest's little lake)
-  const scoop = nearestWater(x, z, 30, 320, 24, (wx, wz) => inLagoon(wx, wz) || inLake(wx, wz));
-  return { x, y, z, r, heat: 3, max: 3, vis: 0, out: false, hiss: 0, acc: 0, smokeT: 0, dip, shore, scoop };
+  const scoop = nearestWater(x, z, 35, 320, 24, (wx, wz) => inLagoon(wx, wz) || inLake(wx, wz));
+  const field = createFireField({ x, z, y: roof ? y : terrainHeight(x, z), radius: roof ? 4.6 : 15 + Math.min(4, game.mission),
+    spacing: roof ? 2.3 : 4.8, roof, protectedAreas: asset ? [{ ...asset, r: 6 }] : [],
+    sample: (wx, wz) => SITES.some(s => Math.hypot(s.x - wx, s.z - wz) < s.r + 2) ? null : ({ y: terrainHeight(wx, wz), canopy: canopyAt(wx, wz) }) });
+  if (field.cells.length < 7) return null;
+  field.groundY = field.y;
+  field.y = Math.max(...field.cells.map(c => c.y + Math.min(c.canopy * 0.6, 12)));
+  Object.assign(field, { dip, shore, scoop, hiss: 0, steamAcc: 0, vis: 1, label: roof ? 'Rooftop fire' : 'Island fire' });
+  field.visual = buildFireScene(scene, field);
+  world.trackFire(field);
+  return field;
 }
 // in the trees at the edge of a landing site, the friend on the far side of the site from it
 function siteFire(s, wantShore) {
@@ -1512,9 +1583,10 @@ function siteFire(s, wantShore) {
     if (sc > bs) { bs = sc; best = { a, x, z, y: g + Math.max(c - 2, 0.4) }; }
   }
   if (!best) return null;
-  const F = makeFire(best.x, best.z, best.y, 5.5);
+  const fd = Math.min(7.5, s.r - 1.2), asset = { x: s.x - Math.cos(best.a) * fd, z: s.z - Math.sin(best.a) * fd };
+  const F = makeFire(best.x, best.z, best.y, 5.5, false, asset);
   if (!F) return null;
-  const fd = Math.min(7.5, s.r - 1.2);
+  F.label = 'Woodland fire';
   return { kind: 'camp', x: s.x - Math.cos(best.a) * fd, z: s.z - Math.sin(best.a) * fd, extra: { site: s, fire: F } };
 }
 function roofFire() {
@@ -1522,21 +1594,38 @@ function roofFire() {
   if (!r1) return null;
   const next = R.filter(q => { const d = Math.hypot(q.x - r1.x, q.z - r1.z); return d > 9 && d < 26; });
   if (!next.length) return null;
-  const r2 = pickOf(next), F = makeFire(r1.x, r1.z, r1.y + 0.5, 4.2);
+  const r2 = pickOf(next), F = makeFire(r1.x, r1.z, r1.y + 0.5, 8, true, r2);
+  if (F) F.label = 'Rooftop fire';
   return F && { kind: 'perch', x: r2.x, z: r2.z, extra: { perchY: r2.y, fire: F } };
+}
+function coastalFire(Z) {
+  for (let i = 0; i < 50; i++) {
+    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * Z.r;
+    const x = Z.x + Math.cos(a) * d, z = Z.z + Math.sin(a) * d, y = terrainHeight(x, z);
+    if (y < 1 || y > 16 || !nearestWater(x, z, 10, 38, 6, inLake)) continue;
+    const fx = x + 7, fz = z + 3, fy = terrainHeight(fx, fz);
+    if (fy < 1 || Math.abs(fy - y) > 4) continue;
+    const F = makeFire(fx, fz, fy + Math.max(0.5, canopyAt(fx, fz) - 2), 4.5, false, { x, z });
+    if (F) { F.label = 'Shoreline fire'; return { kind: 'perch', x, z, extra: { perchY: y + 0.2, fire: F } }; }
+  }
+  return null;
 }
 function spawnFire(Z) {
   const act = activePlayers(), makers = [];
   const wantShore = act.some(p => p.vehicle === 'boat');
   for (const s of SITES) if (s.zone === Z.id && !s.busy && !s.block) makers.push(() => siteFire(s, wantShore));
   if (Z.id === 'harbour') for (let i = 0; i < 4; i++) makers.push(roofFire);
+  for (let i = 0; i < 3; i++) makers.push(() => coastalFire(Z));
   for (let tries = 0; tries < 6 && makers.length; tries++) {
     const r = makers.splice((Math.random() * makers.length) | 0, 1)[0]();
-    if (!r || !act.some(p => canFight(p, r.extra.fire))) continue;
-    if (waiting.some(a => Math.hypot(a.pos.x - r.x, a.pos.z - r.z) < 30)) continue;
+    if (!r) continue;
+    if (!act.some(p => canFight(p, r.extra.fire))) { disposeFire(r.extra.fire); continue; }
+    if (waiting.some(a => Math.hypot(a.pos.x - r.x, a.pos.z - r.z) < 30)) { disposeFire(r.extra.fire); continue; }
     const an = addWaiting(r.kind, r.x, r.z, r.extra);
     if (r.extra.site) r.extra.site.busy = true;
-    an.beam.material.color.set(0xff7a3a);
+    r.extra.fire.asset = { x: r.x, z: r.z };
+    an.beam.visible = false;
+    if (game.dispatchPending) stageFireResponse(r.extra.fire);
     fx.emoji('\u{1F525}', r.extra.fire.x, r.extra.fire.y + 6, r.extra.fire.z, 4.5);
     sfx.newFriend();
     return true;
@@ -1544,110 +1633,137 @@ function spawnFire(Z) {
   return false;
 }
 // who this pilot is fighting a fire for: the nearest friend in need, when that is someone with a fire beside them
+function waterReady(p) { return p.water >= 0.99 || !!p.attack; }
 function updateFireJob(p) {
   const j = p.fireJob;
-  if (j && (!burning(j) || j.state !== 'waiting' || p.cargo.length || p.incoming || !canFight(p, j.fire))) p.fireJob = null;
+  if (j && (!burning(j) || j.state !== 'waiting' || p.cargo.length || p.incoming || !canFight(p, j.fire))) { if (j.claimed === p) j.claimed = null; p.fireJob = null; p.attack = null; }
   if (!p.fireJob && !p.cargo.length && !p.incoming && !p.target && !p.pickup) {
     const g = nearestFor(p);
     if (g && burning(g.an)) p.fireJob = g.an;
   }
-}
-function waterAboard(p) { sfx.splash(); }
-// water from s (a bucket, a tank, a cannon) in an arc that comes down on the fire about tau seconds later
-function waterArc(s, F, tau, n, spread) {
-  F.acc2 = (F.acc2 || 0) + n;
-  while (F.acc2 > 1) {
-    F.acc2 -= 1;
-    const tx = F.x + jit(F.r * 0.6), tz = F.z + jit(F.r * 0.6), tt = tau * (0.85 + Math.random() * 0.3);
-    fx.emit(s.x + jit(spread), s.y + jit(spread * 0.5), s.z + jit(spread), (tx - s.x) / tt, (F.y - s.y) / tt + 4.5 * tt, (tz - s.z) / tt, 0.82, 0.92, 1, 0.7, 0.3 + Math.random() * 0.45, tt * 1.05, 9, 0);
+  if (p.fireJob && (!p.attack && (!p.fireAim || game.t > (p.aimUntil || 0)))) {
+    p.fireAim = attackPoint(p.fireJob.fire, p.idx, p.vehicle === 'boat' ? p.pos : null); p.aimUntil = game.t + 0.8;
   }
 }
+function stageFireResponse(F) {
+  game.dispatchPending = false;
+  for (const p of activePlayers()) {
+    const point = p.vehicle === 'plane' ? F.scoop : p.vehicle === 'boat' ? F.shore : F.dip;
+    if (!point) continue;
+    const open = nav.water.open(point.x + p.idx * 18, point.z, p.vehicle === 'plane' ? 14 : 7, 80) || point;
+    p.pos.set(open.x, p.vehicle === 'heli' ? 16 : p.vehicle === 'plane' ? PLANE_FLOAT : 0, open.z);
+    p.vel.set(0, 0, 0); p.fs = 0; p.spin = 1; p.parked = p.vehicle !== 'heli';
+    p.afloat = p.vehicle !== 'heli'; p.grounded = p.landed = p.vehicle !== 'heli';
+    p.yaw = Math.atan2(F.x - p.pos.x, F.z - p.pos.z); p.yawVel = 0; p.altOff = 0; p.routes = {}; p.ap = null;
+    p.bpos.copy(p.pos); p.bpos.y -= 4; p.bvel.set(0, 0, 0); p.hoist = 0;
+    p.fireAim = null; p.aimUntil = 0;
+    p.camPos.set(p.pos.x - Math.sin(p.yaw) * 29, p.pos.y + 15, p.pos.z - Math.cos(p.yaw) * 29); p.camLook.copy(p.pos); p.camYaw = p.yaw;
+  }
+  F.engaged = true;
+}
+function waterAboard(p) { sfx.splash(); p.flash = p.vehicle === 'plane' ? 'Tank full · line up a water run' : 'Bucket full · tackle the fire front'; p.flashT = 2.5; }
 const pours = [];
 function removeBeam(an) {
   if (!an.beam) return;
   scene.remove(an.beam); an.beam.geometry.dispose(); an.beam.material.dispose(); an.beam = null;
 }
-function dump(p, an, src) {
-  const F = an.fire;
-  p.water = 0;
-  pours.push({ s: src.clone(), F, an, p, t: 0, tau: Math.max(0.5, Math.sqrt(Math.max(0, src.y - F.y) / 4.5)) });
+function dump(p, an) {
+  if (p.attack || p.water < 0.99 || !burning(an) || an.fire.active === 0) return;
+  p.attack = { an, left: WATER[p.vehicle].duration, acc: 0, hits: 0, vehicle: p.vehicle };
+  an.fire.drops++; p.flash = p.vehicle === 'plane' ? 'Water run!' : 'Opening the bucket!'; p.flashT = 1.8;
   sfx.splash();
+}
+function launchWater(p, an, source, hit, amount, kind) {
+  if (pours.length > 160) return;
+  const packet = { p, an, source: { ...source }, x: hit.x, z: hit.z, y: hit.y, tau: hit.time, radius: hit.radius, amount, kind, t: 0 };
+  pours.push(packet); p.waterViewUntil = game.t + hit.time + 2;
+  // The visible stream uses the same ballistic arc as the water footprint; it never homes onto a fire.
+  const count = kind === 'jet' ? 13 : 20;
+  for (let i = 0; i < count; i++) {
+    const tx = hit.x + jit(hit.radius * 0.65), tz = hit.z + jit(hit.radius * 0.65), tau = hit.time;
+    fx.emit(source.x + jit(kind === 'jet' ? 0.06 : 0.65), source.y, source.z + jit(0.3),
+      (tx - source.x) / tau, (hit.y - source.y) / tau + 4.905 * tau, (tz - source.z) / tau,
+      0.65, 0.9, 1.05, 0.8, kind === 'jet' ? 0.5 : 0.85, tau + 0.1, 9.81, 0, 2);
+  }
+}
+function updateWaterRuns(dt) {
+  for (const p of players) {
+    const run = p.attack;
+    if (!run) { if (p.vehicle !== 'boat' || !p.spray) p.waterStream.hide(); continue; }
+    if (!p.active || p.vehicle !== run.vehicle || !burning(run.an)) { p.attack = null; p.waterStream.hide(); continue; }
+    const used = Math.min(dt, run.left), config = WATER[run.vehicle];
+    run.left -= used; run.acc += used; p.water = Math.max(0, run.left / config.duration);
+    if (run.acc >= 0.07 || run.left <= 0) {
+      const source = run.vehicle === 'heli' ? { x: p.bpos.x, y: p.bpos.y + 0.4, z: p.bpos.z } : { x: p.pos.x, y: p.pos.y - 1.3, z: p.pos.z };
+      const aim = p.fireAim || attackPoint(run.an.fire, p.idx);
+      const hit = predictDrop(source, p.vel, aim.y, run.vehicle, WIND);
+      launchWater(p, run.an, source, hit, config.capacity * run.acc / config.duration, 'drop'); run.acc = 0;
+      if (run.vehicle === 'heli') p.waterStream.update(source, hit, 0.45, 1.5, Math.min(1, (config.duration - run.left) / hit.time));
+    }
+    if (run.left <= 0) { p.waterStream.hide(); p.attack = null; p.water = 0; p.fireAim = null; }
+  }
 }
 function fireOut(an, p) {
   const F = an.fire;
+  if (F.out || !waiting.includes(an)) return;
   F.out = true; F.t = 0; fading.push(F);
   const i = waiting.indexOf(an); if (i >= 0) waiting.splice(i, 1);
   removeBeam(an);
   if (an.site) an.site.busy = false;
-  for (const q of players) { if (q.fireJob === an) q.fireJob = null; if (q.target === an) q.target = null; if (q.pickup === an) q.pickup = null; }
+  for (const q of players) { if (q.attack?.an === an) { q.attack = null; q.waterStream.hide(); } if (q.fireJob === an) q.fireJob = null; if (q.target === an) q.target = null; if (q.pickup === an) q.pickup = null; }
   // they are safe where they are: a cheer, and they count as helped
   fx.hearts(an.pos.x, an.pos.y + 3, an.pos.z, 6); fx.confetti(an.pos.x, an.pos.y + 2.5, an.pos.z, 70); fx.sparkle(F.x, F.y + 2, F.z, 30);
   animalVoice(an.type.id, true); sfx.chime(); sfx.hiss(1);
   an.state = 'cheer'; an.t = 0; hoppers.push(an);
+  p.flash = '✅ Fire out! Your friend is safe'; p.flashT = 4;
   p.rescued++; game.rescued++; game.total++; game.saved.push(an.type.e);
   if (game.rescued >= game.goal && game.celebrate <= 0) missionComplete();
   syncHud();
 }
 function steam(F, dt, k) {
-  F.steamAcc = (F.steamAcc || 0) + dt * 30 * k;
+  F.steamAcc = (F.steamAcc || 0) + dt * 22 * k;
   while (F.steamAcc > 1) {
-    F.steamAcc -= 1;
-    const g = 0.78 + Math.random() * 0.15;
-    fx.emit(F.x + jit(F.r * 0.7), F.y + Math.random(), F.z + jit(F.r * 0.7), WIND.x * 0.3 + jit(0.8), 3 + Math.random() * 3, WIND.z * 0.3 + jit(0.8), g, g, g, 0.45 * Math.min(1, k + 0.2), -(2.5 + Math.random() * 2.5), 2.2 + Math.random() * 1.5, -1.2, 0.5);
+    F.steamAcc--;
+    const wet = F.cells.filter(c => c.wet > 0.04 || F.out), c = wet[(Math.random() * wet.length) | 0];
+    if (!c) break;
+    fx.emit(c.x + jit(1), c.y + 1, c.z + jit(1), jit(0.8), 2.5 + Math.random() * 3, jit(0.8),
+      0.85, 0.91, 0.92, 0.32 * k, -(2 + Math.random() * 2), 2 + Math.random(), -0.8, 0.3);
   }
 }
+function disposeFire(F) { F.visual?.dispose(); F.visual = null; }
 let fireNear = 1e9;
 function updateFires(dt, t) {
-  let near = 1e9;
+  updateWaterRuns(dt);
   fireNear = 1e9;
-  for (const an of waiting) {
+  for (const an of [...waiting]) {
     const F = an.fire; if (!F) continue;
-    F.vis += (Math.max(F.heat, 0) / F.max - F.vis) * damp(F.vis < 0.3 && F.heat > 0 ? 0.7 : 2, dt);
-    near = 1e9;
+    let near = 1e9;
     for (const p of activePlayers()) near = Math.min(near, Math.hypot(p.pos.x - F.x, p.pos.z - F.z));
-    if (near > 750) continue;
-    windAt(F.x, F.z, t, WIND);
-    const k = 0.25 + 0.75 * F.vis;
-    // flames: bright (they bloom at night), rising and licking downwind
-    F.acc += dt * 150 * k * (near < 260 ? 1 : 0.35);
-    while (F.acc > 1) {
-      F.acc -= 1;
-      const a = Math.random() * 6.283, d = Math.sqrt(Math.random()) * F.r * (0.6 + 0.4 * k), h = Math.random(), core = 1 - d / F.r;
-      // (taller and whiter in the middle, low and red at the edges)
-      fx.emit(F.x + Math.cos(a) * d, F.y - 0.5 + Math.random(), F.z + Math.sin(a) * d, WIND.x * 0.2 + jit(0.5), (3 + Math.random() * 5 * core) * (0.5 + 0.5 * k), WIND.z * 0.2 + jit(0.5),
-        1.8 + h * 1.2 + core, 0.65 + h * 0.7 + core * 0.6, 0.06 + h * 0.14 * core, 0.85, (3 + Math.random() * 3) * (0.5 + 0.5 * k), 0.6 + Math.random() * 0.7 * (0.4 + core), -2.5, 1.2, 1);
-    }
-    // (and a dull red glow low down among it, so it reads as a body of fire rather than sparks)
-    if (Math.random() < dt * 14 * k) fx.emit(F.x + jit(F.r * 0.5), F.y + 0.5, F.z + jit(F.r * 0.5), 0, 0.6, 0, 1.2, 0.25, 0.04, 0.16, -(F.r * 0.6), 1.2, -0.3, 1);
-    // a tall column of smoke, to find it by from far off
-    F.smokeT -= dt;
-    if (F.smokeT <= 0) {
-      F.smokeT = 0.1 / k;
-      const g = 0.08 + Math.random() * 0.07;
-      fx.emit(F.x + jit(F.r * 0.5), F.y + 2.5, F.z + jit(F.r * 0.5), WIND.x * 0.35 + jit(0.5), 3.2 + Math.random() * 1.5, WIND.z * 0.35 + jit(0.5), g, g * 0.97, g * 0.95, 0.45 * k, -(3.5 + Math.random() * 3), 6 + Math.random() * 3, -0.45, 0.22);
-    }
+    fireNear = Math.min(fireNear, near); if (near < 180) F.engaged = true;
+    windAt(F.x, F.z, t, WIND); advanceFire(F, dt, WIND); world.updateFireScars(F);
+    if (near < 850) F.visual?.update(t, WIND);
     if (F.hiss > 0) { F.hiss -= dt; steam(F, dt, Math.min(1, F.hiss)); }
-    fireNear = Math.min(fireNear, near);
+    // The crew checks the cooling ground before declaring the whole incident safe.
+    if (F.quiet > 2.2 && waiting.includes(an)) fireOut(an, F.lastPilot || activePlayers()[0]);
   }
-  // water on its way down: it puts out a third of the fire when it lands
   for (let i = pours.length - 1; i >= 0; i--) {
-    const w = pours[i]; w.t += dt;
-    if (w.t < 0.55) waterArc(w.s, w.F, w.tau, dt * 160, 1);
-    if (w.t >= w.tau && !w.hit) {
-      w.hit = true;
-      const F = w.F;
-      if (!F.out) {
-        F.heat -= w.p.vehicle === 'plane' ? 1.5 : 1; F.hiss = 1.8; sfx.hiss(0.8);      // (a water bomber's tank holds more than a bucket)
-        if (F.heat <= 0.01) { if (waiting.includes(w.an)) fireOut(w.an, w.p); }
-      }
+    const packet = pours[i]; packet.t += dt;
+    if (packet.t < packet.tau) continue;
+    let cooled = 0;
+    for (const an of waiting) {
+      const F = an.fire; if (!F || Math.hypot(F.x - packet.x, F.z - packet.z) > F.r + packet.radius) continue;
+      const result = waterImpact(F, packet); cooled += result.cooled;
+      if (result.cooled > 0.001) { F.hiss = 1; F.lastPilot = packet.p; F.lastHit = t; }
     }
-    if (w.t > w.tau + 0.2) pours.splice(i, 1);
+    fx.splash(packet.x, packet.y + 0.2, packet.z, packet.kind === 'jet' ? 3 : 10, packet.kind === 'jet' ? 0.25 : 0.6);
+    if (cooled > 0.02 && t > (packet.p.hissAt || 0)) { sfx.hiss(0.65); packet.p.hissAt = t + 0.7; }
+    pours.splice(i, 1);
   }
-  // put out: steam, thinning away
   for (let i = fading.length - 1; i >= 0; i--) {
     const F = fading[i]; F.t += dt;
-    if (F.t > 5) { fading.splice(i, 1); continue; }
-    steam(F, dt, 1 - F.t / 5);
+    if (F.t > 18) { disposeFire(F); fading.splice(i, 1); continue; }
+    windAt(F.x, F.z, t, WIND); F.visual?.update(t, WIND, Math.min(1, (18 - F.t) / 4));
+    if (F.t < 6) steam(F, dt, 1 - F.t / 6);
   }
 }
 const HIDDEN = new THREE.MeshBasicMaterial({ visible: false });
@@ -1763,7 +1879,7 @@ function placeWaiting(an, t, dt) {
   const fade = clamp((nd - 16) / 30, 0, 1);
   an.beam.position.set(x, an.pos.y + 2, z);
   an.beam.material.opacity = (0.17 + 0.07 * Math.sin(t * 3 + an.phase)) * fade * (1 - 0.45 * world.preset.night);
-  an.beam.visible = fade > 0.01;
+  an.beam.visible = !an.fire && fade > 0.01;
   // calling out
   an.exciteCd -= dt; an.callT -= dt;
   if (nd < 45 && an.exciteCd <= 0) { an.exciteCd = 4; fx.emoji('💕', x, an.pos.y + 4.5, z, 2.4); animalVoice(an.type.id, false, 1 - nd / 60); }
@@ -2018,7 +2134,7 @@ function releaseWaiting(test) {
     if (an.prop) { sinking.push({ o: an.prop, t: 0 }); an.prop = null; }
     if (an.site) an.site.busy = false;
     if (an.boat) boatFriendOff(an.boat);
-    if (an.fire && !an.fire.out) { an.fire.out = true; an.fire.t = 2; fading.push(an.fire); }
+    if (an.fire && !an.fire.out) { an.fire.out = true; an.fire.t = 2; for (const c of an.fire.cells) { c.heat = 0; c.wet = Math.max(c.wet, 0.2); } fading.push(an.fire); }
     for (const p of players) { if (p.pickup === an) p.pickup = null; if (p.target === an) p.target = null; if (p.fireJob === an) p.fireJob = null; }
     an.claimed = null; an.state = 'bye'; an.t = 0;
     fx.emoji('\u{1F44B}', an.pos.x, an.pos.y + 4.5, an.pos.z, 3);
@@ -2026,8 +2142,13 @@ function releaseWaiting(test) {
   }
 }
 function setZone(m) {
-  game.mission = m; game.zone = zoneFor(m); game.fire = missionFor(m).fire; game.fireMiss = 0; game.rescued = 0; game.goal = goalFor(m); game.saved = [];
-  releaseWaiting(an => zoneOf(an.pos.x, an.pos.z) !== game.zone);
+  const chosen = chooseMission(game.mode, game.location, m > 1 ? { id: game.zone.id, fire: game.fire } : null);
+  game.mission = m; game.zone = ZONES.find(z => z.id === chosen.id); game.fire = chosen.fire; game.fireMiss = 0; game.rescued = 0; game.goal = goalFor(m); game.saved = [];
+  releaseWaiting(() => true);
+  pours.length = 0;
+  for (const p of players) { p.water = 0; p.routes = {}; p.attack = null; p.fireAim = null; p.aimUntil = 0; }
+  game.dispatchPending = game.fire;
+  game.spawnT = 0;
   life.setZone(game.zone);
   placeZoneBeam();
   syncHud();
@@ -2035,7 +2156,7 @@ function setZone(m) {
 const FIRE_ICON = '\u{1F692}';
 function zoneBanner() {
   const Z = game.zone, pro = activePlayers().some(p => p.pro);
-  const what = game.fire ? 'Put out ' + game.goal + ' fires' : 'Help ' + game.goal + ' friends and bring them home';
+  const what = game.fire ? 'Protect our friends · contain the front · cool the embers' : 'Help ' + game.goal + ' friends and bring them home';
   banner(game.fire ? FIRE_ICON + ' ' + Z.name + ' fire!' : Z.icon + ' ' + Z.name, (pro ? world.preset.icon + WEATHERS[weather.idx].icon + ' ' + WEATHERS[weather.idx].name + ' — ' : '') + what);
   sfx.levelStart();
 }
@@ -2118,9 +2239,12 @@ function syncHud() {
     const e = game.saved[i] || '';
     if (setFace(el, e)) { el.classList.toggle('got', !!e); if (e) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); } }
   });
-  $('#mCount').textContent = activePlayers().some(p => p.pro) ? Math.min(game.rescued, game.goal) + ' / ' + game.goal : '';
+  $('#mCount').textContent = (game.fire || activePlayers().some(p => p.pro)) ? (game.fire ? game.zone.name + ' · ' : '') + Math.min(game.rescued, game.goal) + ' / ' + game.goal : '';
   for (const p of players) {
-    p.ui.score.textContent = '🐾 ' + p.rescued + (p.pro ? '  \u2605 ' + p.style : '');
+    p.boat.monitor.visible = game.fire; p.plane.fireTank.visible = game.fire;
+    $('.cargo', p.pane).style.display = game.fire ? 'none' : '';
+    p.pane.classList.toggle('fighting', game.fire);
+    p.ui.score.textContent = (game.fire ? '🔥 ' : '🐾 ') + p.rescued + (p.pro ? '  \u2605 ' + p.style : '');
     p.ui.slots.forEach((el, i) => { const a = p.cargo[i]; setFace(el, a ? a.type.e : ''); el.classList.toggle('full', !!a); });
   }
 }
@@ -2145,7 +2269,7 @@ function layoutHud() {
 function hintFor(p) {
   const solo = activePlayers().length === 1;
   if (p.flashT > 0) return p.flash;
-  if (!p.pro) return '';
+  if (!p.pro) return game.fire ? (p.spray ? '💦 Spraying · ' + Math.round(fireProgress(p.spray.fire) * 100) + '% out' : p.fireJob ? (p.vehicle === 'boat' ? '🔥 Hold go to reach the shore and spray' : p.fireJob.fire.phase === 'checking' ? 'Checking the ground · nearly safe' : p.fireJob.fire.phase === 'mop-up' ? 'Cool the glowing embers' : waterReady(p) ? 'Hold go · water onto the fire front' : 'Hold go · refill for the next run') : '🔥 Looking for the next fire') : '';
   const key = (a, b) => (p.idx && !solo ? b : a);
   const full = p.cargo.length >= MAX_CARGO || (p.cargo.length && !waiting.length);
   if (p.fireJob) {
@@ -2193,10 +2317,14 @@ function drawRadar(p) {
   });
   // animals
   const pulse = 0.5 + 0.5 * Math.sin(game.t * 5);
-  for (const a of waiting) plot(a.pos.x, a.pos.z, (x, y, edge) => {
+  for (const a of waiting) plot(a.fire?.x ?? a.pos.x, a.fire?.z ?? a.pos.z, (x, y, edge) => {
     g.fillStyle = burning(a) ? '#ff5a2a' : '#ffd23c'; g.beginPath(); g.arc(x, y, edge ? 8 : 10, 0, 7); g.fill();
     g.strokeStyle = 'rgba(255,210,60,' + (0.7 - pulse * 0.6) + ')'; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 12 + pulse * 12, 0, 7); g.stroke();
   });
+  if (p.fireJob && !waterReady(p) && p.vehicle !== 'boat') {
+    const fill = p.vehicle === 'plane' ? p.fireJob.fire.scoop : p.fireJob.fire.dip;
+    plot(fill.x, fill.z, (x, y) => { g.fillStyle = '#56caff'; g.beginPath(); g.arc(x, y, 14, 0, 7); g.fill(); g.fillStyle = '#042840'; g.font = 'bold 19px sans-serif'; g.textAlign = 'center'; g.fillText('💧', x, y + 6); });
+  }
   // the other pilot
   for (const o of players) if (o.active && o !== p) plot(o.pos.x, o.pos.z, (x, y) => { g.fillStyle = o.idx ? '#3d95ff' : '#ff6a2b'; g.beginPath(); g.arc(x, y, 9, 0, 7); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke(); });
   // me
@@ -2207,16 +2335,29 @@ function updateHud(dt) {
   if (bannerT > 0) { bannerT -= dt; if (bannerT <= 0) bannerEl.classList.remove('show'); }
   hudAcc += dt;
   const slow = hudAcc > 0.2; if (slow) hudAcc = 0;
+  for (const p of players) {
+    p.fillGuide.visible = game.state === 'play' && p.active && !!p.fireJob && !waterReady(p) && p.vehicle !== 'boat';
+    if (p.fillGuide.visible) {
+      const point = p.vehicle === 'plane' ? p.fireJob.fire.scoop : p.fireJob.fire.dip;
+      p.fillGuide.position.set(point.x, waveHeight(point.x, point.z, game.t) + 0.5, point.z);
+      p.fillGuide.children[1].position.y = 5 + Math.sin(game.t * 2) * 0.5;
+    }
+  }
   for (const p of activePlayers()) {
     drawRadar(p);
     p.flashT -= dt; p.rateCd -= dt;
     if (slow) {
-      const showWater = !!p.fireJob && p.vehicle !== 'boat';
+      const showWater = game.fire && p.vehicle !== 'boat';
+
       p.ui.water.style.display = showWater ? 'flex' : 'none';
       if (showWater) {
         const fill = Math.round(clamp(p.water, 0, 1) * 100);
         p.ui.fill.style.height = fill + '%'; p.ui.water.setAttribute('aria-valuenow', fill);
         p.ui.water.setAttribute('aria-valuetext', fill >= 100 ? 'Full, ready to drop' : fill + '% full');
+        let label = $('.water-label', p.ui.water);
+        if (!label) { label = document.createElement('span'); label.className = 'water-label'; p.ui.water.appendChild(label); }
+        const F = p.fireJob?.fire;
+        label.textContent = fill + '%' + (F ? ' · 🔥 ' + Math.round(fireProgress(F) * 100) + '% out' : '');
       }
       const h = hintFor(p);
       if (h !== p.hint) { p.hint = h; p.ui.hint.textContent = h; }
@@ -2228,6 +2369,56 @@ function updateHud(dt) {
 // ================================================================= flow
 const menu = $('#menu');
 const vehicleChoice = ['heli', 'heli'];
+let modeChoice = 'mixed', locationChoice = 'auto';
+try {
+  const mode = localStorage.getItem('rescue-squad-mode'), location = localStorage.getItem('rescue-squad-location');
+  if (MODES.includes(mode)) modeChoice = mode;
+  if (LOCATIONS.includes(location)) locationChoice = location;
+} catch { /* private browsing */ }
+for (const Z of MISSION_ZONES) { const option = document.createElement('option'); option.value = Z.id; option.textContent = Z.icon + ' ' + Z.name; $('#location').appendChild(option); }
+$('#location').value = locationChoice;
+$('#location').addEventListener('change', () => {
+  locationChoice = $('#location').value;
+  try { localStorage.setItem('rescue-squad-location', locationChoice); } catch { /* private browsing */ }
+  syncModeChoice();
+});
+const outingChanged = () => game.mode !== modeChoice || game.location !== locationChoice;
+function syncModeChoice() {
+  for (const b of document.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', b.dataset.mode === modeChoice);
+  $('#modeDescription').textContent = (modeChoice === 'mixed' ? 'A fresh mix of rescue and firefighting missions. Your crew chooses what comes next.' : modeChoice === 'fire' ? 'Collect seawater, tackle island and rooftop fires, and keep friends safe.' : 'Find friends around the islands and bring them safely home.') + (game.started && outingChanged() ? ' Changing these options starts a new outing.' : '');
+  $('#resume').textContent = game.started && outingChanged() ? '▶ Start new outing' : '▶ Keep playing';
+  for (const card of document.querySelectorAll('.card')) {
+    $('.keysEasy tr td:last-child', card).textContent = modeChoice === 'fire' ? 'hold to go and fight fires' : 'hold to go and help';
+    $('.kp-heli tr:last-child td:last-child', card).textContent = modeChoice === 'fire' ? 'hold to dip the water bucket' : 'hold to lower the basket';
+    $('.kp-plane tr:last-child td:last-child', card).textContent = modeChoice === 'fire' ? 'skim to fill; fly low over flames to drop' : 'fly down onto water to land; hold W to take off again';
+    $('.kp-boat tr:last-child td:last-child', card).textContent = modeChoice === 'fire' ? 'slow near the shore to spray the fire' : 'stop beside a friend to throw the ring';
+  }
+}
+for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', () => {
+  modeChoice = b.dataset.mode;
+  try { localStorage.setItem('rescue-squad-mode', modeChoice); } catch { /* private browsing */ }
+  syncModeChoice();
+});
+syncModeChoice();
+function beginOuting() {
+  game.mode = modeChoice; game.location = locationChoice;
+  world.resetFireScars();
+  game.celebrate = game.switchT = game.total = 0;
+  $('#fade').style.opacity = 0;
+  releaseWaiting(() => true); pours.length = 0;
+  for (const p of players) {
+    releasePilot(p);
+    for (const an of p.cargo) { an.model.removeFromParent(); }
+    p.cargo.length = 0; p.rescued = p.style = p.flashT = 0;
+    p.routes = {}; p.ap = null;
+    parkPlayer(p);
+  }
+  for (const an of hoppers) an.model.removeFromParent();
+  hoppers.length = 0;
+  setZone(1);
+  spawnAnimal(true); spawnAnimal(true); spawnAnimal(false);
+  zoneBanner(); syncModeChoice();
+}
 function savePilotChoices() {
   try { localStorage.setItem('rescue-squad-pilots', JSON.stringify(players.map(p => ({ vehicle: vehicleChoice[p.idx], pro: p.pro })))); } catch { /* private browsing */ }
 }
@@ -2271,7 +2462,8 @@ function releaseStranded() {
 // A departing pilot's half-finished pickup must be resolved before their machine is hidden or changed.
 function releasePilot(p) {
   for (const an of waiting) if (an.claimed === p) an.claimed = null;
-  p.target = p.pickup = p.fireJob = p.spray = null; p.water = p.pour = 0;
+  p.waterStream.hide(); p.waterViewUntil = 0;
+  p.target = p.pickup = p.fireJob = p.spray = p.attack = p.fireAim = null; p.water = p.pour = 0;
   p.ap = null; p.routes = {};          // (the autopilots' plans and routes start afresh)
   for (let i = hoppers.length - 1; i >= 0; i--) {
     const an = hoppers[i];
@@ -2299,11 +2491,7 @@ function startGame(n) {
   players[0].active = true;
   if ((n === 2) !== players[1].active) setP2(n === 2, true);
   releaseStranded();
-  if (fresh) {
-    setZone(1);
-    spawnAnimal(true); spawnAnimal(true); spawnAnimal(false);
-    zoneBanner();
-  }
+  if (fresh || outingChanged()) beginOuting();
   game.state = 'play'; game.paused = false;
   showMenu(false);
   layoutHud(); syncHud(); onResize();
@@ -2328,11 +2516,11 @@ function togglePause() {
   if (game.state === 'play') {
     game.state = 'menu'; game.paused = true; keys.clear(); audio.setPaused(true);
     $('#resumeRow').style.display = ''; $('#start1').classList.add('ghost'); $('#start2').classList.add('ghost');
-    showMenu(true); layoutHud(); onResize();
+    syncModeChoice(); showMenu(true); layoutHud(); onResize();
   }
   else resume();
 }
-function resume() { applyVehicleChoices(); releaseStranded(); keys.clear(); game.state = 'play'; game.paused = false; audio.setPaused(false); audio.unlock(); showMenu(false); layoutHud(); onResize(); }
+function resume() { applyVehicleChoices(); if (outingChanged()) beginOuting(); releaseStranded(); keys.clear(); game.state = 'play'; game.paused = false; audio.setPaused(false); audio.unlock(); showMenu(false); layoutHud(); onResize(); }
 // ---- picture quality. Four steps from the full picture down to one any laptop can draw smoothly. On "auto" (the
 // default) the game watches how long frames really take and steps down when it is struggling, back up when there
 // is room to spare; the corner button can also pin it to the best or the fastest. maxPR caps the pixels drawn per
@@ -2609,7 +2797,7 @@ const debug = {
   boat: () => spawnBoat(400, world.spawn.sea),
   wreck: () => spawnWreck(),
   // start the mission in a zone ('forest', 'reef', ...), and put the red pilot there
-  zone(id, fire = false) { setZone(MISSIONS.findIndex(q => q.zone.id === id && q.fire === fire) + 1); },
+  zone(id, fire = false) { game.mode = fire ? 'fire' : 'rescue'; game.location = id; setZone(1); },
   goto(id, d = 70) {
     const Z = ZONES.find(q => q.id === id), p = players[0], l = Math.hypot(Z.x, Z.z) || 1;
     p.pos.set(Z.x - Z.x / l * (Z.r + d), p.vehicle === 'heli' ? 30 : p.pos.y, Z.z - Z.z / l * (Z.r + d));
@@ -2757,6 +2945,7 @@ renderer.setRenderTarget(composer.renderTarget1);
 const warmUp = Promise.all([renderer.compileAsync(scene, menuCam), renderer.compileAsync(postScene, menuCam)]);
 renderer.setRenderTarget(null);
 warmUp.catch(() => {}).then(() => {
+  firePrograms.group.visible = false;
   try { portraits = createPortraits(renderer); syncHud(); } catch (e) { console.warn('Using rescue symbols for passenger pictures', e); }
   world.prewarmShadows(composer.renderTarget1, menuCam);
   // (and one whole frame drawn, mirror and all, for the few shaders only a real frame builds)

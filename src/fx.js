@@ -26,7 +26,11 @@ export function createFx(scene) {
         float d = length(q);
         float a = exp(-d * d * 14.0) * (1.0 - smoothstep(0.42, 0.5, d)) * vColor.a * 1.15;
         vec3 c = vColor.rgb;
-        if (vShape > 0.5) {
+        if (vShape > 1.5) {
+          vec2 drop=vec2(q.x*2.8,q.y*.9);
+          a=exp(-dot(drop,drop)*11.)*(1.-smoothstep(.32,.5,length(drop)))*vColor.a;
+          c=mix(vColor.rgb,vec3(1.),max(0.,1.-length(drop)*4.)*.65);
+        } else if (vShape > 0.5) {
           // Taper upward with a warm center and an orange edge; smoke and water retain their soft round shape.
           float h = 1.0 - gl_PointCoord.y;
           float width = mix(0.32, 0.025, h);

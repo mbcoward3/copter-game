@@ -27,11 +27,13 @@ The original 2D game is still there as `helicopter-game.html`.
   Boat: `W`/`S` throttle, `A`/`D` steer; stop beside a friend and the crew throws a ring automatically (`R` can also throw it).
   Seaplane: hold `W` on the water to take off; in the air it cruises by itself, with `W` boosting and `S` easing off.
   `A`/`D` turn and `Space`/`Shift` climb and descend. Fly down to land on water, then taxi up to a friend and stop for boarding.
-- Fire missions: two of the missions (after the Pine Forest and after Volcano Isle) are fires to put out instead of friends
-  to fetch: fires in the trees beside the island landing sites, a friend waiting by each. Put it out and the friend is safe.
-  Helicopter: the basket is swapped for a water bucket; fly low over the sea to fill it, then over the fire to drop it.
-  Seaplane: skim along the sea to scoop a tankful, then fly low over the fire. Boat: stop near the shore below the fire
-  and the water cannon sprays it. In easy flying, holding go does all of this by itself.
+- Choose **Rescue**, **Firefighting**, or **Surprise me** under **Choose mission, vehicles and controls**, then pick any of the six locations or **Random locations**. Fixed choices repeat; random choices avoid repeating the same place and job immediately. Preferences are remembered. Pause to change the options; starting with changed options begins a fresh outing.
+- Firefighting dispatches the crew beside one substantial incident: a spreading woodland/scrub front or a rooftop fire. Fire occupies a terrain-following field of fuel patches, and wind encourages it into neighbouring dry fuel. Friends and landing pads stay clear of the burning area.
+  Water lands over an actual footprint. It cools burning patches and wets unburnt ground to make a firebreak; a missed drop does not damage a distant fire. Secured patches stay out. The crew finishes by cooling remaining embers and checking the ground before celebrating.
+  Helicopter: dip the hanging bucket into the blue marked refill area, then hover over the front and open a sustained water curtain. The bucket visibly empties as it pours.
+  Seaplane: scoop a full tank before takeoff, line up a bombing run, and lay a wide water strip across the front. Water carries forward with the aircraft, so it releases before reaching the target.
+  Boat: use the deck cannon, which turns and elevates toward individual burning patches. Its continuous curved jet uses unlimited seawater, with steam where it lands.
+  In assisted controls, **holding go handles the complete refill → line up → attack → repeat loop**. Both players can work the same incident. The camera opens up around the attack; fire and smoke recede locally, wet ground and scorched vegetation show where the crew has worked. The compact existing water gauge also shows containment, and radar marks fire and refill areas.
 - Weather (corner button, and it changes by mission: calm, breezy, calm, stormy) raises the swell and the wind. Easy flying barely feels it; Pilot mode feels all of it.
 - Extras: `F` or `/` honk; in assisted aircraft, `E`/`Q` or `Enter`/`Shift` adjust height; gamepads are supported in play.
 - The water gauge shows bucket/tank fill during fire missions. Boats use their existing water cannon directly.
@@ -56,7 +58,7 @@ After editing:
 
     npm install        # first time only
     npm run build      # rebuilds rescue-squad-3d.html
-    npm test           # flight-clearance and audio-lifecycle regressions
+    npm test           # flight-clearance, audio-lifecycle and firefighting regressions
     npm run serve      # optional dev server on http://localhost:5173
 
 `tools/build_vehicles.py` (Blender) makes the boat, seaplane, sea arch, stilt hut and kayak into `build/vehicles`; pack them with

@@ -1066,6 +1066,7 @@ export function createWorld(scene, renderer) {
     const tiers = [name, name + '_far'].map((n, far) => {
       const g = geo(n);
       const mesh = new THREE.InstancedMesh(g, g.userData.mats.map(mn => foliage(mn, /Tree[345]/.test(name) ? 'spray' : /Pine/.test(name) ? (mn === 'Leaf2' ? 'needles' : 'core') : '')), list.length);
+      mesh.setColorAt(0, new THREE.Color(0xffffff));
       mesh.castShadow = !far; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.count = 0;
       if (!far) mesh.layers.set(PLANT_LAYER);      // (the near trees stay out of the water's mirror: it is the costliest thing in it)
       scene.add(mesh);
@@ -1087,8 +1088,22 @@ export function createWorld(scene, renderer) {
     // (each plant's lump is worked out once; world.cull() only picks which ones to draw)
     dm.position.set(it.x, it.y + L.size[1] * it.s * 0.62, it.z); dm.rotation.set(0, it.x, 0);
     dm.scale.set(L.size[0] * it.s * 0.46, L.size[1] * it.s * 0.36, L.size[2] * it.s * 0.46); dm.updateMatrix();
-    it.lump = dm.matrix.clone(); it.col = L.leaf.clone().multiplyScalar(1.15);
+    it.lump = dm.matrix.clone(); it.col = L.leaf.clone().multiplyScalar(1.15); it.burn = 0; it.fireTint = new THREE.Color(0xffffff); it.charCol = it.col.clone();
   }
+  const charColor = new THREE.Color(0x3c2a20);
+  world.trackFire = fire => {
+    fire.vegetation = lodded.flatMap(L => L.list).filter(it => Math.hypot(it.x - fire.x, it.z - fire.z) < fire.r + 4);
+  };
+  world.updateFireScars = fire => {
+    for (const it of fire.vegetation || []) {
+      let nearest = null, distance = fire.spacing * .8;
+      for (const c of fire.cells) { const d = Math.hypot(it.x - c.x, it.z - c.z); if (d < distance) { distance = d; nearest = c; } }
+      if (!nearest) continue;
+      it.burn = Math.max(it.burn, Math.min(.9, nearest.burned + nearest.heat * .62));
+      it.fireTint.setScalar(1 - it.burn); it.charCol.copy(it.col).lerp(charColor, it.burn);
+    }
+  };
+  world.resetFireScars = () => { for (const L of lodded) for (const it of L.list) { it.burn = 0; it.fireTint.setScalar(1); it.charCol.copy(it.col); } };
   const rockSets = [];
   for (const name in rocks) {
     const list = rocks[name]; if (!list.length) continue;
@@ -1147,14 +1162,15 @@ export function createWorld(scene, renderer) {
         for (const it of c.items) {
           const dx = it.x - px, dz = it.z - pz, d2 = dx * dx + dz * dz;
           if ((d2 >= far2 && L.bushy) || !seen(it)) continue;
-          if (d2 < near2) t0.setMatrixAt(n0++, it.m);
-          else if (d2 < far2) t1.setMatrixAt(n1++, it.m);
-          else { lumps.setMatrixAt(nl, it.lump); lumps.setColorAt(nl++, it.col); }
+          if (d2 < near2) { t0.setMatrixAt(n0, it.m); t0.setColorAt(n0++, it.fireTint); }
+          else if (d2 < far2) { t1.setMatrixAt(n1, it.m); t1.setColorAt(n1++, it.fireTint); }
+          else { lumps.setMatrixAt(nl, it.lump); lumps.setColorAt(nl++, it.charCol); }
         }
       }
       // (an empty batch still costs a draw call in every pass, so it is hidden instead)
       t0.count = n0; t1.count = n1; t0.visible = n0 > 0; t1.visible = n1 > 0;
       t0.instanceMatrix.needsUpdate = t1.instanceMatrix.needsUpdate = true;
+      t0.instanceColor.needsUpdate = t1.instanceColor.needsUpdate = true;
     }
     lumps.count = nl; lumps.visible = nl > 0; lumps.instanceMatrix.needsUpdate = true;
     if (lumps.instanceColor) lumps.instanceColor.needsUpdate = true;
@@ -1369,7 +1385,10 @@ function foliage(name, cards) {
       // dark in the heart of the crown, bright at the top; and in the snowy peaks, snow lying on the boughs' tops
       .replace('#include <color_fragment>', `diffuseColor.rgb *= 0.5 + 0.7 * vHigh;
         float snowy = (1.0 - smoothstep(uSnowZ.z, uSnowZ.z + 40.0, length(vFW.xz - uSnowZ.xy))) * smoothstep(0.35, 0.8, vUp) * smoothstep(1.5, 4.0, vFW.y);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.75, 0.8, 0.86), snowy * 0.85);`);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.75, 0.8, 0.86), snowy * 0.85);
+        #ifdef USE_INSTANCING_COLOR
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.16,.085,.04), (1.0 - vColor.r) * .92);
+        #endif`);
   };
   mat.customProgramCacheKey = () => 'foliage';
   foliageCache.set(key, mat);
