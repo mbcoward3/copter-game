@@ -1,6 +1,5 @@
-# Models the player's fast rescue boat and seaplane, and a few pieces of scenery the Unreal prototype never had
-# (a sea arch, a fisherman's hut on stilts, a kayak), the same way the Unreal prototype's build_models.py made the
-# Jayhawk: from scratch, with the shade of every crease baked into a picture. Writes FBX + B_<name>.png files that
+# Models the player's fast rescue boat and seaplane, plus the sea arch, stilt hut, and kayak,
+# from scratch, with the shade of every crease baked into a picture. Writes FBX + B_<name>.png files that
 # tools/pack_models.py packs for the game.
 # Run with:  blender --background --python tools/build_vehicles.py -- <output folder>
 #

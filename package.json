@@ -1,8 +1,8 @@
 {
   "name": "copter-game",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Little Rescue Squad 3D: an offline-capable cooperative rescue game",
+  "private": true,
   "scripts": {
     "test": "node tools/test-flight-safety.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs && node tools/test-fire-scene.mjs",
     "build": "node build.mjs",
@@ -10,8 +10,6 @@
     "check": "node tools/check.mjs",
     "play-check": "node tools/play-check.mjs"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
   "devDependencies": {
     "esbuild": "^0.24.0",

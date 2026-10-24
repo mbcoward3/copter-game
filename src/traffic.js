@@ -1,7 +1,7 @@
 // More life round the islands: sailing boats beating from zone to zone, seals hauled out in the snowy cove, sea
 // turtles paddling over the reef, and smoke curling from the harbour town's chimneys on a cold day.
 import * as THREE from 'three';
-import { waveHeight, terrainHeight, ZONES } from './world.js';
+import { waveHeight, terrainHeight } from './world.js';
 import { model } from './assets.js';
 
 export function createTraffic(scene, world, nav, fx) {

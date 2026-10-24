@@ -1,7 +1,8 @@
 .git
 .github
 node_modules
-unreal
+build
+shots
 .claude
 .mcp.json
 *.html
