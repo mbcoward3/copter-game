@@ -6,6 +6,10 @@ tested what had been built rather than what a player sees, and nobody looked at 
 
 ## Before building
 
+For every vehicle improvement, assess all three vehicles and apply the idea wherever
+it fits, adapting it to their mechanics. See `AGENTS.md`. Share common UI and feedback
+logic; document deliberate exceptions rather than letting vehicles drift apart.
+
 1. **Write what the player should see, as numbers.** Not "the plane lands near the friend" but "touches down within
    250 m of the friend, on water at least 3 m deep". Put the table in the feature's spec (see `AIRPLANE-SPEC.md`,
    "Acceptance checks"). Every complaint a player has made about this feature becomes a row.

@@ -37,6 +37,11 @@ const SAMPLE = `(() => {
     const bad = [];
     for (const k in p) { const v = p[k]; if (typeof v === 'number' && !Number.isFinite(v)) bad.push(k); else if (v && v.isVector3 && !Number.isFinite(v.x + v.y + v.z)) bad.push(k); }
     const q = { v: p.vehicle, pos: p.pos.toArray().map(n => Math.round(n * 10) / 10), rescued: p.rescued, cargo: p.cargo.length, water: +(p.water || 0).toFixed(2), bad };
+    // Check the rendered feedback for every machine, including the boat's continuous seawater pump.
+    const panel = p.pane.querySelector('.water');
+    q.hud = { visible: getComputedStyle(panel).display !== 'none', hint: p.pane.querySelector('.hint').textContent,
+      equipment: panel.getAttribute('aria-label'), level: Number(panel.getAttribute('aria-valuenow')),
+      label: panel.querySelector('.water-label').textContent, height: panel.getBoundingClientRect().height };
     if (p.vehicle === 'heli') {
       // the cable: a cylinder from its middle, scaled along its length; its ends should sit on the hook and on the top of
       // whatever hangs from it
@@ -87,6 +92,13 @@ async function play(job, page) {
     if (o.state !== 'play' || o.paused) { broke('notPlaying', o.state + (o.paused ? ' paused' : '')); await page.key('KeyW', true); }
     o.pilots.forEach((q, i) => {
       if (q.bad.length) broke('notANumber', q.v + ': ' + q.bad.join(','));
+      if (q.hud.visible !== o.fire) broke('fireHudVisibility', q.v + ': fire panel visibility disagrees with mission');
+      if (o.fire) {
+        const equipment = q.v === 'boat' ? 'Pump pressure' : q.v === 'heli' ? 'Bucket' : 'Tank';
+        if (q.hud.equipment !== equipment || !q.hud.label) broke('fireHudEquipment', q.v + ': missing equipment or guidance');
+        if (!Number.isFinite(q.hud.level) || q.hud.level < 0 || q.hud.level > 100) broke('fireHudLevel', q.v + ': meter outside 0–100');
+        if (q.hud.height > 64) broke('fireHudTooTall', q.v + ': compact water gauge exceeds 64 px');
+      }
       if (q.cable && (q.cable.toHook > 0.6 || q.cable.toLoad > 0.6)) broke('cableNotJoined', `${q.v} hook ${q.cable.toHook} m, load ${q.cable.toLoad} m`);
       if (q.basketOut !== null && q.basketOut > 25) broke('basketAdrift', q.basketOut + ' m from the helicopter');
       if (q.both) broke('basketAndBucket', 'both shown');

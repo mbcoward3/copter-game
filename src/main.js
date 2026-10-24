@@ -2439,18 +2439,37 @@ function layoutHud() {
   $('.label', p0).textContent = two ? 'Red' : 'Rescue Squad';
   $('#mission').style.top = two ? '62px' : '14px';
 }
-// A line of guidance under each pilot's picture. Small pilots cannot read, so in easy flying it stays empty; in Pilot
-// mode it says what to do next in that machine's own terms.
+// Common fire feedback follows the same phases in every vehicle, using its own equipment and controls.
+function fireStatusFor(p) {
+  const F = (p.spray || p.fireJob)?.fire;
+  if (!F) return '🔥 Looking for the next fire';
+  if (F.phase === 'checking') return '✅ Checking the ground · nearly safe';
+  if (F.phase === 'mop-up') return '💨 Cool the glowing embers';
+  if (p.spray) return (p.pumpPressure || 0) < .95 ? '💧 Starting the pump…' : '💦 Spraying the fire front';
+  if (p.attack) return p.vehicle === 'heli' ? '💦 Opening the bucket' : '💦 Water run';
+  if (p.vehicle === 'boat') return '💧 Reach the shore · slow down to spray';
+  if (waterReady(p)) return p.vehicle === 'heli' ? '🔥 Bucket ready · fly over the fire' : '🔥 Tank ready · line up a water run';
+  return p.vehicle === 'heli' ? '💧 Dip the bucket in the blue ring' : '💧 Skim through the blue ring to fill';
+}
+// The same waypoint drives the world marker and radar: refill water for aircraft, a spray position for the boat.
+function fireWaypoint(p) {
+  const F = p.fireJob?.fire;
+  if (!F || F.phase === 'checking') return null;
+  if (p.vehicle === 'boat') return p.spray ? null : F.shore;
+  return waterReady(p) ? null : p.vehicle === 'plane' ? F.scoop : F.dip;
+}
+// A line of guidance under each pilot's picture; Pilot mode names the actual keys for that player.
 function hintFor(p) {
   const solo = activePlayers().length === 1;
   if (p.flashT > 0) return p.flash;
-  if (!p.pro) return game.fire ? (p.spray ? ((p.pumpPressure || 0) < .95 ? 'Starting the pump…' : '💦 Spraying · ' + Math.round(fireProgress(p.spray.fire) * 100) + '% out') : p.fireJob ? (p.vehicle === 'boat' ? '🔥 Hold go to reach the shore and spray' : p.fireJob.fire.phase === 'checking' ? 'Checking the ground · nearly safe' : p.fireJob.fire.phase === 'mop-up' ? 'Cool the glowing embers' : waterReady(p) ? 'Hold go · water onto the fire front' : 'Hold go · refill for the next run') : '🔥 Looking for the next fire') : '';
+  if (!p.pro) return game.fire ? (p.fireJob || p.spray ? ((p.spray || p.fireJob).fire.phase === 'checking' ? '✅ Checking the ground · nearly safe' : 'Hold go · ' + fireStatusFor(p)) : '🔥 Looking for the next fire') : '';
   const key = (a, b) => (p.idx && !solo ? b : a);
   const full = p.cargo.length >= MAX_CARGO || (p.cargo.length && !waiting.length);
-  if (p.fireJob) {
-    if (p.vehicle === 'heli') return p.water < 1 ? 'Fire! Hover low over the sea and hold ' + key('R', 'Ctrl') + ' to fill the bucket' : 'Fly over the fire — the bucket empties itself';
-    if (p.vehicle === 'plane') return p.water < 1 ? 'Fire! Skim along the sea to scoop up water' : 'Fly low over the fire to drop it';
-    return 'Fire! Stop near the shore below it and the cannon sprays it';
+  if (p.fireJob || p.spray) {
+    if ((p.spray || p.fireJob).fire.phase === 'checking' || p.spray || p.attack) return fireStatusFor(p);
+    if (p.vehicle === 'heli') return !waterReady(p) ? 'Hover low at the blue ring · hold ' + key('R', 'Ctrl') + ' to fill the bucket' : 'Fly over the fire — the bucket empties itself';
+    if (p.vehicle === 'plane') return !waterReady(p) ? 'Skim through the blue ring to scoop up water' : 'Fly low over the fire to drop it';
+    return 'Stop at the blue ring near shore · the cannon sprays automatically';
   }
   if (p.vehicle === 'heli') {
     if (p.grounded) return p.incoming ? 'Climbing aboard…' : 'Hold ' + key('Space', 'Enter') + ' to lift off';
@@ -2496,8 +2515,8 @@ function drawRadar(p) {
     g.fillStyle = burning(a) ? '#ff5a2a' : '#ffd23c'; g.beginPath(); g.arc(x, y, edge ? 8 : 10, 0, 7); g.fill();
     g.strokeStyle = 'rgba(255,210,60,' + (0.7 - pulse * 0.6) + ')'; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 12 + pulse * 12, 0, 7); g.stroke();
   });
-  if (p.fireJob && !waterReady(p) && p.vehicle !== 'boat') {
-    const fill = p.vehicle === 'plane' ? p.fireJob.fire.scoop : p.fireJob.fire.dip;
+  const fill = fireWaypoint(p);
+  if (fill) {
     plot(fill.x, fill.z, (x, y) => { g.fillStyle = '#56caff'; g.beginPath(); g.arc(x, y, 14, 0, 7); g.fill(); g.fillStyle = '#042840'; g.font = 'bold 19px sans-serif'; g.textAlign = 'center'; g.fillText('💧', x, y + 6); });
   }
   // the other pilot
@@ -2511,9 +2530,9 @@ function updateHud(dt) {
   hudAcc += dt;
   const slow = hudAcc > 0.2; if (slow) hudAcc = 0;
   for (const p of players) {
-    p.fillGuide.visible = game.state === 'play' && p.active && !!p.fireJob && !waterReady(p) && p.vehicle !== 'boat';
+    const point = fireWaypoint(p);
+    p.fillGuide.visible = game.state === 'play' && p.active && !!point;
     if (p.fillGuide.visible) {
-      const point = p.vehicle === 'plane' ? p.fireJob.fire.scoop : p.fireJob.fire.dip;
       p.fillGuide.position.set(point.x, waveHeight(point.x, point.z, game.t) + 0.5, point.z);
       p.fillGuide.children[1].position.y = 5 + Math.sin(game.t * 2) * 0.5;
     }
@@ -2522,17 +2541,19 @@ function updateHud(dt) {
     drawRadar(p);
     p.flashT -= dt; p.rateCd -= dt;
     if (slow) {
-      const showWater = game.fire && p.vehicle !== 'boat';
+      const showWater = game.fire;
 
       p.ui.water.style.display = showWater ? 'flex' : 'none';
       if (showWater) {
-        const fill = Math.round(clamp(p.water, 0, 1) * 100);
-        p.ui.fill.style.height = fill + '%'; p.ui.water.setAttribute('aria-valuenow', fill);
-        p.ui.water.setAttribute('aria-valuetext', fill >= 100 ? 'Full, ready to drop' : fill + '% full');
-        let label = $('.water-label', p.ui.water);
-        if (!label) { label = document.createElement('span'); label.className = 'water-label'; p.ui.water.appendChild(label); }
-        const F = p.fireJob?.fire;
-        label.textContent = fill + '%' + (F ? ' · 🔥 ' + Math.round(fireProgress(F) * 100) + '% out' : '');
+        const boat = p.vehicle === 'boat', fill = Math.round(clamp(boat ? p.pumpPressure || 0 : p.water, 0, 1) * 100);
+        const equipment = boat ? 'Pump pressure' : p.vehicle === 'heli' ? 'Bucket' : 'Tank';
+        const supply = p.ui.water, F = (p.spray || p.fireJob)?.fire;
+        const progress = F ? ' · 🔥 ' + Math.round(fireProgress(F) * 100) + '% out' : '';
+        p.ui.fill.style.height = fill + '%'; supply.setAttribute('aria-valuenow', fill);
+        supply.setAttribute('aria-label', equipment);
+        supply.setAttribute('aria-valuetext', (boat ? 'Pump pressure ' : '') + fill + '%' + (F ? ' · fire ' + Math.round(fireProgress(F) * 100) + '% cooled · ' + F.phase : ''));
+        // Keep the original plane's compact gauge; equipment-specific guidance stays in the existing hint.
+        $('.water-label', p.ui.water).textContent = (boat ? 'Pump ' : '') + fill + '%' + progress;
       }
       const h = hintFor(p);
       if (h !== p.hint) { p.hint = h; p.ui.hint.textContent = h; }
