@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { geo, look, model, modelInfo, groundTex } from './assets.js';
+import { geo, look, model, modelInfo, groundTex, heroLods } from './assets.js';
 import { buildReef } from './reef.js';
+import { sharedResource, uploadInstances, writeInstance } from './render-resources.js';
 
 // ---------------------------------------------------------------- helpers
 export function mulberry(seed) {
@@ -1340,7 +1341,23 @@ export function createWorld(scene, renderer) {
       const mesh = new THREE.InstancedMesh(g, g.userData.mats.map(mn => foliage(mn, /Tree[345]/.test(name) ? 'spray' : /Pine/.test(name) ? (mn === 'Leaf2' ? 'needles' : 'core') : '')), list.length);
       mesh.setColorAt(0, new THREE.Color(0xffffff));
       mesh.castShadow = !far; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.count = 0;
-      if (!far) mesh.layers.set(PLANT_LAYER);      // (the near trees stay out of the water's mirror: it is the costliest thing in it)
+      mesh.layers.set(PLANT_LAYER);
+      mesh.castShadow = true;
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+      if (far) {
+        const proxy = new THREE.InstancedMesh(g, mesh.material, list.length);
+        proxy.layers.set(MIRROR_LAYER); proxy.frustumCulled = false; proxy.count = 0; proxy.receiveShadow = true;
+        proxy.instanceMatrix.setUsage(THREE.DynamicDrawUsage); proxy.setColorAt(0, new THREE.Color()); proxy.instanceColor.setUsage(THREE.DynamicDrawUsage);
+        scene.add(proxy); mesh.userData.mirror = proxy;
+      }
+      // A multi-material mesh selects its depth deformation per group.
+      const depth = sharedResource(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
+      mesh.customDepthMaterial = depth;
+      mesh.onBeforeShadow = (_r, _o, _c, _sc, _g, target, group) => {
+        const material = mesh.material[group?.materialIndex || 0];
+        const key = material.customProgramCacheKey();
+        if (target.userData.deformationKey !== key) { target.userData.deformationKey = key; target.onBeforeCompile = material.onBeforeCompile; target.customProgramCacheKey = () => 'depth:' + key; target.defines = material.defines; target.needsUpdate = true; }
+      };
       scene.add(mesh);
       return mesh;
     });
@@ -1354,6 +1371,7 @@ export function createWorld(scene, renderer) {
   { const p = lumpGeo.attributes.position, nr = lumpGeo.attributes.normal;
     for (let i = 0; i < p.count; i++) { const k = 0.82 + 0.36 * vnoise(p.getX(i) * 2.3 + 7, p.getZ(i) * 2.3 + p.getY(i) * 1.7); p.setXYZ(i, p.getX(i) * k, p.getY(i) * k, p.getZ(i) * k); nr.setXYZ(i, nr.getX(i) * 0.8, nr.getY(i) * 0.8 + 0.35, nr.getZ(i) * 0.8); } }
   const lumps = new THREE.InstancedMesh(lumpGeo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), plantCount);
+  lumps.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   lumps.frustumCulled = false; lumps.count = 0; lumps.receiveShadow = true;
   scene.add(lumps);
   for (const L of lodded) for (const it of L.list) {
@@ -1381,6 +1399,7 @@ export function createWorld(scene, renderer) {
     const list = rocks[name]; if (!list.length) continue;
     const mesh = new THREE.InstancedMesh(geo(name), name === 'World_Driftwood' ? look('Bleached') : rockMat, list.length);
     mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.count = 0;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(mesh);
     rockSets.push({ mesh, list });
   }
@@ -1407,11 +1426,17 @@ export function createWorld(scene, renderer) {
   // Called before each viewport is drawn. Of the plants and rocks this camera can see (with a margin, so the shadows
   // and mirror images of those just outside the picture are still there), near ones get the full model, those across
   // the bay the sparser copy and the far hills' a lump. The view's shadow and mirror passes use the same choice.
-  const frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _sph = new THREE.Sphere(), MARGIN = 14;
-  const seen = it => { _sph.center.set(it.x, it.cy, it.z); _sph.radius = it.r + MARGIN; return frustum.intersectsSphere(_sph); };
-  const cellSeen = c => { _sph.copy(c.sph); _sph.radius += MARGIN; return frustum.intersectsSphere(_sph); };
-  world.cull = function (cam) {
+  const frustum = new THREE.Frustum(), shadowFrustum = new THREE.Frustum(), mirrorFrustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _sph = new THREE.Sphere(), MARGIN = 14;
+  let hasMirror = false;
+  const inViews = sphere => frustum.intersectsSphere(sphere) || shadowFrustum.intersectsSphere(sphere) || (hasMirror && mirrorFrustum.intersectsSphere(sphere));
+  const seen = it => { _sph.center.set(it.x, it.cy, it.z); _sph.radius = it.r + MARGIN; return inViews(_sph); };
+  const cellSeen = c => { _sph.copy(c.sph); _sph.radius += MARGIN; return inViews(_sph); };
+  world.cull = function (cam, mirror = null) {
+    for (const lod of heroLods) if (lod.parent) { lod.updateWorldMatrix(true, false); lod.update(cam); }
     frustum.setFromProjectionMatrix(_pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    sun.shadow.updateMatrices(sun); shadowFrustum.copy(sun.shadow.getFrustum());
+    hasMirror = !!mirror;
+    if (mirror) mirrorFrustum.setFromProjectionMatrix(_pv.multiplyMatrices(mirror.projectionMatrix, mirror.matrixWorldInverse));
     const px = cam.position.x, pz = cam.position.z, near2 = NEAR * NEAR, far2 = FAR * FAR;
     // (the sea's grid is finest in its middle: it travels with the camera, in whole steps so its waves do not swim)
     water.position.set(Math.round(px / 32) * 32, 0, Math.round(pz / 32) * 32);
@@ -1426,32 +1451,30 @@ export function createWorld(scene, renderer) {
     for (const o of scene.children) { const fh = o.userData.farHide; if (fh) o.visible = (o.position.x - px) ** 2 + (o.position.z - pz) ** 2 < fh * fh; }
     let nl = 0;
     for (const L of lodded) {
-      let n0 = 0, n1 = 0;
+      let n0 = 0, n1 = 0, nm = 0;
       const [t0, t1] = L.tiers;
+      const proxy = t1.userData.mirror;
       for (const c of L.cells) {
         if (!cellSeen(c)) continue;
         if (L.bushy && Math.hypot(c.sph.center.x - px, c.sph.center.z - pz) - c.sph.radius > FAR) continue;
         for (const it of c.items) {
           const dx = it.x - px, dz = it.z - pz, d2 = dx * dx + dz * dz;
           if ((d2 >= far2 && L.bushy) || !seen(it)) continue;
-          if (d2 < near2) { t0.setMatrixAt(n0, it.m); t0.setColorAt(n0++, it.fireTint); }
-          else if (d2 < far2 || (L.palm && d2 < far2 * 3)) { t1.setMatrixAt(n1, it.m); t1.setColorAt(n1++, it.fireTint); }
+          if (d2 < near2) { writeInstance(t0, n0++, it.m, it.fireTint); if (hasMirror) writeInstance(proxy, nm++, it.m, it.fireTint); }
+          else if (d2 < far2 || (L.palm && d2 < far2 * 3)) { writeInstance(t1, n1++, it.m, it.fireTint); if (hasMirror) writeInstance(proxy, nm++, it.m, it.fireTint); }
           // (a palm is a tall bare trunk under a small crown: as a lump it would be a green ball floating in the air)
           else if (L.palm) continue;
-          else { lumps.setMatrixAt(nl, it.lump); lumps.setColorAt(nl++, it.charCol); }
+          else { writeInstance(lumps, nl++, it.lump, it.charCol); }
         }
       }
       // (an empty batch still costs a draw call in every pass, so it is hidden instead)
-      t0.count = n0; t1.count = n1; t0.visible = n0 > 0; t1.visible = n1 > 0;
-      t0.instanceMatrix.needsUpdate = t1.instanceMatrix.needsUpdate = true;
-      t0.instanceColor.needsUpdate = t1.instanceColor.needsUpdate = true;
+      uploadInstances(t0, n0); uploadInstances(t1, n1); uploadInstances(proxy, nm);
     }
-    lumps.count = nl; lumps.visible = nl > 0; lumps.instanceMatrix.needsUpdate = true;
-    if (lumps.instanceColor) lumps.instanceColor.needsUpdate = true;
+    uploadInstances(lumps, nl);
     for (const R of rockSets) {
       let n = 0;
-      for (const c of R.cells) if (cellSeen(c)) for (const it of c.items) if (seen(it)) R.mesh.setMatrixAt(n++, it.m);
-      R.mesh.count = n; R.mesh.visible = n > 0; R.mesh.instanceMatrix.needsUpdate = true;
+      for (const c of R.cells) if (cellSeen(c)) for (const it of c.items) if (seen(it)) writeInstance(R.mesh, n++, it.m);
+      uploadInstances(R.mesh, n, false);
     }
   };
 
@@ -1559,9 +1582,14 @@ export function createWorld(scene, renderer) {
   };
 
   // point the shadow camera at whatever a viewport is looking at
+  const shadowRight = new THREE.Vector3(), shadowUp = new THREE.Vector3(), worldUp = new THREE.Vector3(0,1,0);
   world.aimSun = function (target) {
-    sun.target.position.copy(target);
-    sun.position.copy(target).addScaledVector(world.preset.sunDir, 260);
+    const direction = world.preset.sunDir, camera = sun.shadow.camera;
+    shadowRight.crossVectors(worldUp, direction).normalize(); shadowUp.crossVectors(direction, shadowRight).normalize();
+    const tx = (camera.right-camera.left)/sun.shadow.mapSize.x, ty = (camera.top-camera.bottom)/sun.shadow.mapSize.y;
+    const x = target.dot(shadowRight), y = target.dot(shadowUp);
+    sun.target.position.copy(target).addScaledVector(shadowRight, Math.round(x/tx)*tx-x).addScaledVector(shadowUp, Math.round(y/ty)*ty-y);
+    sun.position.copy(sun.target.position).addScaledVector(direction, 260);
     sun.target.updateMatrixWorld(); sun.updateMatrixWorld();
   };
 

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { model, geo } from './assets.js';
+import { model, geo, heroModel } from './assets.js';
+import { sharedResource } from './render-resources.js';
+import contracts from './assets/model-contracts.json';
 
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.75, ...o });
 function mesh(geo, mat, x = 0, y = 0, z = 0, parent) {
@@ -12,24 +14,26 @@ function mesh(geo, mat, x = 0, y = 0, z = 0, parent) {
 // ================================================================= helicopter
 // A Coast Guard MH-60T Jayhawk (modelled in Blender, see tools/pack_models.py).
 // Model space: nose toward +Z, up +Y, wheels touch the ground at y = -SKID.
-export const SKID = 1.95;
+export const SKID = contracts.Jayhawk_Body.groundOffset;
 // where the cable leaves the hoist, over the starboard cabin door
-export const HOIST = { px: -1.11, y: -0.2, z: 0.58 };
+const [hoistX, hoistY, hoistZ] = contracts.Jayhawk_Body.sockets.hoist;
+export const HOIST = { px: hoistX, y: hoistY, z: hoistZ };
 // how far the cabin door slides back (z) and stands off the hull (x) when open
 export const DOOR_OPEN = { x: -0.06, z: -0.84 };
 
 export function buildHeli(accent) {
   const g = new THREE.Group();
   const tints = { Accent: new THREE.Color(accent) };
-  g.add(model('Jayhawk_Body', { tints }));
+  g.add(heroModel('Jayhawk_Body', { tints }));
   const door = new THREE.Group(); g.add(door);
   door.add(model('Jayhawk_Door'));
 
   // main rotor: the blades fade into a blurred disc as it spins up
-  const rotor = new THREE.Group(); rotor.position.y = 0.686; g.add(rotor);
+  const rotor = new THREE.Group(); rotor.position.fromArray(contracts.Jayhawk_Body.sockets.mainRotor); g.add(rotor);
   const blades = model('Jayhawk_MainRotor', { own: ['Dark', 'Tip'] });
   const bladeMat = blades.userData.mat('Dark'), tipMat = blades.userData.mat('Tip');
   bladeMat.transparent = tipMat.transparent = true;
+  bladeMat.depthWrite = tipMat.depthWrite = false;
   rotor.add(blades);
   const discMat = new THREE.MeshBasicMaterial({ color: 0x1b1f24, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
   const disc = new THREE.Mesh(new THREE.RingGeometry(0.4, 5.6, 40), discMat);
@@ -37,9 +41,11 @@ export function buildHeli(accent) {
   const tipRing = new THREE.Mesh(new THREE.RingGeometry(5.2, 5.6, 48), new THREE.MeshBasicMaterial({ color: 0xffd23c, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
   tipRing.rotation.x = -Math.PI / 2; tipRing.position.y = 0.73; g.add(tipRing);
 
-  const tail = new THREE.Group(); tail.position.set(-0.26, 1.165, -6.81); g.add(tail);
-  tail.add(model('Jayhawk_TailRotor'));
-  const tailDisc = new THREE.Mesh(new THREE.CircleGeometry(1.15, 20), new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }));
+  const tail = new THREE.Group(); tail.position.fromArray(contracts.Jayhawk_Body.sockets.tailRotor); g.add(tail);
+  const tailBlades = model('Jayhawk_TailRotor', { own: ['Dark', 'Tip'] }); tail.add(tailBlades);
+  const tailBladeMats = ['Dark','Tip'].map(name => tailBlades.userData.mat(name));
+  for (const mat of tailBladeMats) { mat.transparent = true; mat.depthWrite = false; }
+  const tailDisc = new THREE.Mesh(new THREE.CircleGeometry(1.15, 20), new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
   tailDisc.rotation.y = Math.PI / 2; tail.add(tailDisc);
 
   // lights
@@ -63,7 +69,7 @@ export function buildHeli(accent) {
   cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, -12.8, 6.8).normalize());
   g.add(cone);
 
-  return { group: g, door, rotor, tail, discMat, tipRingMat: tipRing.material, bladeMat, tipMat, strobe, beacon, spot, coneMat, lampMat };
+  return { group: g, door, rotor, tail, tailDiscMat: tailDisc.material, tailBladeMats, discMat, tipRingMat: tipRing.material, bladeMat, tipMat, strobe, beacon, spot, coneMat, lampMat };
 }
 
 // ================================================================= rescue basket + life ring + raft
@@ -99,14 +105,20 @@ export function buildBucket() {
   return g;
 }
 
+let ringGeometry, ringMaterial;
 export function buildRing() {
-  const g = new THREE.Group();
-  const cols = [0xff5a1f, 0xffffff];
-  for (let i = 0; i < 8; i++) {
-    const t = mesh(new THREE.TorusGeometry(1.15, 0.36, 10, 6, Math.PI / 4 + 0.02), std(cols[i % 2], { roughness: 0.5 }), 0, 0, 0, g);
-    t.rotation.set(Math.PI / 2, 0, (i / 8) * Math.PI * 2);
+  if (!ringGeometry) {
+    ringGeometry = sharedResource(new THREE.TorusGeometry(1.15, 0.36, 10, 64).toNonIndexed());
+    const p = ringGeometry.attributes.position, colors = new Float32Array(p.count * 3), c = new THREE.Color();
+    for (let i = 0; i < p.count; i += 3) {
+      const angle = Math.atan2(p.getY(i) + p.getY(i+1) + p.getY(i+2), p.getX(i) + p.getX(i+1) + p.getX(i+2));
+      c.setHex((Math.floor((angle + Math.PI) / (Math.PI / 4)) & 1) ? 0xffffff : 0xff5a1f);
+      for (let k = 0; k < 3; k++) c.toArray(colors, (i + k) * 3);
+    }
+    ringGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3)); ringGeometry.rotateX(Math.PI / 2);
+    ringMaterial = sharedResource(std(0xffffff, { roughness: 0.55, vertexColors: true }));
   }
-  return g;
+  const g = new THREE.Group(); mesh(ringGeometry, ringMaterial, 0, 0, 0, g); return g;
 }
 export function buildRaft() {
   const g = new THREE.Group();
@@ -134,11 +146,12 @@ const FRIEND_TIME = { value: 0 };
 export function tickFriends(t) { FRIEND_TIME.value = t; }
 const POSE = /* glsl */`
 uniform float uTime, uPhase, uWave, uHappy;
+attribute vec2 aFriendPart;
 // the turns for a point of the body: x the arm's lift, y the head's tilt, z the head's nod
 vec3 poseAngles(vec3 p) {
   float arm = 0.0;
   #ifdef ARM
-    arm = smoothstep(0.37, 0.46, p.x) * smoothstep(0.32, 0.44, p.y) * (1.0 - smoothstep(0.9, 1.0, p.y)) * uWave * (1.75 + 0.45 * sin(uTime * 10.0 + uPhase));
+    arm = aFriendPart.x * smoothstep(0.37, 0.46, p.x) * smoothstep(0.32, 0.44, p.y) * (1.0 - smoothstep(0.9, 1.0, p.y)) * uWave * (1.75 + 0.45 * sin(uTime * 10.0 + uPhase));
   #endif
   float hw = smoothstep(0.9, 1.05, p.y);
   float tilt = (sin(uTime * 3.1 + uPhase) * 0.14 * uHappy + sin(uTime * 0.7 + uPhase) * 0.045) * hw;
@@ -162,14 +175,14 @@ function animateFriend(mat, anim, flags) {
     const defs = flags.map(f => '#define ' + f + '\n').join('');
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\n' + defs + POSE)
-      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvec3 poseA = poseAngles(position);\nobjectNormal = poseDir(objectNormal, poseA);')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nobjectNormal = poseDir(objectNormal, poseAngles(position));')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         #ifdef EYE
           // (a blink: the eye squeezes shut to a line and opens again, every few seconds)
           float blinkC = mod(uTime + uPhase * 7.0, 3.7), blink = 1.0 - smoothstep(0.0, 0.08, abs(blinkC - 0.1));
-          if (transformed.y > 1.13 && transformed.z > 0.25) transformed.y = 1.215 + (transformed.y - 1.215) * (1.0 - 0.92 * blink);
+          if (aFriendPart.y > 0.5 && transformed.y > 1.13 && transformed.z > 0.25) transformed.y = 1.215 + (transformed.y - 1.215) * (1.0 - 0.92 * blink);
         #endif
-        transformed = posePoint(transformed, poseA);`);
+        transformed = posePoint(transformed, poseAngles(position));`);
   };
   mat.customProgramCacheKey = () => key + '|friend' + flags.join('');
 }
@@ -178,8 +191,24 @@ export function buildAnimal(id) {
   const g = new THREE.Group();
   const name = 'Friend_' + id[0].toUpperCase() + id.slice(1);
   const body = model(name, { tints: type.fur, own: geo(name).userData.mats });
+  if (!body.geometry.getAttribute('aFriendPart')) {
+    const geometry = body.geometry, parts = new Float32Array(geometry.attributes.position.count * 2);
+    for (const group of geometry.groups) {
+      const material = geometry.userData.mats[group.materialIndex];
+      for (let i = group.start; i < group.start + group.count; i++) {
+        const v = geometry.index.getX(i) * 2;
+        if (/^Fur/.test(material)) parts[v] = 1;
+        if (/^(Paint|Dark)$/.test(material)) parts[v+1] = 1;
+      }
+    }
+    geometry.setAttribute('aFriendPart', new THREE.BufferAttribute(parts, 2));
+    // Poses can move the waving arm outside the resting bounds.
+    geometry.boundingSphere.radius += 0.7;
+  }
   const anim = { uTime: FRIEND_TIME, uPhase: { value: Math.random() * 10 }, uWave: { value: 0 }, uHappy: { value: 0 } };
   for (const mat of [].concat(body.material)) animateFriend(mat, anim, [...(/^(Paint|Dark)$/.test(mat.name) ? ['EYE'] : []), ...(/^Fur/.test(mat.name) ? ['ARM'] : [])]);
+  body.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  animateFriend(body.customDepthMaterial, anim, ['ARM', 'EYE']);
   body.scale.setScalar(1.45);
   g.add(body);
   g.userData.body = body;
@@ -202,29 +231,29 @@ export function buildBeam() {
 // in the water, two engines on a high wing, wingtip floats, and a big door open in the port side where rescued friends
 // sit and look out. Nose toward +Z; the keel is at y = -1.85.
 // (the hull floats with its keel 0.4 m down in the water: its origin is this far above the calm sea)
-export const PLANE_FLOAT = 1.45;
+export const PLANE_FLOAT = contracts.Vehicle_Plane.floatOffset;
 // where each engine's propeller turns (game axes: x is to port)
-const ENGINES = [[2.5, 0.75, 3.22], [-2.5, 0.75, 3.22]];
+const ENGINES = [contracts.Vehicle_Plane.sockets.engineLeft, contracts.Vehicle_Plane.sockets.engineRight];
 export function buildPlane(accent) {
   const g = new THREE.Group();
-  g.add(model('Vehicle_Plane', { tints: { Accent: new THREE.Color(accent) } }));
+  g.add(heroModel('Vehicle_Plane', { tints: { Accent: new THREE.Color(accent) } }));
   // (two propellers that turn together: prop is the list, and each blurs into a disc as it spins up)
   const discMat = new THREE.MeshBasicMaterial({ color: 0x1b1f24, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
-  let bladeMat = null;
+  let bladeMat = null, tipMat = null;
   const props = ENGINES.map(([x, y, z]) => {
     const prop = new THREE.Group(); prop.position.set(x, y, z + 0.02); g.add(prop);
-    const blades = model('Vehicle_PlaneProp', { own: ['Dark', 'Tip'] });
+    const blades = model('Vehicle_PlaneProp', { own: bladeMat ? [] : ['Dark', 'Tip'] });
     blades.scale.setScalar(0.95);
-    if (!bladeMat) bladeMat = blades.userData.mat('Dark');
-    else blades.material = blades.material.map(m => m.name === 'Dark' ? bladeMat : m);
-    blades.userData.mat('Tip').transparent = true; bladeMat.transparent = true;
+    if (!bladeMat) { bladeMat = blades.userData.mat('Dark'); tipMat = blades.userData.mat('Tip'); }
+    blades.material = blades.material.map(m => m.name === 'Dark' ? bladeMat : m.name === 'Tip' ? tipMat : m);
+    tipMat.transparent = bladeMat.transparent = true; tipMat.depthWrite = bladeMat.depthWrite = false;
     prop.add(blades);
     const disc = new THREE.Mesh(new THREE.CircleGeometry(1.4, 32), discMat); disc.position.set(x, y, z + 0.1); g.add(disc);
     return prop;
   });
   // the friends sit in the open door, looking out, with room for three along the sill
   // (friend-sized for the door: three abreast on the sill, a little smaller than life, all facing out)
-  const seat = new THREE.Group(); seat.position.set(0.62, -1.02, -0.55); seat.rotation.y = Math.PI / 2; seat.scale.setScalar(0.5); seat.userData.facingOut = true; g.add(seat);
+  const seat = new THREE.Group(); seat.position.fromArray(contracts.Vehicle_Plane.sockets.passengers); seat.rotation.y = Math.PI / 2; seat.scale.setScalar(0.5); seat.userData.facingOut = true; g.add(seat);
 
   const lightMat = (c) => new THREE.MeshStandardMaterial({ color: 0x111111, emissive: c, emissiveIntensity: 3 });
   mesh(new THREE.SphereGeometry(0.1, 8, 6), lightMat(0xff2020), 7.4, 0.98, 1.5, g).castShadow = false;
@@ -247,7 +276,7 @@ export function buildPlane(accent) {
   // (the gauge: a window in the starboard side with the water rising in it)
   mesh(new THREE.BoxGeometry(0.06, 1.1, 1.5), std(0x263b48), -0.93, -0.3, 1.2, fireTank);
   const level = mesh(new THREE.BoxGeometry(0.08, 1, 1.3), std(0x43c9ea, { emissive: 0x126078, emissiveIntensity: 0.3 }), -0.95, -0.3, 1.2, fireTank);
-  return { group: g, props, discMat, bladeMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
+  return { group: g, props, discMat, bladeMat, tipMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
 }
 
 
@@ -256,20 +285,20 @@ export function buildPlane(accent) {
 // outboards. Bow toward +Z, origin on the waterline; friends ride on the open aft deck.
 export function buildBoat(accent) {
   const g = new THREE.Group();
-  g.add(model('Vehicle_Boat', { tints: { Accent: new THREE.Color(accent) } }));
+  g.add(heroModel('Vehicle_Boat', { tints: { Accent: new THREE.Color(accent) } }));
   const lightMat = (c) => new THREE.MeshStandardMaterial({ color: 0x111111, emissive: c, emissiveIntensity: 3 });
   const strobe = mesh(new THREE.BoxGeometry(0.5, 0.12, 0.2), lightMat(0x3b7bff), -0.42, 3.22, -0.35, g); strobe.castShadow = false;
   const beacon = mesh(new THREE.BoxGeometry(0.5, 0.12, 0.2), lightMat(0xff2030), 0.42, 3.22, -0.35, g); beacon.castShadow = false;
   const lampMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xdcecff, emissiveIntensity: 0 });
   mesh(new THREE.SphereGeometry(0.12, 10, 8), lampMat, 0, 2.42, 1.42, g).castShadow = false;
   const motors = [];
-  for (const sx of [-0.55, 0.55]) {
-    const mo = new THREE.Group(); mo.position.set(sx, 0.85, -4.12); g.add(mo);
+  for (const socket of [contracts.Vehicle_Boat.sockets.motorLeft, contracts.Vehicle_Boat.sockets.motorRight]) {
+    const mo = new THREE.Group(); mo.position.fromArray(socket); g.add(mo);
     mo.add(model('Vehicle_BoatMotor'));
     motors.push(mo);
   }
-  const seat = new THREE.Group(); seat.position.set(0, 0.66, -2.5); g.add(seat);
-  const monitor = new THREE.Group(); monitor.position.set(0, 2.25, 2.65); g.add(monitor); monitor.visible = false;
+  const seat = new THREE.Group(); seat.position.fromArray(contracts.Vehicle_Boat.sockets.passengers); g.add(seat);
+  const monitor = new THREE.Group(); monitor.position.fromArray(contracts.Vehicle_Boat.sockets.cannon); g.add(monitor); monitor.visible = false;
   mesh(new THREE.CylinderGeometry(0.3, 0.4, 0.6, 12), std(0xff6838), 0, 0, 0, monitor);
   const barrel = new THREE.Group(); barrel.position.y = 0.32; monitor.add(barrel);
   const nozzle = mesh(new THREE.CylinderGeometry(0.15, 0.22, 1.45, 12), std(0xe4e8e9), 0, 0, 0.55, barrel); nozzle.rotation.x = Math.PI / 2;

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildAnimal, ANIMAL_TYPES } from './models.js';
+import { retireObject } from './render-resources.js';
 
 // Photograph the existing models once, so the passenger pictures match the friends in the world.
 export function createPortraits(renderer) {
@@ -30,7 +31,7 @@ export function createPortraits(renderer) {
       for (let y = 0; y < size; y++) frame.data.set(pixels.subarray(y * size * 4, (y + 1) * size * 4), (size - y - 1) * size * 4);
       ctx.putImageData(frame, 0, 0);
       result.set(type.e, { url: canvas.toDataURL('image/png'), name: type.id === 'kitty' ? 'Kitty' : type.id[0].toUpperCase() + type.id.slice(1) });
-      scene.remove(friend);
+      retireObject(friend);
     }
   } finally {
     renderer.setRenderTarget(oldTarget); renderer.setClearColor(oldColor, oldAlpha);

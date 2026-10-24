@@ -1,0 +1,17 @@
+{
+  "Jayhawk_Body": {
+    "version": 1, "units": "game-metres", "forward": "+Z", "up": "+Y",
+    "groundOffset": 1.95, "lodDistance": 90,
+    "sockets": { "hoist": [-1.11, -0.2, 0.58], "mainRotor": [0, 0.686, 0], "tailRotor": [-0.26, 1.165, -6.81] }
+  },
+  "Vehicle_Plane": {
+    "version": 1, "units": "game-metres", "forward": "+Z", "up": "+Y",
+    "floatOffset": 1.45, "lodDistance": 105,
+    "sockets": { "engineLeft": [2.5, 0.75, 3.22], "engineRight": [-2.5, 0.75, 3.22], "passengers": [0.62, -1.02, -0.55] }
+  },
+  "Vehicle_Boat": {
+    "version": 1, "units": "game-metres", "forward": "+Z", "up": "+Y",
+    "lodDistance": 85,
+    "sockets": { "passengers": [0, 0.66, -2.5], "motorLeft": [-0.55, 0.85, -4.12], "motorRight": [0.55, 0.85, -4.12], "cannon": [0, 2.25, 2.65] }
+  }
+}

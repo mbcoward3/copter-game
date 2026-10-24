@@ -106,3 +106,9 @@ Pushing `main` builds the game and updates the production content in the private
 
 For a second local checkout, set `COPTER_PORT` before serving (PowerShell: `$env:COPTER_PORT=5174`).
 The development server listens on this machine only.
+
+Rendering and model development are documented in [`MODEL-PIPELINE.md`](MODEL-PIPELINE.md).
+`npm run render-check` verifies shadow consistency and resource ownership on the real renderer;
+`npm run profile` captures serial live CPU/GPU measurements and screenshots. Run profiling separately
+from other browser checks. Each build writes `build/asset-report.json` with model budgets and contracts.
+`npm run build:hosted` produces the cacheable hosted build in `build/site/` alongside the offline HTML.
