@@ -1035,16 +1035,19 @@ function updateBoat(p, dt, t) {
     if (blocked) p.avoidT = 1.1;
     if (p.avoidT > 0 && inp.t === 0) turnCmd = blocked ? p.avoidDir : 0;      // turn until clear, then run straight for a moment
   }
+  // Holding station for the cannon is intentional, not a cove to reverse out of.
+  const fireHolding = !!fj && (gd < 12 || !!p.spray);
+  if (fireHolding) p.backT = 0;
   // wedged in a cove with go held and getting nowhere: back out for a moment, turning, then carry on
   p.wedgeT = (p.wedgeT || 0) + dt;
   if (p.wedgeT > 2.5) {
-    if (!p.pro && ready && inp.f > 0 && !p.incoming && p.wedgeAt && Math.hypot(p.pos.x - p.wedgeAt.x, p.pos.z - p.wedgeAt.z) < 2) p.backT = 1.8;
+    if (!p.pro && !fireHolding && ready && inp.f > 0 && !p.incoming && p.wedgeAt && Math.hypot(p.pos.x - p.wedgeAt.x, p.pos.z - p.wedgeAt.z) < 2) p.backT = 1.8;
     p.wedgeT = 0; (p.wedgeAt || (p.wedgeAt = new THREE.Vector3())).copy(p.pos);
   }
   if (p.backT > 0) { p.backT -= dt; turnCmd = p.avoidDir || 1; }
   // (while the cannon is going, it swings its bow round to face the fire, so the fire is in the picture)
   if (!p.pro && p.spray && inp.t === 0) { const F = p.spray.fire; turnCmd = clamp(angDiff(Math.atan2(F.x - p.pos.x, F.z - p.pos.z), p.yaw) * 1.6, -1, 1); }
-  const bite = clamp(Math.abs(p.fs) / 9, 0.45, 1) * (p.fs < -0.5 ? -1 : 1) * (p.pro ? 1.15 - clamp((Math.abs(p.fs) - 20) / 40, 0, 0.35) : 1);
+  const bite = clamp(Math.abs(p.fs) / 9, 0.45, 1) * (p.fs < -0.5 && !fireHolding ? -1 : 1) * (p.pro ? 1.15 - clamp((Math.abs(p.fs) - 20) / 40, 0, 0.35) : 1);
   p.yawVel += (clamp(turnCmd, -1, 1) * (ready ? 1.35 * bite : 0) - p.yawVel) * damp(2.5, dt);
   p.yaw += p.yawVel * dt;
 
