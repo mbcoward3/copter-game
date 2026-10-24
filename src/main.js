@@ -606,7 +606,6 @@ function planeCanReach(x, z) {
   if (!planeReach.has(key)) planeReach.set(key, !!landingFor({ x, z }, 0, { x, z }));
   return planeReach.get(key);
 }
-const AP_OUT = { aim: { x: 0, z: 0 } };
 function planePilot(p, t, dt, ready, room) {
   const A = p.ap || (p.ap = { key: null, land: null, t: -9, final: false, run: null, air: null, airT: -9, manual: 0, park: null });
   const out = { aim: A.aimPt || (A.aimPt = { x: 0, z: 0 }), cap: PL.max, alt: PL.cruise, look: undefined, over: undefined, run: false, near: false };
@@ -1313,7 +1312,7 @@ function updateWinch(p, dt, t) {
     w.rotation.set(-Math.PI / 2 + Math.sin(t * 3) * .035, Math.cos(t * 2) * .035, 0);
     p.bucket.userData.valve.rotation.z += ((p.attack ? -1.3 : 0) - p.bucket.userData.valve.rotation.z) * damp(12, dt);
   }
-  // door slides open and the boom swings out whenever there is someone to fetch or carry
+  // The cabin door opens before the fixed hoist lowers a load.
   const needHoist = !p.grounded && (p.target || bucket || p.incoming > 0 || p.cargo.length > 0 || (p.pro && (p.input.w || p.winch > 0.1)));
   const was = p.hoist;
   p.hoist = clamp(p.hoist + (needHoist ? dt / 0.55 : -dt / 0.9), 0, 1);
@@ -1321,12 +1320,10 @@ function updateWinch(p, dt, t) {
   const hz = p.hoist * p.hoist * (3 - 2 * p.hoist);
   const open = Math.min(1, hz * 1.6);
   p.heli.door.position.set(DOOR_OPEN.x * open, 0, DOOR_OPEN.z * open);
-  p.heli.boom.rotation.y = -Math.PI / 2 * clamp((hz - 0.3) / 0.7, 0, 1);
   const out = clamp((hz - 0.3) / 0.7, 0, 1);
-  // boom tip in world space (stowed it points forward along the cabin, deployed it sticks out of the side)
-  const lx = HOIST.px - Math.sin(out * Math.PI / 2) * HOIST.len, lz = HOIST.z + Math.cos(out * Math.PI / 2) * HOIST.len;
+  // Fixed hoist attachment in world space.
   const cy = Math.cos(p.yaw), sy = Math.sin(p.yaw);
-  p.hook.set(p.pos.x + lx * cy + lz * sy, p.pos.y + HOIST.y, p.pos.z - lx * sy + lz * cy);
+  p.hook.set(p.pos.x + HOIST.px * cy + HOIST.z * sy, p.pos.y + HOIST.y, p.pos.z - HOIST.px * sy + HOIST.z * cy);
   const hookY = p.hook.y, ready = out > 0.85;
   const nearBase = Math.hypot(p.pos.x, p.pos.z) < 42;
   let mode = 'idle';
@@ -1383,7 +1380,7 @@ function updateWinch(p, dt, t) {
   if (b.y > hookY - 0.6 - BASKET_TOP) b.y = hookY - 0.6 - BASKET_TOP;
   p.ropeLen = Math.max(0.6, hookY - b.y - BASKET_TOP);
 
-  // the basket lives inside the cabin until the boom is out
+  // The basket stays inside the cabin until the door has opened.
   const sc = Math.max(0.001, out);
   p.basket.position.copy(b); p.basket.scale.setScalar(sc);
   p.basket.rotation.set(clamp(-(b.z - p.pos.z) * 0.03, -0.35, 0.35), p.yaw, clamp((b.x - p.pos.x) * 0.03, -0.35, 0.35));
@@ -2996,7 +2993,7 @@ addEventListener('resize', onResize);
 // development: debug.view = [x, y, z, lookX, lookY, lookZ] holds the menu camera still; debug.run(seconds) plays
 // the game forward without waiting for the screen (a hidden tab draws nothing), and debug.shot(name) posts the
 // frame to serve.mjs, which writes shots/<name>.jpg
-// (for the benchmark, tools/bench.js: how often each pilot touches something, by kind; counted once per touch, not per frame)
+// Simulation checks count how often each pilot touches something, by kind, once per touch rather than per frame.
 function bump(p, kind) {
   const c = debug.bumps[p.idx];
   if (game.t - (c.last[kind] ?? -9) > 0.5) c[kind] = (c[kind] || 0) + 1;

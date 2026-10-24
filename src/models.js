@@ -13,9 +13,8 @@ function mesh(geo, mat, x = 0, y = 0, z = 0, parent) {
 // A Coast Guard MH-60T Jayhawk (modelled in Blender, see tools/pack_models.py).
 // Model space: nose toward +Z, up +Y, wheels touch the ground at y = -SKID.
 export const SKID = 1.95;
-export const HOOK_Y = -1.25;
 // where the cable leaves the hoist, over the starboard cabin door
-export const HOIST = { px: -1.11, y: -0.2, z: 0.58, len: 0 };
+export const HOIST = { px: -1.11, y: -0.2, z: 0.58 };
 // how far the cabin door slides back (z) and stands off the hull (x) when open
 export const DOOR_OPEN = { x: -0.06, z: -0.84 };
 
@@ -25,7 +24,6 @@ export function buildHeli(accent) {
   g.add(model('Jayhawk_Body', { tints }));
   const door = new THREE.Group(); g.add(door);
   door.add(model('Jayhawk_Door'));
-  const boom = new THREE.Group(); g.add(boom);       // the hoist is fixed on this airframe
 
   // main rotor: the blades fade into a blurred disc as it spins up
   const rotor = new THREE.Group(); rotor.position.y = 0.686; g.add(rotor);
@@ -65,7 +63,7 @@ export function buildHeli(accent) {
   cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, -12.8, 6.8).normalize());
   g.add(cone);
 
-  return { group: g, door, boom, rotor, tail, discMat, tipRingMat: tipRing.material, bladeMat, tipMat, strobe, beacon, spot, coneMat, lampMat };
+  return { group: g, door, rotor, tail, discMat, tipRingMat: tipRing.material, bladeMat, tipMat, strobe, beacon, spot, coneMat, lampMat };
 }
 
 // ================================================================= rescue basket + life ring + raft
@@ -249,7 +247,7 @@ export function buildPlane(accent) {
   // (the gauge: a window in the starboard side with the water rising in it)
   mesh(new THREE.BoxGeometry(0.06, 1.1, 1.5), std(0x263b48), -0.93, -0.3, 1.2, fireTank);
   const level = mesh(new THREE.BoxGeometry(0.08, 1, 1.3), std(0x43c9ea, { emissive: 0x126078, emissiveIntensity: 0.3 }), -0.95, -0.3, 1.2, fireTank);
-  return { group: g, prop: props[0], props, discMat, bladeMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
+  return { group: g, props, discMat, bladeMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
 }
 
 

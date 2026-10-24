@@ -40,9 +40,9 @@ const SAMPLE = `(() => {
     if (p.vehicle === 'heli') {
       // the cable: a cylinder from its middle, scaled along its length; its ends should sit on the hook and on the top of
       // whatever hangs from it
-      const r = p.rope, up = new r.constructor().up;
+      const r = p.rope;
       if (r.visible) {
-        const dir = { x: 0, y: 1, z: 0 }, qn = r.quaternion, len = r.scale.y;
+        const qn = r.quaternion, len = r.scale.y;
         const x = 2 * (qn.x * qn.y - qn.w * qn.z), y = 1 - 2 * (qn.x * qn.x + qn.z * qn.z), z = 2 * (qn.y * qn.z + qn.w * qn.x);
         const a = { x: r.position.x - x * len / 2, y: r.position.y - y * len / 2, z: r.position.z - z * len / 2 }, b = { x: r.position.x + x * len / 2, y: r.position.y + y * len / 2, z: r.position.z + z * len / 2 };
         const d = (u, w) => Math.hypot(u.x - w.x, u.y - w.y, u.z - w.z);

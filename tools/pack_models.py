@@ -1,4 +1,4 @@
-# Packs the Blender-made models (the FBX files Scripts/build_models.py writes for the Unreal prototype) into one small
+# Packs the Blender-made models (the FBX files tools/build_models.py writes) into one small
 # file the web game can carry inside its single HTML page: src/assets/models.bin, plus each model's baked shading as a
 # small greyscale JPEG (src/assets/ao/<name>.jpg).
 # Run with:  blender --background --python tools/pack_models.py -- <folder of FBX files> <src/assets>

@@ -3,7 +3,6 @@
 Play the hosted game at **https://copters.matthewcoward.com**.
 
 Alternatively, open **`rescue-squad-3d.html`** after building (no server or internet needed).
-The original 2D game is still there as `helicopter-game.html`.
 
 ## Playing
 - **Assisted controls:** hold `W` (or `↑` when playing solo) to go. Steering, rescues and the trip home are assisted;
@@ -54,8 +53,9 @@ recordings from [BigSoundBank](https://bigsoundbank.com) (CC0); the jingles betw
 [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Propeller-plane-flying-steady-01.wav), CC BY-SA 4.0.
 
 ## Changing the game
-Source is in `src/`. The models and ground pictures are in `src/assets/`, packed from the Blender-made
-files of the Unreal prototype by `tools/pack_models.py` and `tools/pack_textures.py` (only needed again if those change).
+Source is in `src/`. The current game is the only maintained implementation.
+Models, ground pictures, and sounds are in `src/assets/`; `npm run build` bundles them directly.
+Blender generators and asset packers live in `tools/` and are only needed when changing those assets.
 After editing:
 
     npm install        # first time only
@@ -80,12 +80,27 @@ clicks through the start menu, holds go for each machine and mission (and two pi
 a number gone bad, a fresh outing not starting at home, no progress, a cable not joined to its basket or bucket, or a
 boat in a pier. Look at the screenshots it saves in `build/play/`: passing checks are not the same as looking right.
 
-`tools/build_vehicles.py` (Blender) makes the boat, the flying boat, the sea arch, stilt hut and kayak into `build/vehicles`, and
-`tools/build_zones.py` the pines, the town's houses, the fire tower, ski hut, crane, sailing boat, seal and turtle into `build/zones`;
-pack them all with
-`blender --background --python tools/pack_models.py -- unreal/RescueSquad/Saved/Models src/assets build/vehicles build/zones`.
+To rebuild models with Blender, run:
+
+    blender --background --python tools/build_models.py -- build/models
+    blender --background --python tools/build_vehicles.py -- build/vehicles
+    blender --background --python tools/build_zones.py -- build/zones
+    blender --background --python tools/pack_models.py -- build/models src/assets build/vehicles build/zones
+
+`build_models.py` makes the helicopter, animals, and home scenery; `build_vehicles.py` makes the boat, seaplane,
+sea arch, stilt hut, and kayak; `build_zones.py` makes regional buildings, trees, and wildlife.
+The local model exports and baked shading are in `build/models/`. Ground-photo inputs are in `build/photos/`;
+run `blender --background --python tools/pack_textures.py -- build/photos src/assets` to repack them.
+These ignored working inputs are not required to build or play the game; model exports can be regenerated with
+the commands above. For a fresh checkout, ground-photo inputs must be supplied separately (Poly Haven CC0;
+the filenames are listed in `tools/pack_textures.py`), as must the audio inputs listed in `tools/pack_audio.py`.
+
 `tools/soak.js` plays the game unattended in the browser and reports rescues and stuck time. Its default test holds only
 go, including at home: `soak('heli', 300)`. It does not steer on the pilot's behalf. See the comment at its top for options.
+
+Use [`HOW-WE-CHECK.md`](HOW-WE-CHECK.md) for the development/checking workflow and
+[`AIRPLANE-SPEC.md`](AIRPLANE-SPEC.md) for the seaplane's current acceptance criteria.
+`tools/sim-checks.js`, run by `npm run check`, is the maintained source of simulation rules and benchmark metrics.
 
 Pushing `main` builds the game and updates the production content in the private `talos-cluster` GitOps repository.
 

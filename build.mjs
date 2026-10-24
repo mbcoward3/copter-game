@@ -3,24 +3,23 @@
 import { build } from 'esbuild';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 
-// the pictures in src/assets are carried inside the page; this lists them for src/assets.js
-const pics = dir => readdirSync('src/assets/' + dir).filter(f => f.endsWith('.jpg'));
-const names = (dir, p) => pics(dir).map((f, i) => `'${f.slice(0, -4)}': ${p}${i}`).join(', ');
-writeFileSync('src/assets/pictures.js', [
-  ...pics('ao').map((f, i) => `import a${i} from './ao/${f}';`),
-  ...pics('ground').map((f, i) => `import g${i} from './ground/${f}';`),
-  `export const AO = { ${names('ao', 'a')} };`,
-  `export const GROUND = { ${names('ground', 'g')} };`, '',
-].join('\n'));
-
-// ...and so are the sounds (tools/pack_audio.py), listed in src/assets/sfx.js
-for (const dir of ['sfx']) {
-  const clips = existsSync('src/assets/' + dir) ? readdirSync('src/assets/' + dir).filter(f => f.endsWith('.mp3')) : [];
-  writeFileSync(`src/assets/${dir}.js`, [
-    ...clips.map((f, i) => `import c${i} from './${dir}/${f}';`),
-    `export default { ${clips.map((f, i) => `'${f.slice(0, -4)}': c${i}`).join(', ')} };`, '',
-  ].join('\n'));
+// Generate the asset imports used by src/assets.js and src/audio.js.
+function assetList(dir, extension, prefix, optional = false) {
+  const path = 'src/assets/' + dir;
+  const files = optional && !existsSync(path) ? [] : readdirSync(path).filter(f => f.endsWith(extension)).sort();
+  return {
+    imports: files.map((f, i) => `import ${prefix}${i} from './${dir}/${f}';`),
+    entries: files.map((f, i) => `'${f.slice(0, -extension.length)}': ${prefix}${i}`).join(', '),
+  };
 }
+const ao = assetList('ao', '.jpg', 'a'), ground = assetList('ground', '.jpg', 'g');
+writeFileSync('src/assets/pictures.js', [
+  ...ao.imports, ...ground.imports,
+  `export const AO = { ${ao.entries} };`,
+  `export const GROUND = { ${ground.entries} };`, '',
+].join('\n'));
+const sounds = assetList('sfx', '.mp3', 'c', true);
+writeFileSync('src/assets/sfx.js', [...sounds.imports, `export default { ${sounds.entries} };`, ''].join('\n'));
 
 const result = await build({
   entryPoints: ['src/main.js'],
