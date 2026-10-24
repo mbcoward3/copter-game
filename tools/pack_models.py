@@ -19,6 +19,8 @@ from mathutils import Vector
 
 # (more source folders may follow the output folder: tools/build_vehicles.py writes the game's own models to another)
 SRC, OUT, *MORE = (os.path.abspath(p) for p in sys.argv[sys.argv.index('--') + 1:])
+with open(os.path.join(os.path.dirname(__file__), '..', 'src', 'assets', 'model-contracts.json')) as contracts_file:
+    CONTRACTS = json.load(contracts_file)
 AO_SIZE = {'Jayhawk_Body': 1024}       # the rest are 512
 # The plants were modelled leaf by leaf for an engine that draws unlimited triangles. Here each keeps one leaf in N,
 # grown to cover the gap, and gets a second, sparser copy (<name>_far) for the far side of the bay.
@@ -30,6 +32,7 @@ CARDS = {'World_Tree3': (0.55, 0.85), 'World_Tree4': (0.55, 0.85), 'World_Tree5'
 SKIP = ('World_Flowers',)
 # smooth lumps that carry far more triangles than a browser needs: the share to keep
 DECIMATE = {'Friend_': 0.4, 'World_Rock': 0.12, 'Jayhawk_Raft': 0.5, 'World_Whale': 0.5, 'World_PadLights': 0.4}
+HERO_LOD = {'Jayhawk_Body': .38, 'Vehicle_Plane': .45, 'Vehicle_Boat': .4}
 
 blob = bytearray()
 index = {}
@@ -121,7 +124,7 @@ def pack(name, ob, out_name, every, folder):
     note = ''
     if every:
         note = ' leaves %d -> %d' % thin(me, every, len(name), out_name.endswith('_far'), CARDS.get(name, (0, 0))[out_name.endswith('_far')])
-    ratio = next((r for k, r in DECIMATE.items() if name.startswith(k)), 0)
+    ratio = HERO_LOD.get(name, 0) if out_name.endswith('_far') and name in HERO_LOD else next((r for k, r in DECIMATE.items() if name.startswith(k)), 0)
     if ratio:
         mod = ob.modifiers.new('Decimate', 'DECIMATE')
         mod.ratio = ratio
@@ -184,9 +187,16 @@ def pack(name, ob, out_name, every, folder):
     if has_uv:
         entry['uv'] = push(np.ascontiguousarray(quv[first]))
     index[name] = entry
+    base_name = name[:-4] if name.endswith('_far') else name
+    if base_name in CONTRACTS:
+        entry['contract'] = CONTRACTS[base_name]
     print('PACK %-20s %6d tris %6d verts  size %s  mats %s%s' % (
         name, nt, nv, ' x '.join('%.2f' % v for v in span), ','.join(g['mat'] for g in groups), note))
 
+    # A vehicle's far body keeps the near body's UVs, so it wears the near body's baked shade (no second picture).
+    if name.endswith('_far') and name[:-4] in HERO_LOD:
+        entry['ao'] = True
+        return
     bake = os.path.join(folder, 'B_%s.png' % name)
     if os.path.exists(bake) and not every:
         img = bpy.data.images.load(bake)
@@ -207,11 +217,14 @@ for folder in [SRC] + MORE:
             continue
         for far in (False, True):
             every = THIN.get(stem, (0, 0))[far]
-            if far and not every:
+            if far and not every and stem not in HERO_LOD:
                 continue
             bpy.ops.wm.read_factory_settings(use_empty=True)
             bpy.ops.wm.fbx_import(filepath=os.path.join(folder, fname))
-            pack(stem, next(o for o in bpy.context.scene.objects if o.type == 'MESH'), stem + ('_far' if far else ''), every, folder)
+            meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+            if len(meshes) != 1:
+                raise ValueError('%s must export one packed mesh (found %d); export animated parts separately' % (stem, len(meshes)))
+            pack(stem, meshes[0], stem + ('_far' if far else ''), every, folder)
 
 head = json.dumps(index, separators=(',', ':')).encode()
 while len(head) % 4:

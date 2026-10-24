@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { unzlibSync } from 'three/addons/libs/fflate.module.js';
 import packed from './assets/models.bin';
 import { AO, GROUND } from './assets/pictures.js';
+import { sharedResource } from './render-resources.js';
+import contracts from './assets/model-contracts.json';
 
 // ================================================================= packed models (see tools/pack_models.py)
 const raw = unzlibSync(packed);
@@ -48,7 +50,7 @@ export function geo(name) {
   m.groups.forEach((gr, i) => g.addGroup(gr.start, gr.count, i));
   g.userData.mats = m.groups.map(gr => gr.mat);
   g.computeBoundingSphere(); g.computeBoundingBox();
-  geoCache.set(name, g);
+  geoCache.set(name, sharedResource(g));
   return g;
 }
 
@@ -88,39 +90,52 @@ function wearBake(mat, tex, dirt) {
   mat.onBeforeCompile = sh => {
     sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
       float bakeAo = texture2D(map, vMapUv).r;
-      diffuseColor.rgb *= mix(0.3, 1.0, pow(bakeAo, 1.3));
-      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.72, 0.65, 0.56), clamp((1.0 - bakeAo) * ${dirt.toFixed(2)}, 0.0, 1.0));`);
+      diffuseColor.rgb *= mix(0.62, 1.0, pow(bakeAo, 1.15));
+      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.83, 0.79, 0.72), clamp((1.0 - bakeAo) * ${dirt.toFixed(2)}, 0.0, 1.0));`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = clamp(roughnessFactor + (1.0 - bakeAo) * 0.13, 0.08, 1.0);');
   };
   mat.customProgramCacheKey = () => 'bake' + dirt;
 }
 const matCache = new Map();
 // one material by name. opts: bake (model whose baked shade it wears), tint (THREE.Color replacing the colour), own (never shared)
 export function look(name, opts = {}) {
-  if (name === 'Glow' || name === 'Canopy') opts = { ...opts, bake: null };      // lamps and glass carry no baked shade
+  if (name === 'Glow' || name === 'Canopy' || name === 'Glass') opts = { ...opts, bake: null };
   const key = name + '|' + (opts.bake || '') + '|' + (opts.tint ? opts.tint.getHexString() : '');
   if (!opts.own && matCache.has(key)) return matCache.get(key);
   const [c, rough, metal] = LOOKS[name] || LOOKS.Paint;
   const color = opts.tint ? opts.tint.clone() : new THREE.Color().setRGB(c[0], c[1], c[2]);
   let mat;
   if (name === 'Paint' || name === 'Accent' || name === 'Navy') mat = new THREE.MeshPhysicalMaterial({ color, roughness: rough + 0.08, metalness: 0.05, clearcoat: 0.8, clearcoatRoughness: 0.12 });
-  else if (name === 'Glass' || name === 'Canopy') mat = new THREE.MeshPhysicalMaterial({ color, roughness: rough, metalness: 0.6, envMapIntensity: 1.6 });
+  else if (name === 'Glass' || name === 'Canopy') mat = new THREE.MeshPhysicalMaterial({ color: 0x183c4d, roughness: 0.09, metalness: 0, ior: 1.5, clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 1.25 });
   else if (name === 'Glow') mat = new THREE.MeshStandardMaterial({ color: 0x1a1408, emissive: color, emissiveIntensity: 1.2, roughness: rough });
   else if (LEAFY.test(name)) mat = new THREE.MeshStandardMaterial({ color, roughness: 0.7, side: THREE.DoubleSide });
   else mat = new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
   mat.name = name;
   const tex = opts.bake ? bakeTex(opts.bake) : null;
   if (tex) wearBake(mat, tex, /^(Jayhawk_Body|Jayhawk_Door|World_)/.test(opts.bake) ? 0.7 : 0.3);
-  if (!opts.own) matCache.set(key, mat);
+  // Random hull/fur tints belong to their entity; caching them forever retains every rescue.
+  if (!opts.own && !opts.tint) matCache.set(key, sharedResource(mat));
   return mat;
 }
 
 // a mesh of one packed model. tints: { MaterialName: THREE.Color }, own: [names] that get their own copy
 export function model(name, { tints = {}, own = [], shadow = true } = {}) {
   const g = geo(name);
-  const bake = INDEX[name].ao ? name : null;
+  // (a vehicle's far body shares the near body's UVs, baked shade and so its materials)
+  const near = name.endsWith('_far') && AO[name.slice(0, -4)] ? name.slice(0, -4) : name;
+  const bake = INDEX[name].ao ? near : null;
   const mats = g.userData.mats.map(mn => look(mn, { bake, tint: tints[mn], own: own.includes(mn) }));
   const mesh = new THREE.Mesh(g, mats);
   mesh.castShadow = shadow; mesh.receiveShadow = true;
   mesh.userData.mat = mn => mats[g.userData.mats.indexOf(mn)];
   return mesh;
+}
+
+// Vehicle bodies choose their level per viewport (world.cull), from the main camera.
+export const heroLods = new Set();
+export function heroModel(name, options) {
+  const lod = new THREE.LOD(); lod.autoUpdate = false; heroLods.add(lod);
+  lod.addLevel(model(name, options), 0);
+  if (INDEX[name + '_far']) lod.addLevel(model(name + '_far', options), contracts[name].lodDistance, .12);
+  return lod;
 }

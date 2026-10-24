@@ -46,7 +46,7 @@ def finish(bm, name, smooth, subdivide=0, bevel=0.0):
     return ob
 
 
-def loft(name, stations, paint, ring=28, subdivide=1):
+def loft(name, stations, paint, ring=28, subdivide=1, keep=None):
     # a skin over cross-sections. Each station: (x, half width, half height, centre z, squareness).
     # paint(x, side, up) names the material of each panel; side and up run -1..1 round the section
     bm = bmesh.new()
@@ -62,6 +62,8 @@ def loft(name, stations, paint, ring=28, subdivide=1):
         xm = (stations[j][0] + stations[j + 1][0]) / 2
         for i in range(ring):
             a = (i + 1) / ring * 2 * math.pi
+            if keep and not keep(xm, math.cos(a), math.sin(a)):
+                continue
             f = bm.faces.new((rings[j][i], rings[j][(i + 1) % ring], rings[j + 1][(i + 1) % ring], rings[j + 1][i]))
             f.material_index = ORDER.index(paint(xm, math.cos(a), math.sin(a)))
     for row, x in ((rings[0], stations[0][0]), (rings[-1], stations[-1][0])):
@@ -89,9 +91,22 @@ def slab(name, centre, size, mat, bevel=0.02):
 
 
 def wing(name, root, tip, mat):
-    # a tapered flat panel between two chords: root and tip are (x front, x back, y, z, thickness)
-    quad = lambda q: [Vector((q[0], q[2], q[3] - q[4] / 2)), Vector((q[1], q[2], q[3] - q[4] / 2)), Vector((q[1], q[2], q[3] + q[4] / 2)), Vector((q[0], q[2], q[3] + q[4] / 2))]
-    return box(name, quad(root), quad(tip), mat, 0.03)
+    # Rounded leading edge and thin trailing edge, within the existing chord/thickness envelope.
+    bm = bmesh.new()
+    samples = (0,.02,.06,.14,.28,.45,.65,.82,.95,1)
+    def section(q):
+        points = []
+        for side, values in ((1,samples),(-1,reversed(samples))):
+            for t in values:
+                h = q[4] * (5 * (.2969*math.sqrt(t)-.126*t-.3516*t*t+.2843*t**3-.1015*t**4) + .003)
+                points.append(bm.verts.new((q[0]+(q[1]-q[0])*t,q[2],q[3]+side*h)))
+        return points
+    a,b = section(root),section(tip)
+    bm.faces.new(list(reversed(a))); bm.faces.new(b)
+    for i in range(len(a)):
+        bm.faces.new((a[i],a[(i+1)%len(a)],b[(i+1)%len(b)],b[i]))
+    for f in bm.faces: f.material_index=ORDER.index(mat)
+    return finish(bm,name,True)
 
 
 def rod(name, a, b, radius, mat, sides=12):
@@ -223,6 +238,13 @@ def boat():
              slab('Roof', (0.3, 0, 2.3), (2.9, 2.0, 0.1), 'Paint', 0.03), slab('Door', (-0.96, 0.3, 1.3), (0.05, 0.7, 1.3), 'Seam', 0.01)]
     bits.append(lettering('Rescue', 'RESCUE', (0.3, 0.915, 1.12), 0.28, True))
     bits.append(lettering('Rescue', 'RESCUE', (0.3, -0.915, 1.12), 0.28, False))
+    # Glazing has structural mullions, rubber seals and a readable cabin door.
+    for side in (-1,1):
+        for x in (-.65,.45,1.35):
+            bits.append(slab('WindowPillar',(x,side*.94,1.76),(.055,.045,.64),'Paint',.01))
+        bits.append(rod('Cleat',(-2.7,side*.8,.72),(-2.45,side*.8,.72),.045,'Metal',8))
+    bits.append(rod('WindshieldPillar',(1.66,0,1.43),(1.44,0,2.08),.035,'Paint',8))
+    bits.append(slab('DoorHandle',(-1.01,.52,1.36),(.04,.13,.035),'Metal',.01))
     for side in (1, -1):
         bits.append(lettering('Guard', 'U.S. COAST GUARD', (2.6, side * (half_width(2.6) + 0.02), 0.42), 0.17, side > 0))
     # radar arch over the cabin roof, with the light bar on top and a radar dome
@@ -286,9 +308,14 @@ def plane():
         return 'Paint'
     # (x, half beam, half depth, centre z, squareness): deep and boat-like forward, the bottom rising aft of the step
     hull = [(5.75, 0.08, 0.15, -0.35, 2.0), (5.5, 0.48, 0.62, -0.5, 2.2), (4.9, 0.78, 0.98, -0.66, 2.5), (3.8, 0.9, 1.15, -0.7, 2.8),
-            (1.5, 0.92, 1.18, -0.67, 3.0), (0.0, 0.9, 1.15, -0.68, 3.0), (-0.1, 0.88, 1.0, -0.53, 3.0), (-2.2, 0.72, 0.85, -0.3, 2.8),
+            (1.5, 0.92, 1.18, -0.67, 3.0), (.15,.9,1.15,-.68,3.0), (0.0, 0.9, 1.15, -0.68, 3.0), (-0.1, 0.88, 1.0, -0.53, 3.0), (-1.25,.8,.94,-.4,2.9), (-2.2, 0.72, 0.85, -0.3, 2.8),
             (-4.2, 0.42, 0.6, 0.05, 2.4), (-5.6, 0.15, 0.36, 0.35, 2.0)]
-    bits = [loft('Hull', hull, skin, ring=40, subdivide=1)]
+    bits = [loft('Hull', hull, skin, ring=40, subdivide=1,
+                 keep=lambda x,side,up: not (-1.25<x<.15 and side>.65 and -.7<up<.65))]
+    for side in (-1,1):
+        bits.append(rod('CockpitFrame',(4.7,side*.56,.12),(4.1,side*.7,.32),.025,'Paint',8))
+        bits.append(rod('CockpitFrame',(4.65,side*.58,.1),(4.65,side*.35,.39),.025,'Paint',8))
+    bits.append(rod('CockpitBrow',(4.65,-.35,.39),(4.65,.35,.39),.025,'Paint',8))
     # cockpit glazing on top of the nose, and windows down both sides
     for side in (1, -1):
         for x in (2.8, 2.0, 0.6, -0.9, -1.7):
@@ -297,7 +324,8 @@ def plane():
             bits.append(ball('Port', (x, side * 0.91, 0.05), (0.2, 0.03, 0.2), 'Glass'))
         bits.append(lettering('Guard', 'COAST GUARD', (2.6 if side > 0 else 0.0, side * 0.93, -0.55), 0.3, side > 0))
     # the rescue door, open in the port side, with its sill step and grab rails
-    bits += [slab('Doorway', (-0.55, 0.9, -0.35), (1.3, 0.06, 1.35), 'Dark', 0.0),
+    bits += [slab('CabinBack', (-0.55, 0.28, -0.35), (1.3, 0.06, 1.35), 'Dark', 0.0),
+             slab('CabinFloor',(-.55,.6,-1.02),(1.3,.7,.07),'Concrete',.01),
              slab('DoorFrame', (-0.55, 0.93, 0.36), (1.45, 0.05, 0.1), 'Raft', 0.0), slab('DoorFrame', (-0.55, 0.93, -1.06), (1.45, 0.05, 0.1), 'Raft', 0.0),
              slab('DoorFrame', (0.15, 0.93, -0.35), (0.1, 0.05, 1.45), 'Raft', 0.0), slab('DoorFrame', (-1.25, 0.93, -0.35), (0.1, 0.05, 1.45), 'Raft', 0.0),
              slab('Step', (-0.55, 1.15, -1.05), (1.2, 0.5, 0.07), 'Metal', 0.01),

@@ -33,7 +33,7 @@ export function buildFireScene(scene, fire) {
   const n = fire.cells.length;
   // Fuel belongs to individual simulation cells: an untouched pile stays intact,
   // a soaked pile darkens, and burned timbers retain their damage after cooling.
-  const fuel = [], charColor = new THREE.Color(0x242322);
+  const fuel = [], charColor = new THREE.Color(0x242322), batches = new Map();
   const roof = fire.label === 'Rooftop fire';
   fire.cells.forEach((cell, i) => {
     if (i % 3 !== 0) return;
@@ -42,8 +42,12 @@ export function buildFireScene(scene, fire) {
     const mat = new THREE.MeshStandardMaterial({color:base,roughness:.9});
     const pieces = [];
     const part = (geometry,x,y,z,rx=0,rz=0) => {
+      const key = geometry.type + JSON.stringify(geometry.parameters);
+      if (!batches.has(key)) batches.set(key, { geometry, pieces: [] });
+      else { geometry.dispose(); geometry = batches.get(key).geometry; }
       const m = new THREE.Mesh(geometry,mat); m.position.set(x,y,z); m.rotation.set(rx,0,rz); m.castShadow=m.receiveShadow=true; body.add(m);
-      pieces.push({mesh:m,y,rx,rz}); return m;
+      m.visible = false; // Pose handles remain CPU-side; the visible pieces are batched below.
+      const piece = {mesh:m,y,rx,rz,body,mat}; pieces.push(piece); batches.get(key).pieces.push(piece); return m;
     };
     if (roof || i % 2 === 0) {
       // Stacked shipping crates and pallets; lids settle as the supporting timber burns.
@@ -59,6 +63,20 @@ export function buildFireScene(scene, fire) {
     }
     fuel.push({cell,body,mat,base,pieces,damage:0});
   });
+  for (const batch of batches.values()) {
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .9 });
+    mat.onBeforeCompile = shader => {
+      shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 aFuel; varying vec2 vFuel;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvFuel=aFuel;');
+      shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vFuel;').replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor=mix(.9,.32,vFuel.x);').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(.22,.025,0.)*vFuel.y;');
+    };
+    mat.customProgramCacheKey = () => 'fuel-state-v1';
+    batch.state = new THREE.InstancedBufferAttribute(new Float32Array(batch.pieces.length * 2), 2).setUsage(THREE.DynamicDrawUsage);
+    batch.geometry.setAttribute('aFuel', batch.state);
+    batch.mesh = new THREE.InstancedMesh(batch.geometry, mat, batch.pieces.length);
+    batch.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); batch.mesh.castShadow = batch.mesh.receiveShadow = true;
+    group.add(batch.mesh);
+  }
+  const fuelMatrix = new THREE.Matrix4();
   const emberGeo = new THREE.BufferGeometry(), emberPos = new Float32Array(n*2*3);
   emberGeo.setAttribute('position',new THREE.BufferAttribute(emberPos,3).setUsage(THREE.DynamicDrawUsage));
   const emberMat = new THREE.PointsMaterial({color:0xffa127,size:.22,transparent:true,opacity:.85,depthWrite:false,blending:THREE.AdditiveBlending});
@@ -81,10 +99,12 @@ export function buildFireScene(scene, fire) {
   smokeGeo.setAttribute('position', new THREE.BufferAttribute(smokePos, 3).setUsage(THREE.DynamicDrawUsage));
   smokeGeo.setAttribute('aSize', new THREE.BufferAttribute(smokeSize, 1).setUsage(THREE.DynamicDrawUsage));
   smokeGeo.setAttribute('aAlpha', new THREE.BufferAttribute(smokeAlpha, 1).setUsage(THREE.DynamicDrawUsage));
-  const smokeMat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false,
-    vertexShader: `attribute float aSize;attribute float aAlpha;varying float vAlpha;varying float vSeed;void main(){vSeed=position.x*.7+position.z*.3;vAlpha=aAlpha;vec4 p=modelViewMatrix*vec4(position,1.);gl_PointSize=aSize*650./max(1.,-p.z);gl_Position=projectionMatrix*p;}`,
+  const smokeMat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, uniforms: { uScale: { value: 650 } },
+    vertexShader: `uniform float uScale;attribute float aSize;attribute float aAlpha;varying float vAlpha;varying float vSeed;void main(){vSeed=position.x*.7+position.z*.3;vAlpha=aAlpha;vec4 p=modelViewMatrix*vec4(position,1.);gl_PointSize=aSize*uScale/max(1.,-p.z);gl_Position=projectionMatrix*p;}`,
     fragmentShader: `varying float vAlpha;varying float vSeed;void main(){vec2 p=gl_PointCoord-.5;float billow=sin(p.x*21.+vSeed)*sin(p.y*19.-vSeed)*.055;float a=exp(-dot(p,p)*7.)*(1.-smoothstep(.3,.5,length(p)+billow))*vAlpha;if(a<.008)discard;gl_FragColor=vec4(mix(vec3(.12,.13,.15),vec3(.32,.29,.25),gl_PointCoord.y),a);}` });
   const smoke = new THREE.Points(smokeGeo, smokeMat); smoke.frustumCulled = false; smoke.renderOrder = 4; group.add(smoke);
+  const viewport = new THREE.Vector4();
+  smoke.onBeforeRender = (renderer, _scene, camera) => { renderer.getCurrentViewport(viewport); smokeMat.uniforms.uScale.value = viewport.w * Math.abs(camera.projectionMatrix.elements[5]) * .5; };
   function update(t, wind, fade = 1) {
     material.uniforms.uTime.value = t;
     for(const f of fuel) {
@@ -99,6 +119,15 @@ export function buildFireScene(scene, fire) {
         p.mesh.rotation.z=p.rz+Math.sin(k*4.7)*settle*.45;
         p.mesh.rotation.x=p.rx+Math.cos(k*2.1)*settle*.12;
       });
+    }
+    for (const batch of batches.values()) {
+      batch.pieces.forEach((p,i) => {
+        p.body.updateMatrix(); p.mesh.updateMatrix(); fuelMatrix.multiplyMatrices(p.body.matrix, p.mesh.matrix);
+        batch.mesh.setMatrixAt(i, fuelMatrix); batch.mesh.setColorAt(i, p.mat.color);
+        batch.state.setXY(i, p.mat.roughness < .5 ? 1 : 0, p.mat.emissive.r / .22);
+      });
+      batch.mesh.instanceMatrix.needsUpdate = batch.mesh.instanceColor.needsUpdate = batch.state.needsUpdate = true;
+      batch.mesh.computeBoundingSphere();
     }
     fire.cells.forEach((c, i) => {
       const intensity = c.heat > .16 ? c.heat : 0;

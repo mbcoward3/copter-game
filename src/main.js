@@ -18,6 +18,8 @@ import { createFireField, advanceFire, waterImpact, predictDrop, attackPoint, fi
 import { buildFireScene, buildWaterStream } from './fire-scene.js';
 import { chooseMission, LOCATIONS, MODES } from './missions.mjs';
 import { createPortraits } from './portraits.js';
+import { retireObject, sharedResource } from './render-resources.js';
+import { createRenderMetrics } from './render-metrics.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const clamp = THREE.MathUtils.clamp, lerp = THREE.MathUtils.lerp;
@@ -42,6 +44,12 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// r170 filters shadow casters with the color-pass camera. Keep that work inside
+// renderer.render (where renderer state exists), but supply the viewport's caster camera.
+let shadowViewCamera = null;
+const renderShadows = renderer.shadowMap.render.bind(renderer.shadowMap);
+renderer.shadowMap.render = (lights, worldScene, camera) => metrics.measure('shadows', () => renderShadows(lights, worldScene, shadowViewCamera || camera));
+const metrics = createRenderMetrics(renderer);
 
 const scene = new THREE.Scene();
 const world = createWorld(scene, renderer);
@@ -53,6 +61,9 @@ firePrograms.group.scale.setScalar(0.001);
 // charts of open water and of what stands up in the air, for the autopilots' routes (see nav.js)
 const navT0 = performance.now();
 const nav = createNav();
+nav.water.route = metrics.wrap('waterRouting', nav.water.route);
+const airChart = nav.air;
+nav.air = (...args) => { const chart = airChart(...args); chart.route = metrics.wrap('airRouting', chart.route); return chart; };
 life.setRoute(nav);
 const traffic = createTraffic(scene, world, nav, fx);
 const navMs = performance.now() - navT0;
@@ -494,6 +505,8 @@ function updatePlayer(p, dt, t) {
   m.rotor.rotation.y += p.spin * 34 * dt; m.tail.rotation.x += p.spin * 50 * dt;
   m.discMat.opacity = 0.3 * p.spin * p.spin; m.tipRingMat.opacity = 0.06 * p.spin * p.spin;
   m.bladeMat.opacity = m.tipMat.opacity = 1 - 0.72 * p.spin * p.spin;
+  m.tailDiscMat.opacity = .22 * p.spin * p.spin;
+  for (const material of m.tailBladeMats) material.opacity = 1 - .82 * p.spin * p.spin;
 
   // attitude
   const fwdSpeed = p.vel.x * fx_ + p.vel.z * fz_;
@@ -1045,7 +1058,7 @@ function updatePlane(p, dt, t) {
 
   // ---- how it looks: coordinated bank, nose follows the flight path, floats ride the swell
   for (const pr of m.props) pr.rotation.z += p.spin * 46 * dt;
-  m.discMat.opacity = 0.3 * p.spin * p.spin; m.bladeMat.opacity = 1 - 0.82 * p.spin * p.spin;
+  m.discMat.opacity = 0.3 * p.spin * p.spin; m.bladeMat.opacity = m.tipMat.opacity = 1 - 0.82 * p.spin * p.spin;
   const air = clamp(p.clearance / 2.5, 0, 1);
   p.sea += ((1 - air) - p.sea) * damp(3, dt);                               // 1 = sitting on the water, 0 = airborne
   const planing = clamp(p.fs / PL.fly, 0, 1);
@@ -1667,7 +1680,7 @@ function updateBoatRescue(dt, t) {
     aground(B, px, pz, Math.sin(B.yaw), Math.cos(B.yaw), 10.5);
     fendOff(B, B.yaw, 7.2, 3.3, 0);
     if (Math.random() < dt * sp * 2) fx.emit(B.x - Math.sin(B.yaw) * 10, 0.3, B.z - Math.cos(B.yaw) * 10, (Math.random() - 0.5) * 2, 1.2, (Math.random() - 0.5) * 2, 0.92, 0.97, 1, 0.5, 0.9, 1.2, 2, 1);
-    if (B.leaving > 45 || Math.hypot(B.x, B.z) > WORLD_R + 260) { scene.remove(B.mesh); game.boat = null; return; }
+    if (B.leaving > 45 || Math.hypot(B.x, B.z) > WORLD_R + 260) { retireObject(B.mesh); game.boat = null; return; }
   } else {
     // she drifts downwind while she waits (never onto the shallows)
     windAt(B.x, B.z, t, WIND);
@@ -1890,7 +1903,7 @@ function updateFires(dt, t) {
     for (const p of activePlayers()) near = Math.min(near, Math.hypot(p.pos.x - F.x, p.pos.z - F.z));
     fireNear = Math.min(fireNear, near); if (near < 180) F.engaged = true;
     windAt(F.x, F.z, t, WIND); advanceFire(F, dt, WIND); world.updateFireScars(F);
-    if (near < 850) F.visual?.update(t, WIND);
+    F.drawNear = near < 850;
     if (F.hiss > 0) { F.hiss -= dt; steam(F, dt, Math.min(1, F.hiss)); }
     // The crew checks the cooling ground before declaring the whole incident safe.
     if (F.quiet > 2.2 && waiting.includes(an)) fireOut(an, F.lastPilot || activePlayers()[0]);
@@ -1911,13 +1924,12 @@ function updateFires(dt, t) {
   for (let i = fading.length - 1; i >= 0; i--) {
     const F = fading[i]; F.t += dt;
     if (F.t > 18) { disposeFire(F); fading.splice(i, 1); continue; }
-    windAt(F.x, F.z, t, WIND); F.visual?.update(t, WIND, Math.min(1, (18 - F.t) / 4));
     if (F.t < 6) steam(F, dt, 1 - F.t / 6);
   }
 }
-const HIDDEN = new THREE.MeshBasicMaterial({ visible: false });
+const HIDDEN = sharedResource(new THREE.MeshBasicMaterial({ visible: false }));
 // an ice floe: a thick slab of old ice, ragged round its edge
-const FLOE_MAT = new THREE.MeshStandardMaterial({ color: 0xe8f2fa, roughness: 0.4 });
+const FLOE_MAT = sharedResource(new THREE.MeshStandardMaterial({ color: 0xe8f2fa, roughness: 0.4 }));
 function buildFloe() {
   const g = new THREE.CylinderGeometry(2.7, 3.1, 0.8, 11, 1), p = g.attributes.position;
   for (let i = 0; i < p.count; i++) { const a = Math.atan2(p.getZ(i), p.getX(i)), k = 0.82 + 0.3 * Math.abs(Math.sin(a * 2.3 + 1.1) * Math.cos(a * 3.7)); p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); }
@@ -2190,7 +2202,7 @@ function updateSinking(dt) {
   for (let i = sinking.length - 1; i >= 0; i--) {
     const sk = sinking[i]; sk.t += dt;
     sk.o.position.y -= dt * 0.25; sk.o.scale.setScalar(Math.max(0.01, 1 - sk.t / 1.2));
-    if (sk.t > 1.2) { scene.remove(sk.o); sinking.splice(i, 1); }
+    if (sk.t > 1.2) { retireObject(sk.o); sinking.splice(i, 1); }
   }
 }
 function slotPos(i, out) {
@@ -2260,7 +2272,7 @@ function updateLeaving(dt) {
       an.model.position.y = an.pos.y + Math.abs(Math.sin(an.t * 6)) * 1.3 * (1 - k * 0.5);
       an.model.rotation.y += dt * 4;
       if (an.t > 3.2) an.model.scale.setScalar(Math.max(0.01, 1.7 * (1 - (an.t - 3.2) / 1)));
-      if (an.t >= 4.2) { scene.remove(an.model); hoppers.splice(i, 1); }
+      if (an.t >= 4.2) { retireObject(an.model); hoppers.splice(i, 1); }
       continue;
     }
     if (an.state === 'bye') {
@@ -2268,7 +2280,7 @@ function updateLeaving(dt) {
       an.t += dt;
       an.model.position.y = an.pos.y + Math.abs(Math.sin(an.t * 8)) * 0.6;
       an.model.scale.setScalar(Math.max(0.01, 1.7 * (1 - an.t / 1.4)));
-      if (an.t >= 1.4) { scene.remove(an.model); hoppers.splice(i, 1); }
+      if (an.t >= 1.4) { retireObject(an.model); hoppers.splice(i, 1); }
       continue;
     }
     if (an.state !== 'leaving') continue;
@@ -2277,7 +2289,7 @@ function updateLeaving(dt) {
     an.model.position.z += (-12 - an.model.position.z) * damp(2, dt);
     an.model.position.y = BASE_Y + Math.abs(Math.sin(an.t * 8)) * 0.5;
     an.model.scale.setScalar(Math.max(0.01, 1.3 * (1 - an.t / 1.6)));
-    if (an.t >= 1.6) { scene.remove(an.model); hoppers.splice(i, 1); }
+    if (an.t >= 1.6) { retireObject(an.model); hoppers.splice(i, 1); }
   }
 }
 
@@ -2604,12 +2616,12 @@ function beginOuting() {
   releaseWaiting(() => true); pours.length = 0;
   for (const p of players) {
     releasePilot(p);
-    for (const an of p.cargo) { an.model.removeFromParent(); }
+    for (const an of p.cargo) retireObject(an.model);
     p.cargo.length = 0; p.rescued = p.style = p.flashT = 0;
     p.routes = {}; p.ap = null;
     parkPlayer(p);
   }
-  for (const an of hoppers) an.model.removeFromParent();
+  for (const an of hoppers) retireObject(an.model);
   hoppers.length = 0;
   setZone(1);
   spawnAnimal(true); spawnAnimal(true); spawnAnimal(false);
@@ -2740,14 +2752,20 @@ function firstQuality() {
   if (level === 0 && innerWidth * innerHeight * PR * PR > 4.5e6) level = 1;
   return level;
 }
-const quality = { mode: 'auto', level: 0, slowT: 0, fastT: 0, coolT: 6, blockUpT: 0, avg: 16.7, savedT: 0 };      // (a grace period while shaders compile)
-function setQuality(level) {
+const quality = { mode: 'auto', level: 0, scale: 1, slowT: 0, fastT: 0, coolT: 6, blockUpT: 0, avg: 16.7, savedT: 0 };
+function setRenderScale(scale) {
+  quality.scale = clamp(scale, 0.6, 1);
+  const q = QUALITY[quality.level], pr = Math.max(0.5, Math.min(PR, q.maxPR) * q.scale * quality.scale);
+  if (Math.abs(renderer.getPixelRatio() - pr) < 0.001) return;
+  renderer.setPixelRatio(pr); composer.setPixelRatio(pr); onResize(); metrics.quality(quality.level, quality.scale);
+}
+function setQuality(level, preserveResolution = false) {
+  const previousPR = renderer.getPixelRatio();
   level = clamp(level, 0, QUALITY.length - 1);
   const q = QUALITY[level];
   quality.level = level;
   gfx.reflections = q.refl > 0; gfx.reflScale = q.refl;
-  const pr = Math.max(0.5, Math.min(PR, q.maxPR) * q.scale);
-  renderer.setPixelRatio(pr); composer.setPixelRatio(pr);
+  setRenderScale(preserveResolution ? previousPR / (Math.min(PR, q.maxPR) * q.scale) : 1);
   for (const rt of [composer.renderTarget1, composer.renderTarget2]) if (rt.samples !== q.msaa) { rt.samples = q.msaa; rt.dispose(); }
   const sun = world.sun;
   if (sun.shadow.mapSize.x !== q.shadow) { sun.shadow.mapSize.set(q.shadow, q.shadow); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
@@ -2778,12 +2796,18 @@ function watchFrames(ms) {
     try { localStorage.setItem('rescue-squad-quality', quality.level); } catch (e) { /* (private window) */ }
   }
   // (under 30 frames a second it steps down sooner)
-  if (quality.slowT > (quality.avg > 34 ? 1.2 : 2.5) && quality.level < QUALITY.length - 1) {
+  if (quality.slowT > (quality.avg > 34 ? 1.2 : 2.5)) {
+    // A GPU-bound view gets smaller resolution steps before changing artistic detail.
+    if ((metrics.lastGpu === null || metrics.lastGpu > 16) && quality.scale > 0.6) {
+      setRenderScale(quality.scale - 0.08); quality.slowT = 0; quality.coolT = 2; return;
+    }
     // (if it struggles straight after a step up, do not try that again for a minute)
     if (quality.justUp) quality.blockUpT = 60;
-    setQuality(quality.level + 1); quality.slowT = 0; quality.coolT = 3; quality.justUp = false; quality.savedT = 0;
-  } else if (quality.fastT > 15 && quality.level > 0 && quality.blockUpT <= 0) {
-    setQuality(quality.level - 1); quality.fastT = 0; quality.coolT = 5; quality.justUp = true; quality.savedT = 0;
+    if (quality.level < QUALITY.length - 1) setQuality(quality.level + 1, true);
+    quality.slowT = 0; quality.coolT = 8; quality.justUp = false; quality.savedT = 0;
+  } else if (quality.fastT > 15 && (quality.level > 0 || quality.scale < 1) && quality.blockUpT <= 0 && (metrics.lastGpu === null || metrics.lastGpu < 12)) {
+    if (quality.scale < 1) setRenderScale(quality.scale + 0.04); else setQuality(quality.level - 1, true);
+    quality.fastT = 0; quality.coolT = 5; quality.justUp = true; quality.savedT = 0;
   } else if (quality.fastT > 8) quality.justUp = false;
 }
 function syncSoundControls() {
@@ -2920,7 +2944,7 @@ function clipNearToSea(c) {
   e[2] = _cp.normal.x * k; e[6] = _cp.normal.y * k; e[10] = _cp.normal.z * k + 1; e[14] = _cp.constant * k;
   c.projectionMatrixInverse.copy(c.projectionMatrix).invert();
 }
-function renderReflection(renderer, cam) {
+function prepareReflection(cam) {
   const u = world.waterUniforms;
   cam.updateMatrixWorld();
   _rp.setFromMatrixPosition(cam.matrixWorld);
@@ -2936,6 +2960,9 @@ function renderReflection(renderer, cam) {
   u.uReflMat.value.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1)
     .multiply(reflCam.projectionMatrix).multiply(_rm.copy(reflCam.matrixWorld).invert());
   clipNearToSea(reflCam);
+}
+function renderReflection(renderer) {
+  const u = world.waterUniforms;
   world.water.visible = false;
   renderer.setRenderTarget(reflRT);
   renderer.clear();
@@ -2959,20 +2986,23 @@ class SplitRenderPass extends Pass {
       const tanF = Math.tan(THREE.MathUtils.degToRad(v.cam.fov) / 2);
       world.aimSun(v.focus);
       v.cam.updateMatrixWorld();
-      world.cull(v.cam);
-      // the shadow map is drawn once per view and shared by the mirror pass and the main pass
+      prepareReflection(v.cam);
+      metrics.measure('visibility', () => world.cull(v.cam, gfx.reflections ? reflCam : null));
+      // The first color pass updates shadows once using the main view's caster layers.
+      shadowViewCamera = v.cam;
       renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;
       if (gfx.reflections) {
         const rw = Math.max(64, Math.round(vw * 0.5 * gfx.reflScale)), rh = Math.max(64, Math.round(H * 0.5 * gfx.reflScale));
         if (reflRT.width !== rw || reflRT.height !== rh) reflRT.setSize(rw, rh);
         fx.material.uniforms.uScale.value = rh / (2 * tanF);
-        renderReflection(renderer, v.cam);
+        metrics.measure('reflection', () => renderReflection(renderer));
       }
       rt.viewport.set(vx, 0, vw, H); rt.scissor.set(vx, 0, vw, H); rt.scissorTest = true;
       renderer.setRenderTarget(rt);
       fx.material.uniforms.uScale.value = H / (2 * tanF);
       placeRain(v.cam.position, game.t); placeFlakes(v.cam.position, game.t);
-      renderer.render(scene, v.cam);
+      metrics.measure('mainView', () => renderer.render(scene, v.cam));
+      shadowViewCamera = null;
     }
     rt.scissorTest = false; rt.viewport.set(0, 0, W, H); rt.scissor.set(0, 0, W, H);
   }
@@ -2987,21 +3017,17 @@ composer.addPass(new ShaderPass({
 }));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.3, 0.55, 0.92);
 composer.addPass(bloom);
-composer.addPass(new OutputPass());
-// the grade: a little more contrast and colour than the tone curve leaves, and corners that fall away gently
-composer.addPass(new ShaderPass({
-  uniforms: { tDiffuse: { value: null } },
-  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
-    void main(){
-      vec3 c = texture2D(tDiffuse, vUv).rgb;
+// Grade after tone mapping and sRGB transfer, preserving the old order in one output draw.
+const output = new OutputPass();
+output.material.fragmentShader = output.material.fragmentShader.replace(/}\s*$/, `
+      vec3 c = gl_FragColor.rgb;
       c = mix(c, c * c * (3.0 - 2.0 * c), 0.28);
       c = mix(vec3(dot(c, vec3(0.299, 0.587, 0.114))), c, 1.12);
       vec2 q = vUv - 0.5;
       c *= 1.0 - dot(q, q) * 0.42;
       gl_FragColor = vec4(c, 1.0);
-    }`,
-}));
+    }`);
+composer.addPass(output);
 
 function onResize() {
   renderer.setSize(innerWidth, innerHeight);
@@ -3021,6 +3047,7 @@ function bump(p, kind) {
   c.last[kind] = game.t;
 }
 const debug = {
+  retire: animal => releaseWaiting(an => an === animal),
   view: null,
   bumps: [{ last: {} }, { last: {} }],
   // on to the next mission, exactly as finishing one does
@@ -3087,10 +3114,14 @@ function frame(now) {
 // time, so the picture never judders on a fast screen.
 const STEP = 1 / 60;
 function tick(now, forced) {
+  const observedFrameMs = forced ? forced * 1000 : now - last;
   const frameDt = forced || Math.min((now - last) / 1000, 0.1); last = now;
   const steps = Math.max(1, Math.ceil(frameDt / STEP - 1e-6));
+  const beforeSimulation = metrics.enabled ? performance.now() : 0;
   for (let i = 0; i < steps; i++) simulate(frameDt / steps);
+  if (metrics.enabled) metrics.begin(observedFrameMs, performance.now() - beforeSimulation);
   present(frameDt);
+  if (metrics.enabled) metrics.end();
 }
 function simulate(dt) {
   const playing = game.state === 'play';
@@ -3101,12 +3132,12 @@ function simulate(dt) {
   if (!game.paused) {
     weather.now += (WEATHERS[weather.idx].wind - weather.now) * damp(0.35, dt); weather.dir += dt * 0.004;
     sea.swell = 0.75 + weather.now * 1.2;
-    world.blow(weather.now);
-    world.update(dt, t);
     for (const p of players) {
       if (!p.active) continue;
       if (playing) readInput(p); else { p.input.f = p.input.t = p.input.l = 0; p.input.horn = false; }
-      if (p.vehicle === 'plane') updatePlane(p, dt, t); else if (p.vehicle === 'boat') updateBoat(p, dt, t); else updatePlayer(p, dt, t);
+      metrics.measure('vehicle:' + p.vehicle, () => {
+        if (p.vehicle === 'plane') updatePlane(p, dt, t); else if (p.vehicle === 'boat') updateBoat(p, dt, t); else updatePlayer(p, dt, t);
+      });
     }
     // copter high-five
     game.boop -= dt;
@@ -3129,15 +3160,15 @@ function simulate(dt) {
       if (waiting.length < maxWaiting() && game.spawnT <= 0 && game.celebrate <= 0) { spawnAnimal(false); game.spawnT = 4 + play() * 4; }
     }
     updateBoatRescue(dt, t);
-    updateFires(dt, t);
+    metrics.measure('fireSimulation', () => updateFires(dt, t));
     updateZoneBeam(t);
     switchMission(dt);
     for (const an of waiting) placeWaiting(an, t, dt);
     updateLeaving(dt); updateBoarding(dt, t); updateSinking(dt);
     updateHoppers(dt, t);
     updateResidents(dt, t);
-    life.update(dt, t, activePlayers());
-    traffic.update(dt, t, activePlayers());
+    metrics.measure('ambientLife', () => life.update(dt, t, activePlayers()));
+    metrics.measure('traffic', () => traffic.update(dt, t, activePlayers()));
 
     // celebration
     if (game.celebrate > 0) {
@@ -3154,7 +3185,7 @@ function simulate(dt) {
       }
       if (game.celebrate <= 0) nextMission();
     }
-    fx.update(dt);
+    metrics.measure('particles', () => fx.update(dt));
 
     // water interaction uniforms + sound
     const two = activePlayers().length > 1;
@@ -3196,6 +3227,11 @@ function simulate(dt) {
   }
 }
 function present(dt) {
+  if (!debug.noDraw) {
+    world.blow(weather.now); world.update(dt, game.t);
+    for (const an of waiting) if (an.fire?.drawNear) { const F = an.fire; windAt(F.x, F.z, game.t, WIND); F.visual?.update(game.t, WIND); }
+    for (const F of fading) { windAt(F.x, F.z, game.t, WIND); F.visual?.update(game.t, WIND, Math.min(1, (18 - F.t) / 4)); }
+  }
   const playing = game.state === 'play';
   // menu camera: slow orbit of the base
   if (!playing) {
@@ -3235,10 +3271,11 @@ warmUp.catch(() => {}).then(() => {
   // (and one whole frame drawn, mirror and all, for the few shaders only a real frame builds)
   composer.render();
   requestAnimationFrame(frame);
+  metrics.start();
   requestAnimationFrame(() => { canvas.classList.add('ready'); $('#loading').hidden = true; });
   traffic.plan();
 });
 }
 
 // tiny debug handle (also handy for automated checks)
-window.__game = { TEST, PLANE_FLOAT, DOCK, nav, navMs, life, traffic, terrainHeight, waveHeight, sea, ISLETS, HUTS, PADS, WORLD_R, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };
+window.__game = { TEST, PLANE_FLOAT, DOCK, nav, navMs, life, traffic, terrainHeight, waveHeight, sea, ISLETS, HUTS, PADS, WORLD_R, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, setRenderScale, metrics, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };

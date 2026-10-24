@@ -5,9 +5,9 @@ RUN npm ci
 COPY build.mjs ./
 COPY src/ ./src/
 COPY tools/test-*.mjs ./tools/
-RUN npm test && npm run build
+RUN npm test && npm run build:hosted
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 COPY nginx.conf /etc/nginx/nginx.conf
-COPY --from=build /src/rescue-squad-3d.html /usr/share/nginx/html/index.html
+COPY --from=build /src/build/site/ /usr/share/nginx/html/
 EXPOSE 8080
