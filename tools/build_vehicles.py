@@ -270,62 +270,63 @@ def outboard():
 # and the stripe. The rear cabin roof is open so the friends riding home can be seen. The floats' keels are at
 # z = -1.85; the propeller hub is at x = 4.72 (a separate model, Vehicle_PlaneProp).
 def plane():
+    # A Coast Guard rescue flying boat, after the Grumman HU-16 Albatross: a deep boat hull that sits in the water
+    # itself, a high wing carrying two radial engines, little floats under the wingtips, a tall tail, and a big door in
+    # the port side of the hull, open, with a step at its sill for whoever is coming aboard. White, with the pilot's
+    # colour (Accent) on the nose, wingtips and tail and the orange rescue band (Raft) round the hull.
+    # Front +X, port +Y, up +Z. The keel is at z = -1.85 (the game's PLANE_FLOAT); the waterline about z = -1.4.
     def skin(x, side, up):
-        if x > 3.5:
-            return 'Accent'                                   # cowling
-        if up < -0.55 and x > -1.0:
-            return 'Accent'                                   # belly band
-        if abs(side) > 0.5 and 1.85 < x - up * 0.4 < 2.2:
-            return 'Raft'
-        if abs(side) > 0.5 and 2.26 < x - up * 0.4 < 2.34:
-            return 'Navy'
+        if 3.95 < x < 4.75 and up > 0.2 and (up > 0.62 or abs(side) > 0.55):
+            return 'Glass'                                    # the cockpit's windscreen and side windows, in the hull's own curve
+        if x > 4.6:
+            return 'Accent'                                   # nose
+        if up < -0.62:
+            return 'Navy'                                     # the wet bottom
+        if 1.2 < x < 1.75 and up > -0.6:
+            return 'Raft'                                     # the rescue band
         return 'Paint'
-    fus = [(4.62, 0.5, 0.5, 0.0, 2.0), (4.3, 0.66, 0.66, 0.0, 2.2), (3.6, 0.72, 0.74, 0.05, 2.4), (2.6, 0.74, 0.9, 0.15, 3.0),
-           (0.8, 0.74, 0.92, 0.15, 3.2), (-0.8, 0.66, 0.82, 0.12, 3.0), (-2.4, 0.42, 0.6, 0.18, 2.6), (-3.8, 0.2, 0.38, 0.3, 2.2), (-4.7, 0.06, 0.25, 0.42, 2.0)]
-    bits = [loft('Fuselage', fus, skin, ring=28, subdivide=1)]
-    bits += [cone('EngineFace', (4.6, 0, 0), (4.66, 0, 0), 0.47, 0.42, 'Dark', 20), rod('Exhaust', (3.9, 0.55, -0.45), (3.2, 0.62, -0.62), 0.06, 'Metal', 8)]
-    for k in range(9):        # the radial's cylinders, just visible inside the cowl
-        a = k * 2 * math.pi / 9
-        bits.append(rod('Cylinder', (4.58, 0.2 * math.cos(a), 0.2 * math.sin(a)), (4.58, 0.38 * math.cos(a), 0.38 * math.sin(a)), 0.07, 'Metal', 8))
-    # glazing: windscreen and cabin windows down each side
-    bits.append(box('Windscreen', [(2.95, -0.62, 0.62), (2.95, 0.62, 0.62), (2.45, 0.6, 1.05), (2.45, -0.6, 1.05)],
-                    [(3.0, -0.6, 0.62), (3.0, 0.6, 0.62), (2.5, 0.58, 1.05), (2.5, -0.58, 1.05)], 'Glass', 0.0))
+    # (x, half beam, half depth, centre z, squareness): deep and boat-like forward, the bottom rising aft of the step
+    hull = [(5.75, 0.08, 0.15, -0.35, 2.0), (5.5, 0.48, 0.62, -0.5, 2.2), (4.9, 0.78, 0.98, -0.66, 2.5), (3.8, 0.9, 1.15, -0.7, 2.8),
+            (1.5, 0.92, 1.18, -0.67, 3.0), (0.0, 0.9, 1.15, -0.68, 3.0), (-0.1, 0.88, 1.0, -0.53, 3.0), (-2.2, 0.72, 0.85, -0.3, 2.8),
+            (-4.2, 0.42, 0.6, 0.05, 2.4), (-5.6, 0.15, 0.36, 0.35, 2.0)]
+    bits = [loft('Hull', hull, skin, ring=40, subdivide=1)]
+    # cockpit glazing on top of the nose, and windows down both sides
     for side in (1, -1):
-        for x0, x1 in ((2.4, 1.5), (1.4, 0.5)):
-            bits.append(slab('Window', ((x0 + x1) / 2, side * 0.735, 0.62), (x0 - x1 - 0.12, 0.03, 0.5), 'Glass', 0.01))
-        bits.append(lettering('Guard', 'COAST GUARD', (-1.2, side * 0.66, -0.15), 0.26, side > 0))
-    # the open rear cockpit: a padded coaming in the pilot's colour round a dark well
-    bpy.ops.mesh.primitive_torus_add(major_radius=0.82, minor_radius=0.1, major_segments=28, minor_segments=8, location=(-1.3, 0, 0.98))
-    coaming = bpy.context.active_object
-    for m in ORDER:
-        coaming.data.materials.append(MATS[m])
-    coaming.data.polygons.foreach_set('material_index', [ORDER.index('Accent')] * len(coaming.data.polygons))
-    bits += [coaming, cone('Well', (-1.3, 0, 0.5), (-1.3, 0, 0.97), 0.7, 0.8, 'Dark', 24)]
-    # high wing, struts, tail
+        for x in (2.8, 2.0, 0.6, -0.9, -1.7):
+            if side > 0 and -1.4 < x < 0.3:
+                continue
+            bits.append(ball('Port', (x, side * 0.91, 0.05), (0.2, 0.03, 0.2), 'Glass'))
+        bits.append(lettering('Guard', 'COAST GUARD', (2.6 if side > 0 else 0.0, side * 0.93, -0.55), 0.3, side > 0))
+    # the rescue door, open in the port side, with its sill step and grab rails
+    bits += [slab('Doorway', (-0.55, 0.9, -0.35), (1.3, 0.06, 1.35), 'Dark', 0.0),
+             slab('DoorFrame', (-0.55, 0.93, 0.36), (1.45, 0.05, 0.1), 'Raft', 0.0), slab('DoorFrame', (-0.55, 0.93, -1.06), (1.45, 0.05, 0.1), 'Raft', 0.0),
+             slab('DoorFrame', (0.15, 0.93, -0.35), (0.1, 0.05, 1.45), 'Raft', 0.0), slab('DoorFrame', (-1.25, 0.93, -0.35), (0.1, 0.05, 1.45), 'Raft', 0.0),
+             slab('Step', (-0.55, 1.15, -1.05), (1.2, 0.5, 0.07), 'Metal', 0.01),
+             rod('Rail', (0.25, 0.95, -0.9), (0.25, 0.95, 0.2), 0.03, 'Metal', 6), rod('Rail', (-1.35, 0.95, -0.9), (-1.35, 0.95, 0.2), 0.03, 'Metal', 6)]
+    # the wing, high on the hull, with the engines on it and floats under the tips
+    # (a fairing blends the wing into the top of the hull)
+    bits.append(loft('Fairing', [(2.3, 0.05, 0.05, 0.5, 2), (1.9, 0.5, 0.25, 0.52, 2.6), (0.0, 0.55, 0.28, 0.55, 2.8), (-1.2, 0.3, 0.15, 0.45, 2.4), (-1.6, 0.05, 0.03, 0.4, 2)],
+                     lambda x, sd, up: 'Paint', ring=20, subdivide=1))
     for side in (1, -1):
-        bits.append(wing('Wing', (2.35, 0.45, 0.0, 1.18, 0.2), (2.15, 0.6, side * 6.1, 1.24, 0.14), 'Paint'))
-        bits.append(wing('WingTip', (2.15, 0.6, side * 6.1, 1.24, 0.14), (2.05, 0.75, side * 7.2, 1.26, 0.1), 'Accent'))
-        bits.append(rod('Strut', (1.3, side * 0.62, -0.42), (1.2, side * 2.7, 1.1), 0.05, 'Metal', 8))
-        bits.append(rod('Strut', (0.6, side * 0.62, -0.42), (0.75, side * 2.7, 1.1), 0.04, 'Metal', 8))
-        bits.append(wing('Tailplane', (-3.6, -4.5, 0.0, 0.42, 0.1), (-4.0, -4.65, side * 2.4, 0.42, 0.06), 'Paint'))
-        bits.append(wing('Elevator', (-4.5, -4.75, side * 0.1, 0.42, 0.06), (-4.65, -4.85, side * 2.4, 0.42, 0.05), 'Accent'))
-    bits.append(box('Fin', [(-3.4, -0.06, 0.55), (-4.75, -0.06, 0.55), (-4.95, -0.04, 2.25), (-4.25, -0.04, 2.25)],
-                    [(-3.4, 0.06, 0.55), (-4.75, 0.06, 0.55), (-4.95, 0.04, 2.25), (-4.25, 0.04, 2.25)], 'Accent', 0.03))
-    bits.append(box('Rudder', [(-4.75, -0.05, 0.55), (-5.1, -0.05, 0.6), (-5.15, -0.03, 2.1), (-4.95, -0.03, 2.25)],
-                    [(-4.75, 0.05, 0.55), (-5.1, 0.05, 0.6), (-5.15, 0.03, 2.1), (-4.95, 0.03, 2.25)], 'Paint', 0.02))
-    # floats with their struts and spreader bars, and little water rudders
+        bits.append(wing('Wing', (2.0, -0.4, side * 0.3, 0.72, 0.26), (1.55, 0.35, side * 6.6, 0.95, 0.14), 'Paint'))
+        bits.append(wing('WingTip', (1.55, 0.35, side * 6.6, 0.95, 0.14), (1.45, 0.55, side * 7.4, 0.98, 0.1), 'Accent'))
+        y = side * 2.5
+        bits += [loft('Nacelle', [(3.15, 0.3, 0.3, 0.75, 2), (2.9, 0.44, 0.44, 0.75, 2.2), (1.6, 0.42, 0.44, 0.72, 2.4), (-0.4, 0.25, 0.3, 0.8, 2.2), (-1.0, 0.08, 0.1, 0.85, 2)],
+                      lambda x, sd, up: 'Accent' if x > 2.7 else 'Paint', ring=20, subdivide=1),
+                 cone('Intake', (3.15, y, 0.75), (3.2, y, 0.75), 0.3, 0.26, 'Dark', 16)]
+        bits[-2].location.y = y
+        # the wingtip float, hung on a strut
+        fl = loft('TipFloat', [(1.9, 0.05, 0.08, -0.85, 2), (1.5, 0.22, 0.24, -0.9, 2.4), (0.3, 0.26, 0.28, -0.92, 2.6), (-0.6, 0.14, 0.16, -0.88, 2.2), (-0.9, 0.04, 0.05, -0.85, 2)],
+                  lambda x, sd, up: 'Accent' if up > 0.3 else 'Paint', ring=16, subdivide=1)
+        fl.location.y = side * 6.1
+        bits += [fl, rod('FloatStrut', (0.9, side * 6.1, -0.65), (0.9, side * 6.0, 0.9), 0.05, 'Metal', 8), rod('FloatStrut', (0.1, side * 6.1, -0.65), (0.5, side * 6.0, 0.9), 0.04, 'Metal', 8)]
+    # the tail: a tall fin with the pilot's colour on it, and the tailplane
+    bits.append(box('Fin', [(-3.6, -0.08, 0.35), (-5.55, -0.08, 0.45), (-5.9, -0.05, 2.9), (-5.0, -0.05, 2.9)],
+                    [(-3.6, 0.08, 0.35), (-5.55, 0.08, 0.45), (-5.9, 0.05, 2.9), (-5.0, 0.05, 2.9)], 'Accent', 0.03))
     for side in (1, -1):
-        # (deep floats that stand well clear of the swell: keels at -1.85, decks at about -0.6)
-        # (loft builds on the centreline, so each float is moved out under its own struts)
-        float_ = loft('Float', [(4.4, 0.08, 0.2, -1.0, 2), (3.6, 0.32, 0.5, -1.22, 2.6), (1.6, 0.4, 0.6, -1.24, 3), (-0.8, 0.38, 0.58, -1.26, 3),
-                                (-2.7, 0.26, 0.38, -1.44, 2.6), (-3.3, 0.1, 0.13, -1.6, 2)],
-                      lambda x, s, u: 'Dark' if u < -0.5 else 'Paint', ring=20, subdivide=1)
-        float_.location.y = side * 1.8
-        bits.append(float_)
-        y = side * 1.8
-        bits += [rod('FloatStrut', (2.4, y, -0.62), (2.2, side * 0.55, -0.45), 0.055, 'Metal', 8), rod('FloatStrut', (-0.5, y, -0.62), (0.2, side * 0.55, -0.45), 0.055, 'Metal', 8),
-                 rod('FloatStrut', (2.4, y, -0.62), (0.2, side * 0.55, -0.45), 0.035, 'Metal', 8), slab('WaterRudder', (-3.35, y, -1.62), (0.25, 0.03, 0.32), 'Dark', 0.01)]
-    bits += [rod('Spreader', (2.4, 1.8, -0.62), (2.4, -1.8, -0.62), 0.04, 'Metal', 8), rod('Spreader', (-0.5, 1.8, -0.62), (-0.5, -1.8, -0.62), 0.04, 'Metal', 8)]
+        bits.append(wing('Tailplane', (-4.6, -5.5, 0.0, 1.55, 0.12), (-5.1, -5.75, side * 2.8, 1.6, 0.07), 'Paint'))
+        bits.append(wing('Elevator', (-5.5, -5.8, side * 0.1, 1.55, 0.07), (-5.75, -5.95, side * 2.8, 1.6, 0.05), 'Accent'))
+    bits += [ball('Radome', (5.7, 0, -0.3), (0.2, 0.22, 0.22), 'Dark'), rod('Aerial', (1.2, 0, 0.95), (0.3, 0, 1.6), 0.02, 'Metal', 4)]
     return join('Vehicle_Plane', bits)
 
 

@@ -1,15 +1,17 @@
+import { TEST, play } from './seed.js';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER } from './world.js';
-import { buildHeli, buildBasket, buildBucket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
+import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER, WAKE_N, wakeUniform, snowAt } from './world.js';
+import { buildHeli, buildBasket, buildBucket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, tickFriends, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
 import { model } from './assets.js';
 import { createFx } from './fx.js';
 import { createNav, lookAhead, routeLeft } from './nav.js';
 import { createLife } from './life.js';
+import { createTraffic } from './traffic.js';
 import { audio, sfx, animalVoice } from './audio.js';
 import { flightClearance } from './flight-safety.mjs';
 import { createFireField, advanceFire, waterImpact, predictDrop, attackPoint, fireProgress, bombingRun, WATER } from './firefighting.mjs';
@@ -51,6 +53,8 @@ firePrograms.group.scale.setScalar(0.001);
 // charts of open water and of what stands up in the air, for the autopilots' routes (see nav.js)
 const navT0 = performance.now();
 const nav = createNav();
+life.setRoute(nav);
+const traffic = createTraffic(scene, world, nav, fx);
 const navMs = performance.now() - navT0;
 
 // ================================================================= players
@@ -254,12 +258,12 @@ const HANDS_OFF = { f: 0, t: 0, l: 0, horn: false };
 const inland = an => an.kind === 'camp' || an.kind === 'ledge' || an.kind === 'perch' || an.kind === 'wreck';
 // ...and on the forest's little lake (no boat can get there, and it is far too small to land a seaplane on), or on a hut
 // porch in the atoll's lagoon (the seaplane cannot get in)
-const outOfReach = (an, p) => an.fire ? !canFight(p, an.fire) : p.vehicle !== 'heli' && (inland(an) || an.landlocked || (p.vehicle === 'plane' && an.kind === 'hut'));
+const outOfReach = (an, p) => an.fire ? !canFight(p, an.fire) : p.vehicle !== 'heli' && (inland(an) || an.landlocked || (p.vehicle === 'plane' && (an.kind === 'hut' || !planeOk(an))));
 // a friend with a fire burning beside them (see the fires section): nobody picks them up, the fire is put out and then
 // they are safe where they are. The helicopter can always help (its bucket), the seaplane when there is open sea to
 // scoop from, the boat only when the fire is close enough to the water for its cannon.
 const burning = an => !!(an.fire && !an.fire.out);
-const canFight = (p, F) => p.vehicle === 'heli' || (p.vehicle === 'plane' ? !!F.scoop : !!F.shore);
+const canFight = (p, F) => p.vehicle === 'heli' || (p.vehicle === 'plane' ? !!(F.scoop && (F.scoopOk ??= !!landingFor(F, 100, F))) : !!F.shore);
 // The lagoon is ringed by reef with one channel through it (the water routes find it by themselves).
 const LAGOON = { x: -165, z: 200, r: 26 };
 // the nearest friend this machine can get to, however far: where the easy boat and seaplane head when nobody is close
@@ -432,8 +436,11 @@ function updatePlayer(p, dt, t) {
     }
     // (on autopilot it comes to a hover over where it is going, and turns before it sets off rather than swinging wide)
     if (gd < 1e9) top = Math.min(top, 0.5 + gd * 0.55) * clamp(1.3 - Math.abs(off), 0.25, 1);
+    // (and it holds its hover while a friend climbs into the basket: off to the next one only once they are aboard)
+    const steady = !p.pro && p.incoming > 0 && !p.grounded;
+    if (steady) top = 0;
     tgt = p.parked || spooling ? 0 : inp.f * (inp.f > 0 ? top : 12);
-    const a = damp(p.grounded ? 5 : (inp.f === 0 ? 0.9 : 1.5), dt);
+    const a = damp(p.grounded ? 5 : steady ? 4 : (inp.f === 0 ? 0.9 : 1.5), dt);
     p.vel.x += (fx_ * tgt - p.vel.x) * a; p.vel.z += (fz_ * tgt - p.vel.z) * a;
     p.vel.y += (lift * 11 - p.vel.y) * damp(4, dt);
     // a breath of the weather, no more: enough to feel the day, never enough to carry a small pilot off
@@ -532,58 +539,72 @@ function updatePlayer(p, dt, t) {
 // Always-forward flight. Hold go to take off and cruise; let go and it glides down and lands on the
 // water by itself. It lines up on friends and on the dock, skims past and they hop aboard.
 // Everything is driven through smoothed rates (turn rate, speed, climb rate) so nothing ever snaps.
-const PL = { max: 36, fly: 16, cruise: 16 };
-function landWithin(p, fx_, fz_, dist, t) { surfaceAt(p.pos.x + fx_ * dist, p.pos.z + fz_ * dist, t, SURF2); return SURF2.land ? SURF2.y : -1e9; }
+const PL = { max: 36, fly: 16, cruise: 30 };      // (cruising at 30 m it is over every hill and tree but the three mountains, which it goes round)
+function landWithin(p, fx_, fz_, dist, t) { const x = p.pos.x + fx_ * dist, z = p.pos.z + fz_ * dist; surfaceAt(x, z, t, SURF2); return SURF2.land ? SURF2.y + canopyAt(x, z) * 0.9 : -1e9; }
 // is there land or shallows, or rock standing in the water, this far ahead on the water?
 function blockedAt(p, fx_, fz_, dist, pad = 3) {
   const x = p.pos.x + fx_ * dist, z = p.pos.z + fz_ * dist;
   return shallow(x, z) || rockNear(x, z, pad);
 }
 // ================================================================= the easy seaplane's autopilot
-// Every landing is a proper one: a straight run in down a lane of open water long enough to come down and slow, picked
-// to need the least turning, and flown from a lead-in point well back so the plane is lined up before it descends (if it
-// is not, it stays up and comes round again rather than landing crooked). Then it taxis by a water route to the friend
-// or the pier. Every take-off is a straight run down a clear lane, turning to face it first. In the air it follows routes
-// round anything tall (nav.js). Let go of go in the air and it picks a lane nearby and lands.
-const LANE = { back: 140, lead: 90, roll: 50, need: 9, takeoff: 150 };
-const HEADINGS = Array.from({ length: 24 }, (_, i) => i * Math.PI / 12 - Math.PI);
-const AIR = { top: 12, need: 14 };
-// the heading to land on at S: open water `back` metres before it and `ahead` beyond, as near `prefer` as can be
-function laneAt(S, back, ahead, need, prefer) {
-  let best = null, bs = -9;
-  for (const h of HEADINGS) {
-    const fx = Math.sin(h), fz = Math.cos(h);
-    if (!nav.water.clear(S.x - fx * back, S.z - fz * back, S.x + fx * ahead, S.z + fz * ahead, need)) continue;
-    const sc = Math.cos(angDiff(h, prefer));
-    if (sc > bs) { bs = sc; best = h; }
+// What it should visibly do is written down, as numbers, in AIRPLANE-SPEC.md ("Acceptance checks"), and checked by
+// npm run check and npm run play-check. In short: it comes down on open water as near as it safely can to whoever (or
+// whatever fire) it is going to, flown in from a lead-in point well back so it is lined up before it descends (if not,
+// it goes round, and after twice round it picks another spot). Then it taxis the rest. It takes off from where it is,
+// down whichever clear run of water points most nearly the way it is going. In the air it follows routes round anything
+// tall and any high ground (nav.js), climbs straight out after take-off, and climbs over anything coming up.
+const LANE = { back: 190, lead: 100, roll: 50 };      // (the glide down from cruising height runs back - roll metres)
+const AIR = { top: 26, need: 22, tight: 12, look: 45 };      // (round anything standing near cruising height or over it; lower hills it flies over)
+const LAND = { room: 12, reach: 250, near: 6, taxi: 140 };       // (water room either side of a landing; how far from the goal it may come down; how far it will taxi rather than fly)
+// nothing high under the way in, by the ceiling chart: along the glide everything stays well under the glide path, and
+// from the lead-in point to the top of the glide (flown at cruising height) well under that. So the plane never has to
+// climb over anything once it is on its way in. (x, z) is the stopping point, (ux, uz) the way it lands.
+function approachClear(x, z, ux, uz) {
+  for (let d = LANE.roll; d <= LANE.back + LANE.lead + 40; d += 10) {
+    const px = x - ux * d, pz = z - uz * d;
+    if (Math.hypot(px, pz) > WORLD_R - 20) return false;
+    const may = d >= LANE.back ? PL.cruise - 10 : Math.max(1.5, PL.cruise * (d - LANE.roll) / (LANE.back - LANE.roll) - 4);
+    if (nav.ceiling(px, pz) > may) return false;
+  }
+  return true;
+}
+// Where to come down for goal S, and on what heading: the open water nearest S (out to LAND.reach) with a clear run
+// LANE.back long behind the stopping point (and, for a scoop, a take-off run ahead of it too), a clear approach beyond
+// that, and a clear straight taxi on to S. Of those, the one least out of the plane's way. Returns { x, z, h } (stop by
+// x, z having landed along heading h) or null. `skip` holds spots already tried and given up on.
+function landingFor(S, ahead, from, skip) {
+  const wet = nav.water.at(S.x, S.z) >= LAND.near ? S : nav.water.open(S.x, S.z, LAND.near, 30);
+  if (!wet) return null;
+  let best = null, bs = 1e9;
+  // (for a friend, near enough to taxi the rest comfortably; for a fire's water, anywhere near it)
+  const reach = ahead > 0 ? LAND.reach : LAND.taxi - 20;
+  for (let r = 0; r <= reach; r += 20) for (let k = 0; k < (r ? 16 : 1); k++) {
+    const a = k * Math.PI / 8 + r * 0.01, qx = wet.x + Math.cos(a) * r, qz = wet.z + Math.sin(a) * r;
+    if (nav.water.at(qx, qz) < LAND.room || terrainHeight(qx, qz) > -3) continue;
+    if (skip && skip.some(q => Math.hypot(q.x - qx, q.z - qz) < 40)) continue;
+    if (r && !nav.water.clear(qx, qz, wet.x, wet.z, LAND.near)) continue;
+    for (let hk = 0; hk < 16; hk++) {
+      const h = hk * Math.PI / 8, ux = Math.sin(h), uz = Math.cos(h);
+      if (!nav.water.clear(qx - ux * LANE.back, qz - uz * LANE.back, qx + ux * (ahead + 15), qz + uz * (ahead + 15), LAND.room)) continue;
+      if (!approachClear(qx, qz, ux, uz)) continue;
+      // (and nothing standing over the run on the water beyond: the sea arch spans water a hull could pass under, a wing cannot)
+      if (ahead > 0 && nav.ceiling(qx + ux * ahead * 0.5, qz + uz * ahead * 0.5) > 2) continue;
+      if (ahead > 0 && !clearClimb({ x: qx + ux * (ahead - RUN_FREE), z: qz + uz * (ahead - RUN_FREE) }, h)) continue;      // (and climbing away after a scoop)
+      // (the way round to the start of the approach, how far it has to turn to come in along h, and the taxi after)
+      const p0x = qx - ux * (LANE.back + LANE.lead), p0z = qz - uz * (LANE.back + LANE.lead);
+      const toward = Math.atan2(qx - from.x, qz - from.z);
+      const cost = Math.hypot(p0x - from.x, p0z - from.z) + 70 * Math.abs(angDiff(toward, h)) + 4 * r;
+      if (cost < bs) { bs = cost; best = { x: qx, z: qz, h }; }
+    }
   }
   return best;
 }
-// where to come down for S, and on what heading: at S itself if a lane runs into it, or else at the nearest open water
-// that has one (then taxi the rest)
-function landingFor(S, ahead, from, toward) {
-  // A scoop lines up toward the fire for its next pass.
-  const prefer = toward ? Math.atan2(toward.x - S.x, toward.z - S.z) : Math.atan2(S.x - from.x, S.z - from.z);
-  let h = nav.water.at(S.x, S.z) >= LANE.need ? laneAt(S, LANE.back, ahead, LANE.need, prefer) : null;
-  if (h !== null) return { x: S.x, z: S.z, h };
-  for (let r = 25; r <= 225; r += 25) for (let k = 0; k < 16; k++) {
-    const a = k * Math.PI / 8, q = { x: S.x + Math.cos(a) * r, z: S.z + Math.sin(a) * r };
-    if (nav.water.at(q.x, q.z) < LANE.need + 4) continue;
-    h = laneAt(q, LANE.back, ahead, LANE.need, Math.atan2(q.x - from.x, q.z - from.z));
-    if (h !== null) return { x: q.x, z: q.z, h };
-  }
-  return null;
-}
-// a straight lane from here for a take-off run: as near the way to `to` (and the way it is pointing) as can be
-function takeoffLane(p, to) {
-  const dir = to ? Math.atan2(to.x - p.pos.x, to.z - p.pos.z) : p.yaw;
-  let best = null, bs = -9;
-  for (const h of HEADINGS) {
-    if (!nav.water.clear(p.pos.x, p.pos.z, p.pos.x + Math.sin(h) * LANE.takeoff, p.pos.z + Math.cos(h) * LANE.takeoff, 9)) continue;
-    const sc = Math.cos(angDiff(h, dir)) + 0.6 * Math.cos(angDiff(h, p.yaw));
-    if (sc > bs) { bs = sc; best = h; }
-  }
-  return best;
+// can the seaplane get to a friend at (x, z)? (worked out once per place: a landing spot near it exists)
+const planeReach = new Map();
+function planeCanReach(x, z) {
+  const key = Math.round(x / 10) + ',' + Math.round(z / 10);
+  if (!planeReach.has(key)) planeReach.set(key, !!landingFor({ x, z }, 0, { x, z }));
+  return planeReach.get(key);
 }
 const AP_OUT = { aim: { x: 0, z: 0 } };
 function planePilot(p, t, dt, ready, room) {
@@ -597,6 +618,7 @@ function planePilot(p, t, dt, ready, room) {
 
   // ---- what it is doing: a friend, the pier, a fire (scoop or drop), or, let go in the air, just landing
   const F = p.fireJob && p.fireJob.fire;
+  A.skim = false; A.taxi = false;
   let kind, goal, key;
   if (F) { kind = waterReady(p) ? 'drop' : 'scoop'; goal = waterReady(p) ? p.fireAim : F.scoop; key = kind + F.x; }
   else if (p.target) { kind = 'pickup'; goal = p.target.pos; key = 'f' + p.target.id; }
@@ -604,11 +626,11 @@ function planePilot(p, t, dt, ready, room) {
   else if (p.input.f <= 0 && (A.park || !p.afloat)) {
     // (and it stays a landing through the touchdown and roll-out, bounces and all, until it has slowed on the water)
     // (let go in the air: land on the nearest good lane ahead)
-    if (!A.park) { const ahead = { x: p.pos.x + Math.sin(p.yaw) * 220, z: p.pos.z + Math.cos(p.yaw) * 220 }; A.park = nav.water.open(ahead.x, ahead.z, 22, 260) || nav.water.open(p.pos.x, p.pos.z, 22, 400); }
+    if (!A.park) { const ahead = { x: p.pos.x + Math.sin(p.yaw) * 220, z: p.pos.z + Math.cos(p.yaw) * 220 }; A.park = nav.water.open(ahead.x, ahead.z, 22, 260) || nav.water.open(p.pos.x, p.pos.z, 22, 400) || { x: p.pos.x, z: p.pos.z }; }
     kind = 'park'; goal = A.park; key = 'park';
   } else { kind = 'free'; goal = null; key = 'free'; }
   if (p.input.f > 0 || (p.afloat && p.fs < 6)) A.park = null;          // (kept through the splash and roll-out)
-  if (key !== A.key) { A.key = key; A.land = null; A.final = false; A.air = null; A.bomb = null; A.arrived = false; A.stallT = null; A.stallAt = null; A.reverseUntil = 0; }
+  if (key !== A.key) { A.key = key; A.land = null; A.final = false; A.air = null; A.bomb = null; A.arrived = false; A.stallT = null; A.stallAt = null; A.reverseUntil = 0; A.tried = null; A.goes = 0; A.tkSpot = null; }
   if (!goal) {
     // nothing to fetch: go held, it takes off down a clear lane the way it is pointing and flies on wherever the pilot
     // steers it (the world's edge turns it back); let go on the water, it waits
@@ -616,7 +638,7 @@ function planePilot(p, t, dt, ready, room) {
     A.run = null; out.aim = null;
     // (straight on, unless something tall stands in the way: then round it)
     const ax = p.pos.x + Math.sin(p.yaw) * 220, az = p.pos.z + Math.cos(p.yaw) * 220;
-    if (!nav.air(AIR.top).clear(p.pos.x, p.pos.z, ax, az, AIR.need)) { out.aim = A.aimPt; airRoute(p, A, { x: ax, z: az }, out, 70); }
+    if (!nav.air(AIR.top).clear(p.pos.x, p.pos.z, ax, az, AIR.need)) { out.aim = A.aimPt; airRoute(p, A, { x: ax, z: az }, out, AIR.look); }
     return out;
   }
 
@@ -668,52 +690,70 @@ function planePilot(p, t, dt, ready, room) {
   if (p.afloat) {
     out.alt = 0;
     if (kind === 'scoop' && A.final && A.land) {
-      // skimming the lane: keep straight along it, fill up, and (full) carry on into the take-off run
-      const h = A.land.h; A.run = h;
+      // skimming the run: keep straight along it, fill up, and (full) carry on into the take-off
+      const h = A.land.h; A.run = h; A.skim = true;
       out.aim = { x: p.pos.x + Math.sin(h) * 80, z: p.pos.z + Math.cos(h) * 80 };
       out.cap = p.water >= 1 ? PL.max : 12; out.run = true;
-      if (p.water >= 1) out.alt = PL.cruise;
+      if (p.water >= 1) out.alt = PL.cruise; else { out.final = true; out.look = 20; }      // (still skimming: it stays down on the water)
       return out;
     }
     if (A.run === null && kind !== 'scoop' && kind !== 'park') {
       const R = follow(p, 'taxi', nav.water, goal, 7.5, 16);
-      if (R && R.left < 130) {
-        A.final = false;
+      // (taxi only when it is close: further than this, flying there is quicker and nicer to watch)
+      if (R && R.left < LAND.taxi) {
+        A.final = false; A.tk = false; A.taxi = true;
         out.aim = R.aim; out.near = R.left < 40;
-        out.cap = clamp(1.5 + (R.left - (kind === 'dock' ? 6 : 10)) * 0.3, 0, 9);
+        out.cap = clamp(1.5 + (R.left - (kind === 'dock' ? 6 : 10)) * 0.3, 0, 13);
         A.arrived = R.left < 6;
         return out;
       }
     }
     if (kind === 'park') { out.cap = 0; return out; }
-    const departure = takeoff(p, A, out, goal);
-    // Fill the tank on this water run before rotating; taking off with a partial load wastes a whole circuit.
-    if (kind === 'scoop' && !waterReady(p) && departure.run) { departure.cap = Math.min(departure.cap, 12); departure.alt = 0; }
-    return departure;
+    // (landed for it but it is too far by water after all: that spot is not tried again for this one)
+    if (A.land && kind !== 'scoop') { (A.tried ||= []).push({ x: A.land.x, z: A.land.z }); A.land = null; }
+    // (the tank fills only on the scoop run chosen by the fire, which holds it down until full: see the skim above)
+    return takeoff(p, A, out, goal);
   }
+  // (just off the water: straight on along the take-off run until it has some height, and only then turn for where it is
+  // going; a low turn just after lifting off is how a plane meets the trees on the shore)
+  // (a skim that bounces off a wave for a moment is still the skim, not a take-off)
+  if (A.run !== null && !(kind === 'scoop' && A.final && !waterReady(p))) A.climbH = A.run;
   A.run = null;
+  if (A.climbH != null) {
+    if (alt < 14) { out.aim = { x: p.pos.x + Math.sin(A.climbH) * 80, z: p.pos.z + Math.cos(A.climbH) * 80 }; out.alt = PL.cruise; return out; }
+    A.climbH = null;
+  }
 
   // ---- in the air, to land: a lane chosen once and kept (a pilot who keeps changing their mind never lands), chosen
   // again only if the friend drifts well away from it; then the lead-in, and the run in
   if (A.land && Math.hypot(goal.x - A.land.gx, goal.z - A.land.gz) > 30) A.land = null;
   if (!A.land) {
-    const ahead = kind === 'scoop' ? LANE.takeoff + 40 : 0;
-    const L = landingFor(goal, ahead, p.pos, kind === 'scoop' ? F : null);
+    const ahead = kind === 'scoop' ? 100 : 0;      // (skim, fill and lift off: about 100 m of water beyond touching down)
+    const L = landingFor(kind === 'scoop' ? F : goal, ahead, p.pos, A.tried);
     if (L) {
-      // (stop a little short of a friend on the water rather than run them down)
-      if (kind === 'pickup' && L.x === goal.x && L.z === goal.z) { const back = p.target.kind === 'deck' ? 13 : 8; L.x -= Math.sin(L.h) * back; L.z -= Math.cos(L.h) * back; }
       L.gx = goal.x; L.gz = goal.z;
-      A.land = L; A.t = t; A.air = null;
+      A.land = L; A.t = t; A.air = null; A.wide = null;
     }
   }
   const L = A.land;
-  if (!L) { airRoute(p, A, goal, out, 70); return out; }
+  if (!L) {
+    // (nowhere left to land for this friend: let them go for now, for someone else or for later, and fly on)
+    if (kind === 'pickup' && p.target) { p.target.claimed = null; p.target.noPlaneUntil = game.t + 30; p.target = null; }
+    airRoute(p, A, goal, out, AIR.look); return out;
+  }
   const fx = Math.sin(L.h), fz = Math.cos(L.h);
   const along = (p.pos.x - L.x) * fx + (p.pos.z - L.z) * fz;          // negative before the stopping point
   const cross = Math.abs((p.pos.x - L.x) * fz - (p.pos.z - L.z) * fx);
   const lined = Math.abs(angDiff(p.yaw, L.h));
-  if (!A.final && along > -(LANE.back + LANE.lead * 0.7) && along < -LANE.roll && cross < 14 && lined < 0.35) A.final = true;
-  if (A.final && (cross > 30 || lined > 0.8 || along > 20)) A.final = false;          // (not lined up after all: go round again)
+  // (onto final only near the top of the glide: joined any later, it is too high to come down in time)
+  if (!A.final && along > -(LANE.back + LANE.lead + 30) && along < -LANE.back * 0.8 && cross < 22 && lined < 0.5) A.final = true;
+  // (past the top of the glide without having joined it, it is a go-round too)
+  const missed = !A.final && A.wide === false && along > -LANE.back * 0.8 && along < 0 && cross < 60;
+  if (missed || (A.final && (cross > 30 || lined > 0.8 || along > 20))) {
+    // (not lined up after all: go round again; twice round for the same spot and it picks another)
+    A.final = false; A.wide = null;
+    if ((A.goes = (A.goes || 0) + 1) >= 2) { (A.tried ||= []).push({ x: L.x, z: L.z }); A.land = null; A.goes = 0; }
+  }
   const P0 = { x: L.x - fx * (LANE.back + LANE.lead), z: L.z - fz * (LANE.back + LANE.lead) }, G = { x: L.x - fx * LANE.back, z: L.z - fz * LANE.back };
   if (A.final) {
     // on the line: follow it, slow to approach speed and come down the glide path to touch down short of the stop
@@ -721,39 +761,102 @@ function planePilot(p, t, dt, ready, room) {
     const toTouch = -along - LANE.roll;
     out.alt = PL.cruise * clamp(toTouch / (LANE.back - LANE.roll), 0, 1);      // (down over the open water of the lane only)
     out.alt -= 1.5 * (1 - clamp(toTouch / 30, 0, 1));          // (and the last bit aimed just under the surface, so it settles rather than floats along)
-    out.cap = 20; out.look = Math.max(0, -along - 8);
+    out.cap = 20; out.look = Math.max(0, -along - 8); out.final = true;
     return out;
   }
-  // not lined up yet: round by the air route to the lead-in point, then down the line
-  airRoute(p, A, P0, out, 70, [G, L]);
-  if (Math.hypot(p.pos.x - L.x, p.pos.z - L.z) < 350) out.cap = 28;      // (slower near, so the turns onto the line are tighter)
+  // not lined up yet: round by the air route to the lead-in point, then down the line. Coming from the landing side, it
+  // swings out wide of the lead-in first (a teardrop) rather than turning about on the spot and missing the line
+  const sideOf = (p.pos.x - L.x) * fz - (p.pos.z - L.z) * fx >= 0 ? 1 : -1;
+  if (along > -(LANE.back + LANE.lead) + 20 && A.wide == null) A.wide = { x: P0.x - fx * 60 + fz * sideOf * 90, z: P0.z - fz * 60 - fx * sideOf * 90 };
+  if (A.wide && Math.hypot(p.pos.x - A.wide.x, p.pos.z - A.wide.z) < 50) A.wide = false;      // (false: done with it until next time)
+  if (A.wide) airRoute(p, A, A.wide, out, AIR.look);
+  else airRoute(p, A, P0, out, AIR.look, [G, L]);
+  if (Math.hypot(p.pos.x - L.x, p.pos.z - L.z) < 300) out.cap = 30;      // (slower near, so the turns onto the line are tighter)
   return out;
 }
 // the air route to `to` (round anything tall), then on along `then`; steer for a point `look` metres along it
 function airRoute(p, A, to, out, look, then) {
   if (!A.air || game.t - A.airT > 3 || Math.hypot(A.airTo.x - to.x, A.airTo.z - to.z) > 5) {
-    const r = nav.air(AIR.top).route(p.pos, to, AIR.need, 60) || [{ x: p.pos.x, z: p.pos.z }, { x: to.x, z: to.z }];
+    // (with room to spare round high ground, so cutting the corners of the route does not cut across a hillside; only
+    // where that cannot be found, a tighter one)
+    const air = nav.air(AIR.top), r = air.route(p.pos, to, AIR.need, 60) || air.route(p.pos, to, AIR.tight, 60) || [{ x: p.pos.x, z: p.pos.z }, { x: to.x, z: to.z }];
     A.air = then ? r.concat(then) : r; A.airT = game.t; A.airTo = { x: to.x, z: to.z };
   }
   lookAhead(A.air, p.pos.x, p.pos.z, look, out.aim);
 }
-// a take-off from where it is: a clear lane chosen (or open water to taxi to first), turn to face it, then full power
+// the top of the tallest thing in the plane's way over the next `secs` seconds, following its turn: a tower, a stack,
+// the arch, a hill or the trees on it (or -1e9)
+function tallAhead(p, secs) {
+  let top = -1e9;
+  for (let s = 0.5; s <= secs; s += 0.5) {
+    const h = p.yaw + p.yawVel * s * 0.8, d = Math.max(p.fs, 10) * s;
+    // (along the arc it is turning on, roughly)
+    const x = p.pos.x + Math.sin(p.yaw + p.yawVel * s * 0.4) * d, z = p.pos.z + Math.cos(p.yaw + p.yawVel * s * 0.4) * d;
+    for (const o of OBSTACLES) if (o.top > p.pos.y - PLANE_FLOAT - 6 && (x - o.x) ** 2 + (z - o.z) ** 2 < (Math.max(o.r, o.wr || 0) + 9) ** 2) top = Math.max(top, o.top);
+    // (and the hills and treetops under that arc: landAhead only looks dead ahead)
+    const gr = terrainHeight(x, z);
+    if (gr > 0.5) top = Math.max(top, gr + canopyAt(x, z) + 2);
+  }
+  return top;
+}
+// the highest the ceiling chart says anything stands under the plane's way over the next 7 seconds, along its heading
+// and toward its aim point
+function roofAhead(p, aim) {
+  let top = nav.ceiling(p.pos.x, p.pos.z);
+  const v = Math.max(p.fs, 16), ah = aim ? Math.atan2(aim.x - p.pos.x, aim.z - p.pos.z) : p.yaw;
+  for (let s = 0.5; s <= 7; s += 0.5) for (const h of [p.yaw, ah, p.yaw + p.yawVel * s * 0.5]) top = Math.max(top, nav.ceiling(p.pos.x + Math.sin(h) * v * s, p.pos.z + Math.cos(h) * v * s));
+  return top;
+}
+// is the climb-out beyond a take-off run clear of high ground and trees?
+const RUN_FREE = 130;
+function clearClimb(P, h) {
+  const ux = Math.sin(h), uz = Math.cos(h);
+  // (it lifts off by the end of the run and climbs at about 1 in 3, over anything the ceiling chart knows of, by 10 m)
+  for (let d = RUN_FREE; d <= RUN_FREE + 240; d += 10) if (nav.ceiling(P.x + ux * d, P.z + uz * d) > Math.max(0.5, (d - RUN_FREE) * 0.3 - 10)) return false;
+  return true;
+}
+// Where to take off from, heading for `to`: the nearest point on the water (by a straight taxi, out to 300 m) with a
+// clear run of open water and a clear climb beyond it, along whichever heading needs least turning now and afterwards.
+// Returns { x, z, h, r } (r: how far away it is) or null.
+function takeoffSpot(p, to) {
+  const dir = to ? Math.atan2(to.x - p.pos.x, to.z - p.pos.z) : p.yaw;
+  let best = null, bs = 1e9, foundAt = -1;
+  for (let r = 0; r <= 300; r += 25) {
+    if (foundAt >= 0 && r > foundAt + 25) break;          // (the first ring with one, and the next, for a better way round)
+    for (let k = 0; k < (r ? 16 : 1); k++) {
+      const a = k * Math.PI / 8, qx = p.pos.x + Math.sin(a) * r, qz = p.pos.z + Math.cos(a) * r;
+      if (r && (nav.water.at(qx, qz) < 10 || !nav.water.clear(p.pos.x, p.pos.z, qx, qz, 5))) continue;
+      for (let hk = 0; hk < 16; hk++) {
+        const h = hk * Math.PI / 8;
+        const sc = r + 30 * Math.abs(angDiff(h, dir)) + (r ? 0 : 12 * Math.abs(angDiff(h, p.yaw)));
+        if (sc >= bs) continue;
+        if (!nav.water.clear(qx, qz, qx + Math.sin(h) * RUN_FREE, qz + Math.cos(h) * RUN_FREE, 10) || !clearClimb({ x: qx, z: qz }, h)) continue;
+        bs = sc; best = { x: qx, z: qz, h, r }; if (foundAt < 0) foundAt = r;
+      }
+    }
+  }
+  return best;
+}
+// a take-off: from the take-off spot (taxiing there first if it is not right here), turning to face along its run, then
+// full power down it
 function takeoff(p, A, out, to) {
   if (A.run === null) {
-    const h = takeoffLane(p, to);
-    if (h === null) {
-      // (hemmed in: taxi out to open water first)
-      const o = A.open && Math.hypot(A.open.x - p.pos.x, A.open.z - p.pos.z) > 15 ? A.open : (A.open = nav.water.open(p.pos.x, p.pos.z, 40, 300));
-      const R = o && follow(p, 'out', nav.water, o, 7.5, 16);
-      if (R) { out.aim = R.aim; out.cap = 9; return out; }
-      out.aim = null; out.cap = 4; return out;
+    if (!A.tkSpot || game.t - A.tkSpot.t > 20) { A.tkSpot = takeoffSpot(p, to); if (A.tkSpot) A.tkSpot.t = game.t; }
+    const S = A.tkSpot;
+    if (S && (S.r === 0 || Math.hypot(S.x - p.pos.x, S.z - p.pos.z) < 8)) { A.run = S.h; A.runT = game.t; A.tkSpot = null; }
+    else {
+      // (taxi out to it; with nowhere to go at all, wait)
+      A.tk = !!S;
+      out.aim = S ? { x: S.x, z: S.z } : null;
+      out.cap = S ? clamp(3 + Math.hypot(S.x - p.pos.x, S.z - p.pos.z) * 0.5, 3, 12) : 0; out.near = true;
+      return out;
     }
-    A.run = h; A.runT = game.t;
   }
+  A.tk = false;
   const h = A.run, off = Math.abs(angDiff(p.yaw, h));
   out.aim = { x: p.pos.x + Math.sin(h) * 80, z: p.pos.z + Math.cos(h) * 80 };
-  // (turning to face the lane, slowly; then the run)
-  out.cap = off > 0.25 && p.fs < 8 ? 3.5 : PL.max; out.run = true;
+  // (turning to face the run, slowly; then the run)
+  out.cap = off > 0.2 && p.fs < 8 ? 3.5 : PL.max; out.run = true;
   out.alt = out.cap > 4 ? PL.cruise : 0;
   if (game.t - A.runT > 25) A.run = null;          // (and should it ever not get away, choose again)
   return out;
@@ -780,7 +883,7 @@ function updatePlane(p, dt, t) {
   if (p.target && p.target.state !== 'waiting') { if (p.target.claimed === p) p.target.claimed = null; p.target = null; }
   if (!p.pro && !p.target && !p.fireJob && room) {
     const g = nearestFor(p);
-    if (g && !g.an.fire && (!p.cargo.length || g.d < 180)) { p.target = g.an; g.an.claimed = p; }
+    if (g && !g.an.fire && (!p.cargo.length || (dockD > 200 && (g.d < 180 || g.d < dockD * 0.6)))) { p.target = g.an; g.an.claimed = p; }      // (with friends aboard, one more if they are much nearer than home, and home is not just here)
   }
   // ---- the autopilot: where to steer, how fast and how high (see planePilot)
   const ap = p.pro ? null : planePilot(p, t, dt, ready, room);
@@ -842,16 +945,29 @@ function updatePlane(p, dt, t) {
   // ---- height: cruise when flying, follow the glide slope when landing or scooping, always clear of land
   let landAhead = -1e9;
   // (on a lined-up final, only as far as where it stops: the beach of a friend's sandbar beyond is not a hill to climb)
-  const look = ap && ap.look !== undefined ? ap.look : 1e9;
+  // (and down on the water, settling after a touchdown or taxiing, it does not look at all: only a take-off run climbs)
+  const look = p.afloat && !(ap && ap.run) ? 0 : ap && ap.look !== undefined ? ap.look : 1e9;
   for (const sec of [0, 0.8, 1.6, 2.6]) landAhead = Math.max(landAhead, landWithin(p, fx_, fz_, Math.min(p.fs * sec, look), t));
-  let wantAlt = 0, vyT = 0;
+  let wantAlt = 0, vyT = 0, steepClimb = false;
   if (flying) {
     const mine = clamp(PL.cruise + p.altOff, 0, 76);
     wantAlt = p.manualT > 0 ? mine : ap ? Math.min(mine, ap.alt) : mine;
     if (landAhead > -1e8) wantAlt = Math.max(wantAlt, landAhead + 9);        // never let a hill come to us
+    // nor a tower, a stack or the arch: wherever the plane will be in the next few seconds, turning as it is turning,
+    // anything standing taller than it within reach of a wingtip has it climb over the top
+    // (not on a lined-up final either: the approach to a landing spot is checked clear when the spot is chosen)
+    const tall = (p.afloat && !(ap && ap.run)) || (ap && ap.final) ? -1e9 : tallAhead(p, 5);
+    if (tall > -1e8) wantAlt = Math.max(wantAlt, tall + 7 - PLANE_FLOAT);
+    steepClimb = tall + 7 - PLANE_FLOAT > alt || landAhead + 9 > alt;      // (high ground coming: climb hard)
+    // and above everything under where it is going over the next few seconds, by the ceiling chart: straight on, and
+    // toward where the autopilot is steering (not on a lined-up final, whose glide is over open water checked clear)
+    if (!(ap && ap.final) && !(p.afloat && !(ap && ap.run)) && !(p.afloat && ap && ap.alt <= 0)) {
+      const roof = roofAhead(p, ap && ap.aim);
+      if (roof + 10 > wantAlt) { wantAlt = roof + 10; if (roof + 10 > alt + 2) steepClimb = true; }
+    }
     if (ap && ap.over !== undefined) wantAlt = Math.max(wantAlt, ap.over);     // (over a fire's treetops to drop on it)
   }
-  vyT = p.manualT > 0 ? clamp((wantAlt - alt) * 2.2, -9, 9) : clamp((wantAlt - alt) * 2.2, -6.5, 7);
+  vyT = p.manualT > 0 ? clamp((wantAlt - alt) * 2.2, -9, 9) : clamp((wantAlt - alt) * 2.2, ap && ap.final ? -8 : -6.5, steepClimb ? 10 : 7);
   if (flying && inp.l !== 0) {
     // while a height key is held the plane climbs or dives right away, and levels off where you let go
     vyT = inp.l * 9;
@@ -929,7 +1045,7 @@ function updatePlane(p, dt, t) {
   p.mode = p.target || p.incoming ? 'pickup' : (p.cargo.length && dockD < 130 ? 'deliver' : 'idle');
 
   // ---- how it looks: coordinated bank, nose follows the flight path, floats ride the swell
-  m.prop.rotation.z += p.spin * 46 * dt;
+  for (const pr of m.props) pr.rotation.z += p.spin * 46 * dt;
   m.discMat.opacity = 0.3 * p.spin * p.spin; m.bladeMat.opacity = 1 - 0.82 * p.spin * p.spin;
   const air = clamp(p.clearance / 2.5, 0, 1);
   p.sea += ((1 - air) - p.sea) * damp(3, dt);                               // 1 = sitting on the water, 0 = airborne
@@ -943,8 +1059,15 @@ function updatePlane(p, dt, t) {
   const sq = -0.25 * p.squash * Math.sin((1 - p.squash) * 8.5);
   const calm = p.sea * (1 - 0.7 * planing);                                 // bob and rock fade as it gets up on the step
   const rock = Math.sin(t * 1.4 + p.idx) * 0.035 * calm;
+  // (on the water the floats lie along the swell: bow up a crest, one float lifted as a wave runs under it)
+  let swellP = 0, swellR = 0;
+  if (calm > 0.01) {
+    const wf = waveHeight(p.pos.x + nfx * 3.4, p.pos.z + nfz * 3.4, t), wb = waveHeight(p.pos.x - nfx * 3.4, p.pos.z - nfz * 3.4, t);
+    const ws = waveHeight(p.pos.x - nfz * 1.8, p.pos.z + nfx * 1.8, t), wo = waveHeight(p.pos.x + nfz * 1.8, p.pos.z - nfx * 1.8, t);
+    swellP = -(wf - wb) / 6.8 * 0.8 * calm; swellR = (ws - wo) / 3.6 * 0.6 * calm;
+  }
   m.group.position.set(p.pos.x + J(), p.pos.y + wave * 0.55 * calm + sq + J() * 0.5, p.pos.z + J());
-  m.group.rotation.set(p.pitch + Math.cos(t * 1.1 + p.idx) * 0.02 * calm + J() * 0.3, p.yaw, p.roll + rock + J() * 0.4);
+  m.group.rotation.set(p.pitch + swellP + Math.cos(t * 1.1 + p.idx) * 0.01 * calm + J() * 0.3, p.yaw, p.roll + swellR + rock * 0.5 + J() * 0.4);
 
   // spray off the floats while on the water
   if (p.afloat && Math.abs(p.fs) > 2) {
@@ -960,7 +1083,7 @@ function updatePlane(p, dt, t) {
   m.strobe.material.emissiveIntensity = blink < 0.08 ? 14 * on : 0;
   m.beacon.material.emissiveIntensity = blink > 0.5 && blink < 0.62 ? 9 * on : 0.3;
   // riders jiggle
-  p.cargo.forEach((an, i) => { if (an.state !== 'riding') return; an.model.position.y = SLOTS[i][1] + Math.abs(Math.sin(t * 5 + an.phase)) * 0.12; an.model.rotation.z = Math.sin(t * 4 + an.phase) * 0.08; });
+  p.cargo.forEach((an, i) => { if (an.state !== 'riding') return; an.model.position.y = SLOTS[i][1] + Math.abs(Math.sin(t * 5 + an.phase)) * 0.12; an.model.rotation.z = Math.sin(t * 4 + an.phase) * 0.08; feel(an, 1, 0, dt); });
   // horn
   p.hornCd -= dt;
   if (inp.horn && p.hornCd <= 0) {
@@ -1055,7 +1178,7 @@ function updateBoat(p, dt, t) {
   const dir = p.fs >= 0 ? 1 : -1;
   let shore = 1;
   if (p.pro) shore = 1;
-  else if (blockedAt(p, fx_ * dir, fz_ * dir, 7, 1.5)) shore = 0; else if (blockedAt(p, fx_ * dir, fz_ * dir, 15, 1.5)) shore = 0.3;
+  else if (blockedAt(p, fx_ * dir, fz_ * dir, 7, 1.5)) shore = 0; else if (blockedAt(p, fx_ * dir, fz_ * dir, 15, 1.5) || blockedAt(p, fx_ * dir, fz_ * dir, Math.abs(p.fs) * 1.6, 1.5)) shore = 0.3;      // (further ahead the faster it goes)
   const atDock = (!p.pro && !p.target && p.cargo.length > 0 && dockD < 15) || p.incoming > 0 || (fj && gd < 12) || !!p.spray;      // (and it lies stopped while someone comes aboard, or while the cannon is going)
   let want = 0;
   if (ready && !atDock) want = inp.f > 0 ? cap : inp.f < 0 ? -7 : 0;
@@ -1167,7 +1290,7 @@ function updateBoat(p, dt, t) {
   const blink = (t * 2.2 + p.idx * 0.5) % 1, on = p.spin > 0.03 ? 1 : 0;
   m.strobe.material.emissiveIntensity = blink < 0.5 ? 9 * on : 0.2;
   m.beacon.material.emissiveIntensity = blink >= 0.5 ? 9 * on : 0.2;
-  p.cargo.forEach((an, i) => { if (an.state !== 'riding') return; an.model.position.y = SLOTS[i][1] + Math.abs(Math.sin(t * 5 + an.phase)) * 0.12; an.model.rotation.z = Math.sin(t * 4 + an.phase) * 0.08; });
+  p.cargo.forEach((an, i) => { if (an.state !== 'riding') return; an.model.position.y = SLOTS[i][1] + Math.abs(Math.sin(t * 5 + an.phase)) * 0.12; an.model.rotation.z = Math.sin(t * 4 + an.phase) * 0.08; feel(an, 1, 0, dt); });
   p.hornCd -= dt;
   if (inp.horn && p.hornCd <= 0) {
     p.hornCd = 0.45; sfx.honk(p.vehicle, p.idx);
@@ -1178,6 +1301,7 @@ function updateBoat(p, dt, t) {
 }
 
 // ================================================================= winch + basket
+const WINCH_SPEED = 10, WV = new THREE.Vector3();      // (m/s the winch winds the cable, at most)
 function updateWinch(p, dt, t) {
   p.dropCd -= dt;
   // fighting a fire (and nobody aboard): the bucket is on the cable instead of the basket
@@ -1247,6 +1371,10 @@ function updateWinch(p, dt, t) {
   if (om > 0) {
     const k2 = om * om, c = 2 * om;
     bv.x += ((tx - b.x) * k2 - bv.x * c) * dt; bv.y += ((ty - b.y) * k2 - bv.y * c) * dt; bv.z += ((tz - b.z) * k2 - bv.z * c) * dt;
+    // (but never faster than the winch can wind, relative to the helicopter: an empty basket a long way down comes up
+    // over a couple of seconds, not in a blink)
+    WV.subVectors(bv, p.vel); const rel = WV.length();
+    if (rel > WINCH_SPEED) bv.copy(p.vel).addScaledVector(WV, WINCH_SPEED / rel);
     b.addScaledVector(bv, dt);
   } else bv.set(0, 0, 0);
   const bs = surfaceAt(b.x, b.z, t, SURF2);
@@ -1369,12 +1497,12 @@ function pickType() {
   players.forEach(p => p.cargo.forEach(c => present.add(c.type.id)));
   const fresh = ANIMAL_TYPES.filter(tp => !present.has(tp.id));
   const pool = fresh.length ? fresh : ANIMAL_TYPES;
-  return pool[(Math.random() * pool.length) | 0];
+  return pool[(play() * pool.length) | 0];
 }
 // where a friend waits at a landing site: clear of the pad's rim and of where the helicopter sets down, still on the
 // level ground, and on the side of it looking out over open ground rather than into the trees
 function campSpot(site) {
-  const d = Math.min(8.2, site.r - 0.8), a0 = Math.random() * 6.283;
+  const d = Math.min(8.2, site.r - 0.8), a0 = play() * 6.283;
   let best = a0, bs = 1e9;
   for (let i = 0; i < 12; i++) {
     const a = a0 + i * 0.5236, ca = Math.cos(a), sa = Math.sin(a);
@@ -1386,7 +1514,14 @@ function campSpot(site) {
   }
   return { x: site.x + Math.cos(best) * d, z: site.z + Math.sin(best) * d };
 }
-const pickOf = list => (list && list.length ? list[(Math.random() * list.length) | 0] : null);
+const pickOf = list => (list && list.length ? list[(play() * list.length) | 0] : null);
+// can the seaplane get to this friend? (not for a while after it gave up on them; otherwise, is there a place to land near them)
+function planeOk(an) {
+  if (an.noPlaneUntil && game.t < an.noPlaneUntil) return false;
+  return planeCanReach(an.pos.x, an.pos.z);
+}
+// can this team get to a friend at (x, z)? A seaplane on its own only where it can land near them
+const teamReaches = (x, z) => activePlayers().some(p => p.vehicle !== 'plane') || planeCanReach(x, z);
 function spawnAnimal(near) {
   if (waiting.length >= maxWaiting()) return;
   // Retry locally; never send a fixed-location outing to another region.
@@ -1394,31 +1529,32 @@ function spawnAnimal(near) {
   if (game.zone.id !== 'home') { spawnInZone(game.zone); return; }
   const maxD = near ? 130 : HOME_R - 20;
   const heliUp = activePlayers().some(p => p.vehicle === 'heli');
-  if (!near && !game.boat && Math.random() < 0.16 && waiting.length + 3 <= maxWaiting() && spawnBoat(maxD, world.spawn.sea)) return;
+  if (!near && !game.boat && play() < 0.16 && waiting.length + 3 <= maxWaiting() && spawnBoat(maxD, world.spawn.sea)) return;
   const homeLedges = world.spawn.ledges.filter(l => l.zone === 'home'), homeStacks = world.spawn.stacks.filter(l => l.zone === 'home');
   let spot = null, kind = 'ring', site = null;
   for (let tries = 0; tries < 40 && !spot; tries++) {
-    const r = Math.random();
+    const r = play();
     let c;
     site = null;
     if (r < 0.22 && heliUp && !near) {
       // someone waiting on an island, where only a landing will do
       const free = SITES.filter(q => !q.busy && q.zone === 'home');
       if (!free.length) continue;
-      site = free[(Math.random() * free.length) | 0]; kind = 'camp';
+      site = free[(play() * free.length) | 0]; kind = 'camp';
       c = campSpot(site);
     }
     else if (r < 0.3 && heliUp && !near && homeLedges.length) {
       // a climber stuck on a sea cliff: only the basket can reach
       c = pickOf(homeLedges); kind = 'ledge';
     }
-    else if (r < 0.36 && !near && activePlayers().some(q => q.vehicle !== 'plane')) { c = HUTS[(Math.random() * HUTS.length) | 0].porch; kind = 'hut'; }
-    else if (r < 0.5) { c = ISLETS[(Math.random() * ISLETS.length) | 0]; kind = 'islet'; }
+    else if (r < 0.36 && !near && activePlayers().some(q => q.vehicle !== 'plane')) { c = HUTS[(play() * HUTS.length) | 0].porch; kind = 'hut'; }
+    else if (r < 0.5) { c = ISLETS[(play() * ISLETS.length) | 0]; kind = 'islet'; }
     else if (r < 0.56 && homeStacks.length) { c = pickOf(homeStacks); kind = 'raft'; }
-    else if (r < 0.62) { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = 'kayak'; }
-    else if (r < 0.68) { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = 'dinghy'; }
-    else { c = world.spawn.sea[(Math.random() * world.spawn.sea.length) | 0]; kind = r < 0.82 ? 'raft' : 'ring'; }
+    else if (r < 0.62) { c = world.spawn.sea[(play() * world.spawn.sea.length) | 0]; kind = 'kayak'; }
+    else if (r < 0.68) { c = world.spawn.sea[(play() * world.spawn.sea.length) | 0]; kind = 'dinghy'; }
+    else { c = world.spawn.sea[(play() * world.spawn.sea.length) | 0]; kind = r < 0.82 ? 'raft' : 'ring'; }
     if (Math.hypot(c.x, c.z) > maxD) continue;
+    if (!site && kind !== 'ledge' && kind !== 'hut' && !teamReaches(c.x, c.z)) continue;
     // (anyone afloat bobs in clear water, with room for a hull to come alongside, never up against a rock)
     if (!site && kind !== 'ledge' && kind !== 'hut' && kind !== 'islet' && rockNear(c.x, c.z, 8)) continue;
     if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 45)) continue;
@@ -1447,7 +1583,7 @@ function zoneChoices(Z) {
   if (stacks.length) add(0.8, 'raft', () => pickOf(stacks));
   if (Z.id === 'forest') {
     add(2, 'perch', () => world.towerDeck, 'heli');
-    add(2.5, 'kayak', () => { const a = Math.random() * 6.283, d = Math.random() * LAKE.r * 0.45; return { x: LAKE.x + Math.cos(a) * d, z: LAKE.z + Math.sin(a) * d }; }, 'heli', { landlocked: true });
+    add(2.5, 'kayak', () => { const a = play() * 6.283, d = play() * LAKE.r * 0.45; return { x: LAKE.x + Math.cos(a) * d, z: LAKE.z + Math.sin(a) * d }; }, 'heli', { landlocked: true });
     add(1.2, 'kayak', () => pickOf(sea));
   } else if (Z.id === 'reef') {
     add(2.5, 'ring', () => pickOf(sea)); add(1, 'islet', () => pickOf(islets));
@@ -1464,16 +1600,17 @@ function spawnInZone(Z) {
   const act = activePlayers(), heliUp = act.some(p => p.vehicle === 'heli'), flyUp = heliUp || act.some(p => p.vehicle === 'plane');
   const room = maxWaiting() - waiting.length;
   // the crew of the wreck on the reef, or a fishing boat broken down off the harbour
-  if (Z.id === 'reef' && heliUp && !world.wreck.crew && room >= 2 && Math.random() < 0.3 && spawnWreck()) return;
-  if ((Z.id === 'harbour' || Z.id === 'reef') && !game.boat && room >= 3 && Math.random() < 0.2 && spawnBoat(Infinity, world.spawn.zoneSea[Z.id])) return;
+  if (Z.id === 'reef' && heliUp && !world.wreck.crew && room >= 2 && play() < 0.3 && spawnWreck()) return;
+  if ((Z.id === 'harbour' || Z.id === 'reef') && !game.boat && room >= 3 && play() < 0.2 && spawnBoat(Infinity, world.spawn.zoneSea[Z.id])) return;
   const C = zoneChoices(Z).filter(c => c.who === 'all' || (c.who === 'heli' ? heliUp : flyUp));
   const total = C.reduce((n, c) => n + c.w, 0);
   for (let tries = 0; tries < 40; tries++) {
-    let r = Math.random() * total, c = C[0];
+    let r = play() * total, c = C[0];
     for (const q of C) { r -= q.w; if (r <= 0) { c = q; break; } }
     const s = c.spot();
     if (!s) continue;
     if (AFLOAT.has(c.kind) && !(c.extra && c.extra.landlocked) && rockNear(s.x, s.z, 8)) continue;
+    if ((AFLOAT.has(c.kind) || c.kind === 'islet') && !teamReaches(s.x, s.z)) continue;
     if (waiting.some(a => Math.hypot(a.pos.x - s.x, a.pos.z - s.z) < (c.kind === 'perch' ? 10 : 30))) continue;
     const extra = { ...(c.extra || {}) };
     if (s.site) extra.site = s.site;
@@ -1501,18 +1638,18 @@ const DECK_SPOTS = [[1.3, -4.2], [-1.3, -6.6], [1.1, -8.6]];
 function spawnBoat(maxD, list) {
   let spot = null;
   for (let tries = 0; tries < 30 && !spot && list.length; tries++) {
-    const c = list[(Math.random() * list.length) | 0];
+    const c = list[(play() * list.length) | 0];
     if (Math.hypot(c.x, c.z) > maxD || Math.hypot(c.x, c.z) < 90 || rockNear(c.x, c.z, 24)) continue;
-    if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 55)) continue;
+    if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 55) || !teamReaches(c.x, c.z)) continue;
     spot = c;
   }
   if (!spot) return false;
   const hull = new THREE.Color().setHSL(Math.random(), 0.6, 0.22);
-  const B = { x: spot.x, z: spot.z, y: 0, yaw: Math.random() * 6.283, deck: 1.7, crew: 0, leaving: 0, puff: 0, mesh: model('World_Boat', { tints: { Navy: hull } }) };
+  const B = { x: spot.x, z: spot.z, y: 0, yaw: play() * 6.283, deck: 1.7, crew: 0, leaving: 0, puff: 0, mesh: model('World_Boat', { tints: { Navy: hull } }) };
   B.mesh.scale.setScalar(1.5); B.mesh.rotation.order = 'YXZ'; B.mesh.userData.farHide = 600;
   scene.add(B.mesh);
   game.boat = B;
-  const n = 2 + (Math.random() < 0.5 ? 1 : 0);
+  const n = 2 + (play() < 0.5 ? 1 : 0);
   for (let i = 0; i < n; i++) { addWaiting('deck', B.x, B.z, { boat: B, off: DECK_SPOTS[i] }); B.crew++; }
   fx.emoji('\u{1F198}', B.x, 12, B.z, 4.5);
   sfx.newFriend();
@@ -1594,12 +1731,12 @@ function makeFire(x, z, y, r, roof = false, asset = null) {
 }
 // in the trees at the edge of a landing site, the friend on the far side of the site from it
 function siteFire(s, wantShore) {
-  const a0 = Math.random() * 6.283;
+  const a0 = play() * 6.283;
   let best = null, bs = -1e9;
   for (let i = 0; i < 10; i++) {
     const a = a0 + i * 0.628, d = s.r + 6.5, x = s.x + Math.cos(a) * d, z = s.z + Math.sin(a) * d, g = terrainHeight(x, z);
     if (g < 1) continue;
-    const c = canopyAt(x, z), sc = Math.min(c, 6) + (nearestWater(x, z, 10, 40, 6) ? (wantShore ? 20 : 4) : 0) + Math.random() * 2;      // (where the boat's cannon can reach it, when a boat is out)
+    const c = canopyAt(x, z), sc = Math.min(c, 6) + (nearestWater(x, z, 10, 40, 6) ? (wantShore ? 20 : 4) : 0) + play() * 2;      // (where the boat's cannon can reach it, when a boat is out)
     if (sc > bs) { bs = sc; best = { a, x, z, y: g + Math.max(c - 2, 0.4) }; }
   }
   if (!best) return null;
@@ -1620,7 +1757,7 @@ function roofFire() {
 }
 function coastalFire(Z) {
   for (let i = 0; i < 50; i++) {
-    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * Z.r;
+    const a = play() * Math.PI * 2, d = Math.sqrt(play()) * Z.r;
     const x = Z.x + Math.cos(a) * d, z = Z.z + Math.sin(a) * d, y = terrainHeight(x, z);
     if (y < 1 || y > 16 || !nearestWater(x, z, 10, 38, 6, inLake)) continue;
     const fx = x + 7, fz = z + 3, fy = terrainHeight(fx, fz);
@@ -1637,7 +1774,7 @@ function spawnFire(Z) {
   if (Z.id === 'harbour') for (let i = 0; i < 4; i++) makers.push(roofFire);
   for (let i = 0; i < 3; i++) makers.push(() => coastalFire(Z));
   for (let tries = 0; tries < 6 && makers.length; tries++) {
-    const r = makers.splice((Math.random() * makers.length) | 0, 1)[0]();
+    const r = makers.splice((play() * makers.length) | 0, 1)[0]();
     if (!r) continue;
     if (!act.some(p => canFight(p, r.extra.fire))) { disposeFire(r.extra.fire); continue; }
     if (waiting.some(a => Math.hypot(a.pos.x - r.x, a.pos.z - r.z) < 30)) { disposeFire(r.extra.fire); continue; }
@@ -1645,7 +1782,6 @@ function spawnFire(Z) {
     if (r.extra.site) r.extra.site.busy = true;
     r.extra.fire.asset = { x: r.x, z: r.z };
     an.beam.visible = false;
-    if (game.dispatchPending) stageFireResponse(r.extra.fire);
     fx.emoji('\u{1F525}', r.extra.fire.x, r.extra.fire.y + 6, r.extra.fire.z, 4.5);
     sfx.newFriend();
     return true;
@@ -1664,22 +1800,6 @@ function updateFireJob(p) {
   if (p.fireJob && (!p.attack && (!p.fireAim || game.t > (p.aimUntil || 0)))) {
     p.fireAim = attackPoint(p.fireJob.fire, p.idx, p.vehicle === 'boat' ? p.pos : null); p.aimUntil = game.t + 0.8;
   }
-}
-function stageFireResponse(F) {
-  game.dispatchPending = false;
-  for (const p of activePlayers()) {
-    const point = p.vehicle === 'plane' ? F.scoop : p.vehicle === 'boat' ? F.shore : F.dip;
-    if (!point) continue;
-    const open = nav.water.open(point.x + p.idx * 18, point.z, p.vehicle === 'plane' ? 14 : 7, 80) || point;
-    p.pos.set(open.x, p.vehicle === 'heli' ? 16 : p.vehicle === 'plane' ? PLANE_FLOAT : 0, open.z);
-    p.vel.set(0, 0, 0); p.fs = 0; p.spin = 1; p.parked = p.vehicle !== 'heli';
-    p.afloat = p.vehicle !== 'heli'; p.grounded = p.landed = p.vehicle !== 'heli';
-    p.yaw = Math.atan2(F.x - p.pos.x, F.z - p.pos.z); p.yawVel = 0; p.altOff = 0; p.routes = {}; p.ap = null;
-    p.bpos.copy(p.pos); p.bpos.y -= 4; p.bvel.set(0, 0, 0); p.hoist = 0;
-    p.fireAim = null; p.aimUntil = 0;
-    p.camPos.set(p.pos.x - Math.sin(p.yaw) * 29, p.pos.y + 15, p.pos.z - Math.cos(p.yaw) * 29); p.camLook.copy(p.pos); p.camYaw = p.yaw;
-  }
-  F.engaged = true;
 }
 function waterAboard(p) { sfx.splash(); p.flash = p.vehicle === 'plane' ? 'Tank full · line up a water run' : 'Bucket full · tackle the fire front'; p.flashT = 2.5; }
 const pours = [];
@@ -1712,11 +1832,14 @@ function updateWaterRuns(dt) {
     const opening = game.fire && p.vehicle === 'plane' && !!run ? 1 : 0;
     p.gateOpen = (p.gateOpen || 0) + (opening - (p.gateOpen || 0)) * damp(14, dt);
     p.plane.gates.forEach((g, i) => { g.rotation.z = (i ? 1 : -1) * p.gateOpen * 1.25; });
-    const scooping = game.fire && p.vehicle === 'plane' && p.afloat && p.fs > 6 && p.fireJob && p.water < .99;
+    // (the autopilot's only on its scoop run, skimming the stretch of water it picked by the fire: taxiing out from the
+    // pier is not a scoop. Flown by hand, anywhere within reach of the fire)
+    const scooping = game.fire && p.vehicle === 'plane' && p.afloat && p.fs > 6 && p.fireJob && p.water < .99
+      && (p.pro ? Math.hypot(p.fireJob.fire.x - p.pos.x, p.fireJob.fire.z - p.pos.z) < 450 : !!(p.ap && p.ap.skim));
     p.scoopOpen = (p.scoopOpen || 0) + ((scooping ? 1 : 0) - (p.scoopOpen || 0)) * damp(5, dt);
     p.plane.scoops.forEach(g => { g.rotation.x = (1 - p.scoopOpen) * -Math.PI / 2; });
     p.plane.level.scale.y = Math.max(.02, p.water);
-    p.plane.level.position.y = -.8 + p.water * .5;
+    p.plane.level.position.y = -0.8 + p.water * 0.5;
     if (!run) { if (p.vehicle !== 'boat' || !p.spray) p.waterStream.hide(); continue; }
     if (!p.active || p.vehicle !== run.vehicle || !burning(run.an)) { p.attack = null; p.waterStream.hide(); continue; }
     if (run.opening > 0) { run.opening -= dt; continue; }
@@ -1815,7 +1938,7 @@ function addWaiting(kind, x, z, extra) {
   };
   if (kind === 'ring') an.prop = buildRing(); else if (kind === 'raft') an.prop = buildRaft(); else if (kind === 'floe') an.prop = buildFloe();
   else if (kind === 'kayak') {
-    an.prop = model('World_Kayak', { tints: { Tip: new THREE.Color().setHSL(Math.random(), 0.8, 0.45) } }); an.prop.scale.setScalar(1.9); an.prop.rotation.order = 'YXZ'; an.heading = Math.random() * 6.283;
+    an.prop = model('World_Kayak', { tints: { Tip: new THREE.Color().setHSL(Math.random(), 0.8, 0.45) } }); an.prop.scale.setScalar(1.9); an.prop.rotation.order = 'YXZ'; an.heading = play() * 6.283;
     // (the paddle is modelled across the cockpit, where it would run through whoever sits there: it lies across the foredeck instead)
     const names = an.prop.geometry.userData.mats, oar = i => /Accent|Metal/.test(names[i]);
     const paddle = new THREE.Mesh(an.prop.geometry, an.prop.material.map((mt, i) => oar(i) ? mt : HIDDEN));
@@ -1832,6 +1955,12 @@ function addWaiting(kind, x, z, extra) {
   if (AFLOAT.has(kind)) fx.splash(an.pos.x, an.pos.y, an.pos.z, 20);
   return an;
 }
+// how a friend feels, 0..1 each, eased: happy tilts and nods the head, wave lifts an arm and waves it (models.js)
+function feel(an, happy, wave, dt) {
+  const a = an.model.userData.anim; if (!a) return;
+  const k = damp(4, dt || 0.016);
+  a.uHappy.value += (happy - a.uHappy.value) * k; a.uWave.value += (wave - a.uWave.value) * k;
+}
 function placeWaiting(an, t, dt) {
   const x = an.pos.x, z = an.pos.z;
   an.grow = Math.min(1, an.grow + dt * 2);
@@ -1841,6 +1970,8 @@ function placeWaiting(an, t, dt) {
   for (const p of players) if (p.active) { const d = p.pos.distanceTo(an.pos); if (d < nd) { nd = d; near = p; } }
   an.excite = Math.max(0, an.excite - dt);
   const excited = nd < 45 || an.excite > 0;
+  // (they wave to whoever is coming for them)
+  feel(an, excited ? 1 : 0.15, nd < 45 ? 1 : 0, dt);
   const m = an.model;
   if (near) {
     const want = Math.atan2(near.pos.x - x, near.pos.z - z);
@@ -1886,18 +2017,30 @@ function placeWaiting(an, t, dt) {
     an.pos.set(B.x + an.off[0] * c + an.off[1] * sn, B.y + B.deck, B.z - an.off[0] * sn + an.off[1] * c);
     m.position.set(an.pos.x, an.pos.y + hop, an.pos.z); m.rotation.x = m.rotation.z = 0;
   } else {
+    // A raft, a ring or a floe rides the real swell: it lifts and tips with the slope of the water under it. A helicopter
+    // hovering low over it blows it slowly round and out from under the rotor (never toward rocks or the shallows).
     const w = waveHeight(x, z, t);
-    const rock = Math.sin(t * 1.4 + an.phase);
+    const sx = (waveHeight(x + 1.2, z, t) - waveHeight(x - 1.2, z, t)) / 2.4, sz = (waveHeight(x, z + 1.2, t) - waveHeight(x, z - 1.2, t)) / 2.4;
+    for (const p of players) {
+      if (!p.active || p.vehicle !== 'heli' || p.spin < 0.3 || !dt) continue;
+      const dx = x - p.pos.x, dz = z - p.pos.z, d = Math.hypot(dx, dz), blow = (1 - clamp(d / 16, 0, 1)) * clamp(1 - (p.clearance - 2) / 16, 0, 1);
+      if (blow <= 0 || d < 0.01) continue;
+      an.phase += dt * blow * 0.9;
+      const nx = x + dx / d * blow * 0.45 * dt, nz = z + dz / d * blow * 0.45 * dt;
+      if (terrainHeight(nx, nz) < -2 && !rockNear(nx, nz, 4)) { an.pos.x = nx; an.pos.z = nz; }
+    }
+    const tipX = -Math.atan(sz * 1.3), tipZ = Math.atan(sx * 1.3), bob = Math.sin(t * 1.4 + an.phase) * 0.02;
+    an.prop.rotation.order = 'XZY';
     if (an.kind === 'ring') {
       an.pos.y = w + 0.2;
-      m.position.set(x, w - 1.0 + hop * 0.4, z);
-      an.prop.position.set(x, w + 0.15, z); an.prop.rotation.set(rock * 0.08, 0, Math.cos(t * 1.1 + an.phase) * 0.08);
+      m.position.set(an.pos.x, w - 1.0 + hop * 0.4, an.pos.z);
+      an.prop.position.set(an.pos.x, w + 0.15, an.pos.z); an.prop.rotation.set(tipX + bob, an.phase, tipZ);
     } else {
       an.pos.y = w + 0.45;
-      m.position.set(x, w + 0.3 + hop, z);
-      an.prop.position.set(x, w + 0.05, z); an.prop.rotation.set(rock * 0.06, an.phase, Math.cos(t * 1.1 + an.phase) * 0.06);
+      m.position.set(an.pos.x, w + 0.3 + hop, an.pos.z);
+      an.prop.position.set(an.pos.x, w + 0.05, an.pos.z); an.prop.rotation.set(tipX + bob, an.phase, tipZ);
     }
-    m.rotation.z = rock * 0.07;
+    m.rotation.z = tipZ * 0.6 + bob;
   }
   m.scale.setScalar(s);
   // a happy wriggle when help is close
@@ -1917,7 +2060,7 @@ function placeWaiting(an, t, dt) {
 function seatRiders(p) {
   p.cargo.forEach((an, i) => {
     an.model.position.set(SLOTS[i][0], SLOTS[i][1], SLOTS[i][2]);
-    an.model.rotation.set(0, Math.atan2(SLOTS[i][0], SLOTS[i][2]), 0);
+    an.model.rotation.set(0, p.basket.userData.facingOut ? 0 : Math.atan2(SLOTS[i][0], SLOTS[i][2]), 0);
     an.model.scale.setScalar(1.0);
   });
 }
@@ -1942,7 +2085,7 @@ function board(an, p) {
   p.incoming++;
   hoppers.push(an);
   animalVoice(an.type.id, true);
-  game.spawnT = Math.min(game.spawnT, 2 + Math.random() * 2);
+  game.spawnT = Math.min(game.spawnT, 2 + play() * 2);
   syncHud();
 }
 function setClimb(an, p) {
@@ -1959,7 +2102,8 @@ function boardPoint(p, an, out) {
   const g = p.model.group;
   g.updateMatrixWorld();      // (it has moved since the last frame was drawn)
   const side = Math.sign((an.model.position.x - g.position.x) * Math.cos(p.yaw) - (an.model.position.z - g.position.z) * Math.sin(p.yaw)) || 1;
-  if (p.vehicle === 'boat') out.set(side * 1.9, 0, -2.2); else out.set(side * 1.8, 0, 0.6);
+  // (the boat's crew take them in over either side; the flying boat's friends climb onto the step at its door, on the port side)
+  if (p.vehicle === 'boat') out.set(side * 1.9, 0, -2.2); else out.set(1.55, -1.25, -0.55);
   out.applyMatrix4(g.matrixWorld);
   return out;
 }
@@ -2021,7 +2165,8 @@ function updateBoarding(dt, t) {
     V.set(SLOTS[an.slot][0], SLOTS[an.slot][1], SLOTS[an.slot][2]).applyMatrix4(p.basket.matrixWorld);
     m.position.lerpVectors(an.from, V, e);
     m.position.y += Math.sin(k * Math.PI) * an.barc;
-    m.scale.setScalar(lerp(an.fromScale, 1.0, e));
+    // (shrinking or growing to the size they will ride at: the flying boat's door seats them a little smaller)
+    m.scale.setScalar(lerp(an.fromScale, p.basket.getWorldScale(V2).x, e));
     m.rotation.x = 0; m.rotation.z = 0;
     if (k >= 1) {
       hoppers.splice(i, 1);
@@ -2075,6 +2220,7 @@ function updateHoppers(dt, t) {
     an.model.position.lerpVectors(an.from, to, k);
     an.model.position.y += Math.sin(k * Math.PI) * an.harc;
     an.model.rotation.x = k * Math.PI * 2;
+    feel(an, 1, 1, dt);
     if (k >= 1) {
       hoppers.splice(i, 1);
       an.model.rotation.set(0, 0, 0);
@@ -2100,6 +2246,8 @@ function updateResidents(dt, t) {
     const travel = Math.min(Math.hypot(to.x - an.x, to.z - an.z) * 0.3, 1.2);
     const hop = Math.abs(Math.sin(t * (party ? 7 : 3.2) + an.phase)) * (party ? 1.5 : nd < 30 ? 0.8 : 0.3) + travel;
     an.model.position.set(an.x, BASE_Y + hop, an.z);
+    // (the friends at home wave to a pilot coming in, and everyone waves at a party)
+    feel(an, party ? 1 : 0.5, party || nd < 30 ? 1 : 0, dt);
     const want = near && nd < 60 ? Math.atan2(near.pos.x - an.x, near.pos.z - an.z) : 0;
     an.model.rotation.y += angDiff(want, an.model.rotation.y) * damp(3, dt);
   });
@@ -2171,12 +2319,13 @@ function releaseWaiting(test) {
   }
 }
 function setZone(m) {
-  const chosen = chooseMission(game.mode, game.location, m > 1 ? { id: game.zone.id, fire: game.fire } : null);
+  const chosen = chooseMission(game.mode, game.location, m > 1 ? { id: game.zone.id, fire: game.fire } : null, play);
   game.mission = m; game.zone = ZONES.find(z => z.id === chosen.id); game.fire = chosen.fire; game.fireMiss = 0; game.rescued = 0; game.goal = goalFor(m); game.saved = [];
   releaseWaiting(() => true);
   pours.length = 0;
   for (const p of players) { p.water = 0; p.routes = {}; p.attack = null; p.fireAim = null; p.aimUntil = 0; }
-  game.dispatchPending = game.fire;
+  // (the crew is never moved: a fresh outing starts at the home base, and each next mission, fire or not, starts
+  // wherever they are)
   game.spawnT = 0;
   life.setZone(game.zone);
   placeZoneBeam();
@@ -2670,6 +2819,42 @@ function placeRain(at, t) {
   rainGeo.attributes.position.needsUpdate = true;
 }
 
+// ================================================================= snow and ash
+// Each zone has weather of its own: soft snowflakes always drift down over the snowy peaks (thicker in a blow), and
+// fine grey ash floats down round the volcano. A box of flakes travels with whichever camera is drawing, as the rain does.
+const FLAKE_N = 1800, FLAKE_BOX = 70;
+const flakeGeo = new THREE.BufferGeometry(), flakePos = new Float32Array(FLAKE_N * 3), flakeSeed = new Float32Array(FLAKE_N * 4);
+for (let i = 0; i < FLAKE_N * 4; i++) flakeSeed[i] = Math.random();
+flakeGeo.setAttribute('position', new THREE.BufferAttribute(flakePos, 3).setUsage(THREE.DynamicDrawUsage));
+const flakeTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 32; const g = c.getContext('2d'), gr = g.createRadialGradient(16, 16, 0, 16, 16, 16); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.45, 'rgba(255,255,255,0.8)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 32, 32); return new THREE.CanvasTexture(c); })();
+const flakeMat = new THREE.PointsMaterial({ map: flakeTex, size: 0.32, transparent: true, depthWrite: false, opacity: 0, color: 0xffffff });
+const flakes = new THREE.Points(flakeGeo, flakeMat);
+flakes.frustumCulled = false; flakes.visible = false; flakes.renderOrder = 4;
+scene.add(flakes);
+function placeFlakes(at, t) {
+  const snow = snowAt(at.x, at.z), ash = 1 - clamp((Math.hypot(at.x - CRATER.x, at.z - CRATER.z) - 110) / 60, 0, 1);
+  const k = Math.max(snow, ash * 0.8);
+  flakes.visible = k > 0.02 && at.y < 140;
+  if (!flakes.visible) return;
+  const isSnow = snow >= ash;
+  flakeMat.opacity = (isSnow ? 0.8 : 0.55) * k * (1 - 0.5 * world.preset.night);
+  flakeMat.color.set(isSnow ? 0xffffff : 0x6e6a66);
+  flakeMat.size = isSnow ? 0.5 : 0.26;
+  windAt(at.x, at.z, t, WIND);
+  const fall = isSnow ? 1.6 + weather.now * 1.5 : 0.7, n = Math.round(FLAKE_N * (isSnow ? 0.45 + 0.55 * weather.now : 0.5));
+  flakeGeo.setDrawRange(0, n);
+  for (let i = 0; i < n; i++) {
+    const sd = i * 4, h = (flakeSeed[sd + 1] * FLAKE_BOX - t * fall * (0.7 + flakeSeed[sd + 3] * 0.6)) % FLAKE_BOX;
+    const y = at.y + FLAKE_BOX * 0.4 + (h < 0 ? h + FLAKE_BOX : h) - FLAKE_BOX;
+    // (each one wanders as it falls, and drifts with the wind)
+    const wob = Math.sin(t * 1.3 + flakeSeed[sd + 3] * 40) * 0.8, drift = (y - at.y) / fall;
+    let x = at.x + (flakeSeed[sd] - 0.5) * FLAKE_BOX - WIND.x * drift * 0.4 + wob, z = at.z + (flakeSeed[sd + 2] - 0.5) * FLAKE_BOX - WIND.z * drift * 0.4 + Math.cos(t * 1.1 + flakeSeed[sd] * 30) * 0.8;
+    x = at.x + ((((x - at.x) / FLAKE_BOX + 0.5) % 1 + 1) % 1 - 0.5) * FLAKE_BOX; z = at.z + ((((z - at.z) / FLAKE_BOX + 0.5) % 1 + 1) % 1 - 0.5) * FLAKE_BOX;
+    flakePos[i * 3] = x; flakePos[i * 3 + 1] = y; flakePos[i * 3 + 2] = z;
+  }
+  flakeGeo.attributes.position.needsUpdate = true;
+}
+
 // ================================================================= rendering
 const menuCam = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 9000);
 // how high the menu's orbit must go at angle a to sail over the wooded hill and see the base past its treetops,
@@ -2768,7 +2953,7 @@ class SplitRenderPass extends Pass {
       rt.viewport.set(vx, 0, vw, H); rt.scissor.set(vx, 0, vw, H); rt.scissorTest = true;
       renderer.setRenderTarget(rt);
       fx.material.uniforms.uScale.value = H / (2 * tanF);
-      placeRain(v.cam.position, game.t);
+      placeRain(v.cam.position, game.t); placeFlakes(v.cam.position, game.t);
       renderer.render(scene, v.cam);
     }
     rt.scissorTest = false; rt.viewport.set(0, 0, W, H); rt.scissor.set(0, 0, W, H);
@@ -2820,6 +3005,8 @@ function bump(p, kind) {
 const debug = {
   view: null,
   bumps: [{ last: {} }, { last: {} }],
+  // on to the next mission, exactly as finishing one does
+  next: () => nextMission(),
   // fly a different machine without going back to the menu
   vehicle(kind, i = 0) { setVehicle(players[i], kind); vehicleChoice[i] = kind; },
   // put a rescue where it can be looked at: a stricken boat, or a friend at landing site number i
@@ -2844,7 +3031,8 @@ const debug = {
   camp(i) { const site = SITES[i], c = campSpot(site); site.busy = true; return addWaiting('camp', c.x, c.z, { site }); },
   // a fire in a zone ('home', 'forest', 'harbour', ...)
   fire(id = 'home') { return spawnFire(ZONES.find(Z => Z.id === id)); },
-  run(seconds = 0.1) { for (let i = 0; i < seconds * 30; i++) { last = performance.now() - 33; tick(performance.now()); } },
+  // (frame: how long each frame takes, in seconds: 1/30 by default; 0.1 plays it as a slow laptop would)
+  run(seconds = 0.1, frame = 1 / 30) { for (let i = 0; i < seconds / frame - 1e-6; i++) tick(performance.now(), frame); },
   // milliseconds a frame really takes to draw (reading a pixel back makes the graphics card finish first)
   time(frames = 40) {
     const gl = renderer.getContext(), px = new Uint8Array(4), t0 = performance.now();
@@ -2865,12 +3053,32 @@ players[0].active = true;   // red sits on its pad behind the menu
 
 let last = performance.now(), simT = 0;
 let lastFrame = performance.now();
-function frame(now) { requestAnimationFrame(frame); watchFrames(now - lastFrame); lastFrame = now; tick(now); }
-function tick(now) {
-  const dt = Math.min((now - last) / 1000, 0.05); last = now;
+// (one bad frame must never freeze the game for good: the error is noted, once per kind, for the checks to find, and
+// the next frame goes on)
+const problemsSeen = new Set();
+function frame(now) {
+  requestAnimationFrame(frame); watchFrames(now - lastFrame); lastFrame = now;
+  try { tick(now); } catch (e) {
+    const key = String(e && e.message);
+    if (!problemsSeen.has(key)) { problemsSeen.add(key); console.error(e); (window.__gameProblems ||= []).push({ what: 'frame error', message: key, stack: e && e.stack }); }
+  }
+}
+// The game moves on in equal small steps of at most 1/60 s, however long the frame was: a slow laptop's frame is
+// worked out in two or three steps, so the springs, the swinging basket and the autopilots behave just as they do
+// on a fast machine (and a long stall is capped, so nothing leaps). Every frame still moves on by exactly its own
+// time, so the picture never judders on a fast screen.
+const STEP = 1 / 60;
+function tick(now, forced) {
+  const frameDt = forced || Math.min((now - last) / 1000, 0.1); last = now;
+  const steps = Math.max(1, Math.ceil(frameDt / STEP - 1e-6));
+  for (let i = 0; i < steps; i++) simulate(frameDt / steps);
+  present(frameDt);
+}
+function simulate(dt) {
   const playing = game.state === 'play';
   if (!game.paused) simT += dt;
   const t = simT; game.t = t;
+  tickFriends(t);
 
   if (!game.paused) {
     weather.now += (WEATHERS[weather.idx].wind - weather.now) * damp(0.35, dt); weather.dir += dt * 0.004;
@@ -2900,7 +3108,7 @@ function tick(now) {
     // animals
     if (game.started) {
       game.spawnT -= dt;
-      if (waiting.length < maxWaiting() && game.spawnT <= 0 && game.celebrate <= 0) { spawnAnimal(false); game.spawnT = 4 + Math.random() * 4; }
+      if (waiting.length < maxWaiting() && game.spawnT <= 0 && game.celebrate <= 0) { spawnAnimal(false); game.spawnT = 4 + play() * 4; }
     }
     updateBoatRescue(dt, t);
     updateFires(dt, t);
@@ -2911,6 +3119,7 @@ function tick(now) {
     updateHoppers(dt, t);
     updateResidents(dt, t);
     life.update(dt, t, activePlayers());
+    traffic.update(dt, t, activePlayers());
 
     // celebration
     if (game.celebrate > 0) {
@@ -2935,7 +3144,9 @@ function tick(now) {
       const u = world.waterUniforms;
       if (!p.active) { u.uHeli.value[i].w = 0; u.uLamp.value[i].w = 0; audio.setEngine(i, p.vehicle, 0, 0, 0, 0, false); return; }
       const alt = p.pos.y - (p.vehicle === 'plane' ? PLANE_FLOAT : p.vehicle === 'boat' ? 0 : SKID);
-      u.uHeli.value[i].set(p.pos.x, p.pos.y, p.pos.z, p.landed || p.vehicle === 'boat' ? 0 : clamp(1 - (alt - 1) / 24, 0, 1) * p.spin * (p.vehicle === 'plane' ? 0.25 : 1));
+      // (the rotor's wash is felt by what is under it: the water, or the treetops)
+      const washAlt = p.vehicle === 'heli' ? Math.max(0, p.clearance - (p.overLand ? canopyAt(p.pos.x, p.pos.z) : 0)) : alt;
+      u.uHeli.value[i].set(p.pos.x, p.pos.y, p.pos.z, p.landed || p.vehicle === 'boat' ? 0 : clamp(1 - (washAlt - 1) / 24, 0, 1) * p.spin * (p.vehicle === 'plane' ? 0.25 : 1));
       const off = alt * 0.53;
       u.uLamp.value[i].set(p.pos.x + Math.sin(p.yaw) * off, p.pos.z + Math.cos(p.yaw) * off, 3 + alt * 0.42, world.preset.night >= 1 ? clamp(1.1 - alt / 70, 0, 1) * 0.55 : 0);
       const load = clamp(Math.abs(p.input.l) * 0.6 + Math.hypot(p.vel.x, p.vel.z) / MAX_SPEED * 0.6, 0, 1);
@@ -2944,12 +3155,30 @@ function tick(now) {
       const work = p.vehicle === 'boat' ? clamp(Math.abs(p.fs) / 30, 0, 1) : p.vehicle === 'plane' ? clamp(p.fs / 36, 0, 1) : load;
       audio.setEngine(i, p.vehicle, p.spin, work, air, two ? (i ? 0.55 : -0.55) : 0, playing);
     });
+    // the wakes: every fifth of a second a boat (or the seaplane on the water) going along drops a point of churned water
+    players.forEach((p, i) => {
+      const trail = p.trail || (p.trail = []);
+      p.trailT = (p.trailT || 0) - dt;
+      const sp = Math.abs(p.fs || 0), onWater = p.active && (p.vehicle === 'boat' || (p.vehicle === 'plane' && p.afloat));
+      if (onWater && sp > 3 && p.trailT <= 0) {
+        p.trailT = 0.2;
+        const back = p.vehicle === 'boat' ? 3.6 : 2.5;
+        trail.push({ x: p.pos.x - Math.sin(p.yaw) * back, z: p.pos.z - Math.cos(p.yaw) * back, t: t, s: clamp(sp / 22, 0.25, 1) });
+      }
+      while (trail.length && (trail.length > WAKE_N / 2 || t - trail[0].t > 7)) trail.shift();
+      for (let k = 0; k < WAKE_N / 2; k++) {
+        const pt = trail[k], u = wakeUniform.value[i * WAKE_N / 2 + k];
+        if (pt) u.set(pt.x, pt.z, t - pt.t, pt.s); else u.w = 0;
+      }
+    });
     // the sea, louder the lower the pilots are; wind and rain with the weather; the fire's crackle close to one
     let low = 1e9;
     for (const p of activePlayers()) low = Math.min(low, p.vehicle === 'boat' ? 0 : Math.max(0, p.pos.y - 2));
     audio.setAmbient(playing ? clamp(1.1 - low / 60, 0.3, 1) : 0.5, weather.now, clamp((weather.now - 0.6) / 0.35, 0, 1), playing ? clamp(1 - fireNear / 110, 0, 1) : 0);
   }
-
+}
+function present(dt) {
+  const playing = game.state === 'play';
   // menu camera: slow orbit of the base
   if (!playing) {
     const a = performance.now() / 1000 * 0.07 + 0.9;
@@ -2963,13 +3192,21 @@ function tick(now) {
   if (debug.noDraw) return;          // (soak tests play the game without drawing it)
   composer.render();
 }
-setQuality(firstQuality());
+// (the checks always run at the same detail, so a seed plays out the same on every computer: what is near enough to
+// show, and the effects drawing from the shared random numbers, would otherwise differ with the graphics card)
+setQuality(TEST ? 3 : firstQuality());
+if (TEST) quality.mode = 'fast';
 // Every shader is handed to the graphics driver before the first frame and compiled side by side where the browser
 // allows it, instead of one after another inside the first frame with the page frozen for seconds. They are compiled
 // for the composer's buffer, which is what the scene is really drawn into, and the full-screen passes' shaders come
 // along through a scene of stand-in quads wearing them.
 const postScene = new THREE.Scene(), quad = new THREE.PlaneGeometry(2, 2);
 for (const pass of composer.passes) for (const v of Object.values(pass)) for (const m of [v].flat()) if (m && m.isShaderMaterial) postScene.add(new THREE.Mesh(quad, m));
+if (TEST) {
+  // (a test page draws nothing and plans everything at once, so a seed always plays out the same way)
+  debug.noDraw = true;
+  traffic.plan(true);
+} else {
 renderer.setRenderTarget(composer.renderTarget1);
 const warmUp = Promise.all([renderer.compileAsync(scene, menuCam), renderer.compileAsync(postScene, menuCam)]);
 renderer.setRenderTarget(null);
@@ -2981,7 +3218,9 @@ warmUp.catch(() => {}).then(() => {
   composer.render();
   requestAnimationFrame(frame);
   requestAnimationFrame(() => { canvas.classList.add('ready'); $('#loading').hidden = true; });
+  traffic.plan();
 });
+}
 
 // tiny debug handle (also handy for automated checks)
-window.__game = { nav, navMs, life, terrainHeight, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };
+window.__game = { TEST, PLANE_FLOAT, DOCK, nav, navMs, life, traffic, terrainHeight, waveHeight, sea, ISLETS, HUTS, PADS, WORLD_R, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };

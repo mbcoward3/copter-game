@@ -18,68 +18,46 @@ export function createLife(scene, world, fx) {
     return true;
   };
   // ...and all the way along a swim of len metres from (x, z) heading (dx, dz)
-  // (and well away from the base's jetty, which runs out from (0, 36) to about (0, 54) and is in nobody's OBSTACLES)
-  const offJetty = (x, z, m) => Math.hypot(x, z - Math.min(54, Math.max(36, z))) > m + 14;
+  // (and well away from the base's jetty, which runs out from (0, 36) to (0, 67))
+  const offJetty = (x, z, m) => Math.hypot(x - 0.9, z - Math.min(67, Math.max(36, z))) > m + 14;      // (the pier: x 0.9, z 36 to 67)
   const clearSwim = (x, z, dx, dz, len, m, deep) => { for (let s = 0; s <= len; s += 3) if (!open(x + dx * s, z + dz * s, m, deep) || !offJetty(x + dx * s, z + dz * s, m)) return false; return true; };
 
   // ------------------------------------------------ patrol boat
   const boat = model('World_Boat2');       // the trawler SEA OTTER, bow toward +Z
   boat.scale.setScalar(1.3); boat.rotation.order = 'YXZ'; boat.userData.farHide = 600;
   scene.add(boat);
-  const boatState = { a: 0.6, near: new Set() };
-  // her beat: a loop round the base that keeps to deep water, worked out once from the sea bed (and the stacks, arch
-  // feet, huts and lighthouse, which createWorld has put in OBSTACLES by now). She goes round the arch, not under it.
-  const BEAT = 180, beat = new Float32Array(BEAT).fill(128);       // (a plain ring, should no loop be found)
-  {
-    const R0 = 64, RS = 2, RN = 64, A = i => (i / BEAT) * 6.283;
-    // a chart of sea room round the base: on a 4 m grid, how far it is to water shallower than 6 m or to a rock
-    const G = 4, GN = 108, GH = GN * G / 2, chart = new Float32Array(GN * GN);
-    for (let j = 0; j < GN; j++) for (let i = 0; i < GN; i++) {
-      const x = (i + 0.5) * G - GH, z = (j + 0.5) * G - GH;
-      chart[j * GN + i] = terrainHeight(x, z) > -6 || OBSTACLES.some(o => (x - o.x) ** 2 + (z - o.z) ** 2 < o.r * o.r) ? 0 : 1e9;
+  const boatState = { s: 0, near: new Set(), path: null, lens: null, total: 0 };
+  // Her beat: a loop round the base through a dozen points about 128 m out, each leg planned over the water chart
+  // (nav.js) with room to spare, so she can never cut across a sandbar or a point of land. main.js hands over the
+  // charts once they exist; until then she waits at her first point.
+  life.setRoute = nav => {
+    const pts = [];
+    for (let k = 0; k < 12; k++) {
+      const a = k / 12 * 6.283 + 0.6, x = Math.cos(a) * 128, z = Math.sin(a) * 128;
+      const o = nav.water.open(x, z, 14, 50) || nav.water.open(x, z, 9, 80);
+      if (o) pts.push(o);
     }
-    for (const dir of [1, -1]) for (let j = dir > 0 ? 0 : GN - 1; j >= 0 && j < GN; j += dir) for (let i = dir > 0 ? 0 : GN - 1; i >= 0 && i < GN; i += dir) {
-      let v = chart[j * GN + i];
-      const pj = j - dir; if (pj >= 0 && pj < GN) for (let di = -1; di <= 1; di++) { const pi = i + di; if (pi >= 0 && pi < GN) v = Math.min(v, chart[pj * GN + pi] + (di ? G * 1.414 : G)); }
-      const pi = i - dir; if (pi >= 0 && pi < GN) v = Math.min(v, chart[j * GN + pi] + G);
-      chart[j * GN + i] = v;
+    const path = [];
+    for (let k = 0; k < pts.length; k++) {
+      const leg = nav.water.route(pts[k], pts[(k + 1) % pts.length], 10, 40) || nav.water.route(pts[k], pts[(k + 1) % pts.length], 7, 60);
+      if (!leg) continue;
+      path.push(...(path.length ? leg.slice(1) : leg));
     }
-    // how much sea room she has at angle a, radius q (read off the chart a little pessimistically, and 24 m is plenty)
-    const room = (a, q) => {
-      const u = (Math.cos(a) * q + GH) / G - 0.5, w = (Math.sin(a) * q + GH) / G - 0.5, i = Math.floor(u), j = Math.floor(w), fu = u - i, fw = w - j;
-      if (i < 0 || j < 0 || i >= GN - 1 || j >= GN - 1) return 0;
-      const c = (ii, jj) => chart[jj * GN + ii];
-      return Math.min(24, (c(i, j) * (1 - fu) + c(i + 1, j) * fu) * (1 - fw) + (c(i, j + 1) * (1 - fu) + c(i + 1, j + 1) * fu) * fw - 3);
-    };
-    const rm = []; for (let i = 0; i < BEAT; i++) { rm[i] = new Float32Array(RN); for (let j = 0; j < RN; j++) rm[i][j] = room(A(i), R0 + j * RS); }
-    // the cheapest closed loop through the clear radii: steady turns, plenty of sea room (she squeezes through a
-    // gap only where she must), and kept near 128 m where the base can see her
-    let best = Infinity;
-    for (let j0 = 0; j0 < RN; j0 += 4) if (rm[0][j0] >= 10) {
-      let cost = new Float64Array(RN).fill(Infinity); cost[j0] = 0;
-      const from = [];
-      for (let i = 1; i <= BEAT; i++) {
-        const nc = new Float64Array(RN).fill(Infinity), fr = new Int8Array(RN), row = rm[i % BEAT];
-        for (let j = 0; j < RN; j++) if (row[j] >= 10) for (let d = -6; d <= 6; d++) {
-          const c = cost[j + d] + d * d + (24 - row[j]) * 1.5 + 0.004 * (R0 + j * RS - 128) ** 2;
-          if (c < nc[j]) { nc[j] = c; fr[j] = d; }
-        }
-        cost = nc; from.push(fr);
-      }
-      if (cost[j0] < best) { best = cost[j0]; for (let i = BEAT, j = j0; i > 0; i--) { beat[i % BEAT] = R0 + j * RS; j += from[i - 1][j]; } }
-    }
-    // smooth it out, but never into less sea room than the rough line had (or 14 m, if that is less)
-    for (let pass = 0; pass < 60; pass++) { const c = beat.slice(); for (let i = 0; i < BEAT; i++) {
-      const q = (c[(i + BEAT - 1) % BEAT] + c[i] * 2 + c[(i + 1) % BEAT]) / 4;
-      if (room(A(i), q) >= Math.min(14, room(A(i), c[i]))) beat[i] = q;
-    } }
-  }
-  // (a Catmull-Rom curve through the points, so her heading swings round smoothly rather than in jerks at each one)
-  const beatAt = a => {
-    const f = (((a / 6.283) % 1) + 1) % 1 * BEAT, i = Math.floor(f), u = f - i;
-    const p0 = beat[(i + BEAT - 1) % BEAT], p1 = beat[i], p2 = beat[(i + 1) % BEAT], p3 = beat[(i + 2) % BEAT];
-    return p1 + 0.5 * u * (p2 - p0 + u * (2 * p0 - 5 * p1 + 4 * p2 - p3 + u * (3 * (p1 - p2) + p3 - p0)));
+    if (path.length < 3) return;
+    const lens = [0];
+    for (let i = 1; i < path.length; i++) lens.push(lens[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].z - path[i - 1].z));
+    Object.assign(boatState, { path, lens, total: lens[lens.length - 1], s: 0 });
   };
+  // a point s metres along her loop
+  const beatPt = (s, out) => {
+    const L = boatState.lens, P = boatState.path;
+    s = ((s % boatState.total) + boatState.total) % boatState.total;
+    let i = 1; while (i < L.length - 1 && L[i] < s) i++;
+    const k = (s - L[i - 1]) / Math.max(L[i] - L[i - 1], 0.01);
+    out.x = P[i - 1].x + (P[i].x - P[i - 1].x) * k; out.z = P[i - 1].z + (P[i].z - P[i - 1].z) * k;
+    return out;
+  };
+  const BP = { x: 0, z: 0 }, BA = { x: 0, z: 0 }, BS = { x: 0, z: 0 };
 
   // ------------------------------------------------ seagulls
   const gulls = [];
@@ -168,12 +146,14 @@ export function createLife(scene, world, fx) {
       b.m.position.y = h - 0.15; b.m.rotation.set((waveHeight(b.x + Math.sin(b.yaw) * 4, b.z + Math.cos(b.yaw) * 4, t) - h) * -0.15, b.yaw, Math.sin(t * 0.9 + b.x) * 0.03);
     }
     // boat
-    boatState.a += dt * 5.8 / beatAt(boatState.a);          // a steady 5.8 m/s however far out her beat swings
-    const br = beatAt(boatState.a), bx = Math.cos(boatState.a) * br, bz = Math.sin(boatState.a) * br;
-    // she points from her stern (6 m back along the beat) to her bow (6 m on), so she swings through a bend, not round a pin
-    const ab = boatState.a + 6 / br, as = boatState.a - 6 / br, rb = beatAt(ab), rs = beatAt(as);
-    let fx_ = Math.cos(ab) * rb - Math.cos(as) * rs, fz_ = Math.sin(ab) * rb - Math.sin(as) * rs;
-    { const fl = Math.hypot(fx_, fz_); fx_ /= fl; fz_ /= fl; }
+    // (a steady 5.8 m/s along her loop; she points from 6 m behind to 6 m ahead, so she swings through a bend smoothly)
+    if (!boatState.path) { boat.visible = false; } else {
+    boat.visible = true;
+    boatState.s += dt * 5.8;
+    beatPt(boatState.s, BP); beatPt(boatState.s + 6, BA); beatPt(boatState.s - 6, BS);
+    const bx = BP.x, bz = BP.z;
+    let fx_ = BA.x - BS.x, fz_ = BA.z - BS.z;
+    { const fl = Math.hypot(fx_, fz_) || 1; fx_ /= fl; fz_ /= fl; }
     const h0 = waveHeight(bx, bz, t), hf = waveHeight(bx + fx_ * 5, bz + fz_ * 5, t), hs = waveHeight(bx + fz_ * 2.5, bz - fx_ * 2.5, t);
     boat.position.set(bx, h0 - 0.1, bz);
     boat.rotation.set(-(hf - h0) / 5 * 0.8, Math.atan2(fx_, fz_), (hs - h0) / 2.5 * 0.5);
@@ -183,6 +163,7 @@ export function createLife(scene, world, fx) {
       const d = Math.hypot(p.pos.x - bx, p.pos.z - bz);
       if (!boatState.near.has(p) && d < 32 && p.pos.y < 40) { boatState.near.add(p); sfx.shipHorn(); fx.emoji('👋', bx, h0 + 8, bz, 3); }
       else if (boatState.near.has(p) && (d > 55 || p.pos.y > 50)) boatState.near.delete(p);
+    }
     }
 
     // gulls

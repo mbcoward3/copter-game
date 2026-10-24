@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { geo, look, model, modelInfo, groundTex } from './assets.js';
+import { buildReef } from './reef.js';
 
 // ---------------------------------------------------------------- helpers
 export function mulberry(seed) {
@@ -26,13 +27,36 @@ function vnoise(x, z) {
 export function fbm(x, z) {
   return vnoise(x, z) * 0.55 + vnoise(x * 2.1 + 9.2, z * 2.1 - 4.7) * 0.3 + vnoise(x * 4.3 - 2.1, z * 4.3 + 7.9) * 0.15;
 }
-// sharp crests: what makes a hill read as a mountain
-function ridged(x, z) {
-  let total = 0, weight = 0.55, scale = 1;
-  for (let i = 0; i < 3; i++) { total += weight * (1 - Math.abs(2 * vnoise(x * scale, z * scale) - 1)); weight *= 0.5; scale *= 2.1; }
-  return total;
-}
 const smooth = t => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+// Mountain crests: ridged noise where each finer layer only shows where the layer before it is already high, so the
+// tops come out craggy and the valleys between them smooth. Every layer is turned, so no crest lines up with the grid.
+const ROT = [0.0, 0.83, 1.71, 2.62, 3.49, 4.37].map(a => [Math.cos(a), Math.sin(a)]);
+// gradient noise, 0..1: unlike vnoise its ridges do not crease along the grid's squares and diagonals
+function gnoise(x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
+  const g = (i, j, px, pz) => { const a = hash2(i, j) * 6.2832; return Math.cos(a) * px + Math.sin(a) * pz; };
+  const ux = fx * fx * fx * (fx * (fx * 6 - 15) + 10), uz = fz * fz * fz * (fz * (fz * 6 - 15) + 10);
+  const a = g(ix, iz, fx, fz), b = g(ix + 1, iz, fx - 1, fz), c = g(ix, iz + 1, fx, fz - 1), d = g(ix + 1, iz + 1, fx - 1, fz - 1);
+  return 0.5 + 0.75 * (a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz);
+}
+function crags(x, z, layers = 5) {
+  let sum = 0, amp = 1, f = 1, w = 1, norm = 0;
+  for (let i = 0; i < layers; i++) {
+    const [c, s] = ROT[i], px = (x * c - z * s) * f + i * 17.3, pz = (x * s + z * c) * f - i * 9.1;
+    let n = Math.max(0, 1 - Math.abs(2 * gnoise(px, pz) - 1));
+    n *= n * w; w = Math.min(1, n * 2.2);
+    sum += n * amp; norm += amp; amp *= 0.52; f *= 2.07;
+  }
+  return sum / norm;
+}
+// Spurs and gullies running down a slope from (cx, cz): 1 along a spur, 0 down the middle of a gully. k is about how
+// many go round. Worked out from the direction round the peak, so each one runs straight downhill, wandering a little.
+function spurs(x, z, cx, cz, k, seed) {
+  const dx = x - cx, dz = z - cz, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d;
+  const wig = (vnoise(x * 0.04 + seed, z * 0.04 - seed) - 0.5) * 0.9;
+  const n = gnoise(ux * k + d * 0.006 + wig + seed, uz * k - d * 0.004 - wig) * 0.7 + gnoise(ux * k * 2.3 - seed, uz * k * 2.3 + d * 0.01) * 0.3;
+  return Math.max(0, 1 - Math.abs(2 * n - 1));
+}
 
 // ---------------------------------------------------------------- layout
 // cameras that see the scene directly also see this layer; the water's mirror camera does not
@@ -119,7 +143,7 @@ ISLANDS.push(
   lobe(128, -548, 52, 22, { ridge: 40, pow: 1.8, forest: 0.5, pine: 1, palms: 0, treeLine: 12 }),
   // the volcano: a cone with a crater on top, black-sand coves and terraces on its slopes
   lobe(CRATER.x, CRATER.z, 82, 5, { cone: { h: 62, crater: CRATER.r, deep: 10 }, coast: 0.2, forest: 0.4, palms: 0.12, treeLine: 13, cliff: 6, cliffDir: [0.8, 0.6],
-    dents: [{ x: 252, z: 345, r: 24, y: -6 }], flats: [{ x: 346, z: 360, r: 9, site: 'Lava lookout', pad: true }, { x: 362, z: 448, r: 9, site: 'Black sand camp' }] }),
+    dents: [{ x: 252, z: 345, r: 24, y: -6 }], flats: [{ x: 346, z: 360, r: 9, site: 'Lava lookout', pad: true }, { x: 362, z: 448, r: 9, y: 2.5, site: 'Black sand camp' }] }),
 );
 // tiny sandbars where friends get stranded
 export const ISLETS = [
@@ -128,7 +152,8 @@ export const ISLETS = [
   { x: 120, z: -262 }, { x: -110, z: 5 },
 ];
 for (const I of ISLANDS) if (!I.bar) I.reach = I.r * (1 + I.coast) * 1.34;
-for (const s of ISLETS) ISLANDS.push({ x: s.x, z: s.z, r: 17, h: 3.2, islet: true, reach: 17, forest: 0, palms: 0.2 });
+const isletShape = (x, z) => { const a = hash2(Math.round(x), Math.round(z)) * Math.PI, st = 1.15 + hash2(Math.round(z), Math.round(x)) * 0.9; return { st, ca: Math.cos(a), sa: Math.sin(a), sx: x * 0.013 + 3.1, sz: z * 0.013 - 1.7 }; };
+for (const s of ISLETS) ISLANDS.push({ x: s.x, z: s.z, r: 17, h: 2.7, islet: true, reach: 17 * 1.6 + 2, forest: 0, palms: 0.2, ...isletShape(s.x, s.z) });
 // sandbars and cays out in the zones (the reef's cays, the volcano's black-sand bars, the breakwater's head)
 export const ZONE_ISLETS = [
   { x: -210, z: 352, zone: 'reef' }, { x: -300, z: 282, zone: 'reef' }, { x: -392, z: 300, zone: 'reef' },
@@ -136,7 +161,7 @@ export const ZONE_ISLETS = [
   { x: -470, z: -100, zone: 'forest' },
   { x: 386, z: -178, zone: 'harbour', r: 8, head: true },
 ];
-for (const s of ZONE_ISLETS) ISLANDS.push({ x: s.x, z: s.z, r: s.r || 17, h: s.head ? 2.6 : 3.2, islet: true, reach: s.r || 17, forest: 0, palms: s.head ? 0 : 0.2 });
+for (const s of ZONE_ISLETS) ISLANDS.push({ x: s.x, z: s.z, r: s.r || 17, h: s.head ? 2.6 : 2.7, islet: true, reach: s.head ? s.r : 17 * 1.6 + 2, forest: 0, palms: s.head ? 0 : 0.2, ...(s.head ? {} : isletShape(s.x, s.z)) });
 // which islands can reach each 40 m square of the map, so a height is worked out from the few nearby, not all of them
 const BK = 40, BKN = Math.ceil(TSPAN / BK) + 2, BKH = (BKN * BK) / 2, buckets = Array.from({ length: BKN * BKN }, () => []);
 for (const I of ISLANDS) {
@@ -159,6 +184,9 @@ export const OBSTACLES = [
 // (wr, where there is one, is how far it reaches out at the waterline: what a hull keeps clear of)
 // the boulders in the shallows that break the surface, which a hull must also keep clear of
 export const SHOALS = [];
+// the piers and jetties, as their real footprints (a line from a to b, w either side of it), for the water charts and the
+// checks: worked out from the jetty model where each is placed (createWorld fills it)
+export const PIERS = [];
 
 function islandHeight(I, x, z, natural) {
   const dx = x - I.x, dz = z - I.z, d2 = dx * dx + dz * dz;
@@ -171,7 +199,20 @@ function islandHeight(I, x, z, natural) {
   }
   const dist = Math.sqrt(d2);
   // (a sandbar has a little level top to stand on)
-  if (I.islet) { const d = Math.max(0, dist - 3.5) / (I.r - 3.5), s = 1 - d * d * (3 - 2 * d); return SEA_FLOOR + (I.h - SEA_FLOOR) * Math.pow(s, 0.8); }
+  if (I.islet) {
+    // (each one drawn out a different way, its edge wandering, its top in little dunes; the middle stays level)
+    let e = dist;
+    if (I.st) {
+      const u = (dx * I.ca + dz * I.sa) / Math.sqrt(I.st), v = (-dx * I.sa + dz * I.ca) * Math.sqrt(I.st);
+      e = Math.hypot(u, v) * (1 + 0.32 * (fbm(x * 0.045 + I.sx, z * 0.045 + I.sz) - 0.5));
+      e = Math.min(e, dist * 1.6 + 2);
+    }
+    if (!I.st) { const d = Math.max(0, dist - 3.5) / (I.r - 3.5), s = 1 - d * d * (3 - 2 * d); return SEA_FLOOR + (I.h - SEA_FLOOR) * Math.pow(Math.max(s, 0), 0.8); }
+    // a cay: a level crown of sand, a long gentle beach down to the water 12 m out, then a shelf into deep water
+    const R0 = 12, dune = (fbm(x * 0.16 + I.sz, z * 0.16) - 0.5) * 0.8 * (1 - smooth((e - 3) / 6));
+    if (e < R0) return I.h * Math.pow(1 - smooth((e - 3) / (R0 - 3)), 0.75) + dune;
+    return SEA_FLOOR * smooth((e - R0) / 11);
+  }
   const wob = (fbm(x * 0.017 + I.sx, z * 0.017 + I.sz) - 0.5) * 2 * I.coast;
   const d = dist / (I.r * (1 + wob));
   let h;
@@ -180,13 +221,26 @@ function islandHeight(I, x, z, natural) {
     const u = 1 - d;
     const rise = Math.pow(smooth((u - 0.1) / 0.9), I.pow);
     let hill = I.h * rise * (0.65 + 0.7 * fbm(x * 0.02 + I.sz, z * 0.02 + I.sx));
-    if (I.ridge) hill += I.ridge * Math.pow(rise, 1.5) * Math.pow(ridged(x * 0.015 + I.sx, z * 0.015 + I.sz), 1.7) * 1.5;
+    if (I.ridge) {
+      // a range: craggy crests (pushed about so they do not run in straight lines), with spurs and gullies carved down
+      // the middle slopes, where a mountain shows them most
+      const wx = x + (fbm(x * 0.008 + I.sx, z * 0.008) - 0.5) * 44, wz = z + (fbm(x * 0.008, z * 0.008 + I.sz) - 0.5) * 44;
+      const massif = Math.pow(rise, 1.25) * (0.3 + 0.7 * crags(wx * 0.013 + I.sx, wz * 0.013 + I.sz));
+      const band = smooth(rise / 0.3) * (1 - smooth((rise - 0.7) / 0.3));
+      hill += I.ridge * (massif * 0.9 + band * 0.32 * (spurs(x, z, I.x, I.z, 4.5, I.sx) - 0.5));
+    }
     h = 2.2 * smooth(u / 0.16) + hill + (fbm(x * 0.09, z * 0.09) - 0.5) * 1.4 * smooth(u / 0.25);
     if (I.cone) {
-      // a volcano: a cone rising to a rim, gullied down its sides, with a bowl of a crater inside the rim
-      const c = I.cone, span = I.r * 0.95, rim = c.h * Math.pow(1 - c.crater / span, 1.7);
-      let k = Math.min(rim, c.h * Math.pow(Math.max(0, 1 - dist / span), 1.7));
-      k *= 0.86 + 0.28 * ridged(x * 0.05 + I.sx, z * 0.05 + I.sz) * smooth((dist - c.crater) / 10);
+      // a volcano: a cone (not quite round) rising to a lipped rim, its sides scored by gullies that are deepest on the
+      // upper slopes, rough with old lava lower down, and a bowl of a crater inside the rim
+      const c = I.cone, ux = dx / (dist || 1), uz = dz / (dist || 1);
+      const span = I.r * 0.95 * (1 + 0.3 * (vnoise(ux * 1.6 + I.sx, uz * 1.6 + I.sz) - 0.5));
+      const q = Math.max(0, 1 - dist / span), rim = c.h * Math.pow(1 - c.crater / span, 1.7);
+      let k = Math.min(rim, c.h * Math.pow(q, 1.7));
+      k += 2.6 * Math.exp(-(((dist - c.crater - 2.5) / 3.5) ** 2));
+      const slopes = smooth((dist - c.crater - 3) / 8) * smooth(q / 0.4);
+      k -= c.h * 0.1 * (Math.pow(1 - spurs(x, z, I.x, I.z, 4.5, I.sx), 2.2) + 0.6 * Math.pow(1 - spurs(x, z, I.x, I.z, 9, I.sz), 3)) * slopes;
+      k += (crags(x * 0.03 + I.sx, z * 0.03 + I.sz, 3) - 0.35) * 4 * slopes;
       if (dist < c.crater) k -= c.deep * (1 - (dist / c.crater) ** 2);
       h += k;
     }
@@ -213,12 +267,33 @@ for (const I of ISLANDS) for (const F of I.flats || []) {
   }
   if (F.site) SITES.push({ x: F.x, z: F.z, y: F.y, r: F.r, name: F.site, pad: !!F.pad });
 }
-export function terrainHeight(x, z) {
+function shapedHeight(x, z) {
   const i = Math.floor((x + BKH) / BK), j = Math.floor((z + BKH) / BK);
   if (i < 0 || j < 0 || i >= BKN || j >= BKN) return SEA_FLOOR;
   let h = SEA_FLOOR;
   for (const I of buckets[j * BKN + i]) { const ih = islandHeight(I, x, z); if (ih > h) h = ih; }
   return h;
+}
+// The land's heights are worked out once, on the same grid the ground is drawn from (a point every TSTEP metres), and
+// everything that asks for a height afterwards reads it off the same two triangles per square the ground mesh draws.
+// So the shapes can be as detailed as we like at no cost during play, and what is drawn is exactly what is touched.
+export const TN = TSPAN / TSTEP, TR = TN + 1;
+let HG = null;
+export function heightGrid() {
+  if (!HG) {
+    HG = new Float32Array(TR * TR);
+    for (let j = 0; j < TR; j++) for (let i = 0; i < TR; i++) HG[j * TR + i] = shapedHeight(i * TSTEP - TSPAN / 2, j * TSTEP - TSPAN / 2);
+  }
+  return HG;
+}
+export function terrainHeight(x, z) {
+  const H = HG || heightGrid();
+  const fx = (x + TSPAN / 2) / TSTEP, fz = (z + TSPAN / 2) / TSTEP;
+  if (!(fx >= 0 && fz >= 0 && fx < TN && fz < TN)) return SEA_FLOOR;
+  const i = fx | 0, j = fz | 0, u = fx - i, v = fz - j, a = j * TR + i;
+  // (the mesh splits each square from its (i, j+1) corner to its (i+1, j) corner)
+  return u + v <= 1 ? H[a] + u * (H[a + 1] - H[a]) + v * (H[a + TR] - H[a])
+    : H[a + TR + 1] + (1 - u) * (H[a + TR] - H[a + TR + 1]) + (1 - v) * (H[a + 1] - H[a + TR + 1]);
 }
 
 // how far the treetops stand above the ground, so helicopters cruise over the forest and not through it
@@ -393,6 +468,11 @@ void main(){
 }`;
 
 // ---------------------------------------------------------------- water
+// where each pilot's rotor is blowing (xyz, strength): ripples the water, and bends the trees and palms under it
+export const washUniform = { value: [new THREE.Vector4(), new THREE.Vector4()] };
+// points along the wakes the boats and the seaplane leave on the water: x, z, age in seconds, strength (main.js fills them)
+export const WAKE_N = 32;
+export const wakeUniform = { value: Array.from({ length: WAKE_N }, () => new THREE.Vector4()) };
 const NW = WAVES.length;
 const WATER_VERT = /* glsl */`
 uniform float uTime, uSwell;
@@ -404,15 +484,22 @@ varying float vCrest;
 void main(){
   vec4 wp = modelMatrix * vec4(position, 1.0);
   float fade = (1.0 - smoothstep(900.0, 2000.0, length(wp.xz))) * uSwell;
-  float y = 0.0; vec2 dd = vec2(0.0);
+  // in a blow the water gathers toward each crest (Gerstner waves), so the crests stand up peaked and the troughs
+  // run long and flat, instead of a fair day's smooth rounded swell
+  float steep = 0.85 * clamp((uSwell - 1.1) / 0.8, 0.0, 1.0) * (1.0 - smoothstep(900.0, 2000.0, length(wp.xz)));
+  float y = 0.0, J = 1.0; vec2 dd = vec2(0.0), hx = vec2(0.0);
   for (int i = 0; i < ${NW}; i++) {
     float ph = uWaves[i].z * dot(uWaves[i].xy, wp.xz) - uOmega[i] * uTime;
     y += uWaves[i].w * sin(ph);
     dd += uWaves[i].xy * (uWaves[i].z * uWaves[i].w * cos(ph));
+    float H = steep / (uWaves[i].z * ${NW}.0);
+    hx += uWaves[i].xy * H * cos(ph);
+    J -= uWaves[i].z * H * sin(ph);
   }
+  wp.xz += hx;
   wp.y += y * fade;
-  vCrest = y * fade;
-  vBigN = vec3(-dd.x * fade, 1.0, -dd.y * fade);
+  vCrest = y * fade + (1.0 - J) * 1.4 * steep;
+  vBigN = vec3(-dd.x * fade, 1.0, -dd.y * fade) / vec3(max(J, 0.35), 1.0, max(J, 0.35));
   vWorld = wp.xyz;
   gl_Position = projectionMatrix * viewMatrix * wp;
 }`;
@@ -422,8 +509,10 @@ uniform vec3 uZenith, uHorizon, uSunDir, uSunColor, uDeep, uShallow, uFogColor;
 uniform float uFogDensity, uSpec, uNight, uSwell;
 uniform sampler2D uHeightTex, uRipple, uNoise;
 uniform vec3 uReef;        // the coral reef: x, z, radius
+uniform vec3 uLake;        // the forest's lake: x, z, radius
 uniform vec4 uHeli[2];     // xyz world position, w strength
 uniform vec4 uLamp[2];     // searchlight spot on water: xz, radius, strength
+uniform vec4 uWake[${WAKE_N}];  // wake points: xz, age, strength
 uniform sampler2D uReflTex;
 uniform mat4 uReflMat;
 uniform float uReflOn;
@@ -475,14 +564,12 @@ void main(){
   // clear water over sand is turquoise only where it is shallow; a few metres down the open sea takes over
   vec3 body = mix(uShallow, uDeep, smoothstep(0.0, 7.5, depth));
   float light = 0.25 + 0.75 * max(dot(N, uSunDir), 0.0);
-  // coral heads seen through the clear water over the reef: dark, mottled patches in the shallows
-  float reefW = (1.0 - smoothstep(uReef.z, uReef.z + 40.0, length(p - uReef.xy))) * smoothstep(8.0, 2.0, depth);
-  if (reefW > 0.0) {
-    vec4 cn = texture2D(uNoise, p / 70.0);
-    float patchy = smoothstep(0.42, 0.62, cn.r * 0.6 + texture2D(uNoise, p / 17.0).g * 0.4);
-    vec3 coral = mix(vec3(0.03, 0.13, 0.12), vec3(0.16, 0.12, 0.13), smoothstep(0.35, 0.65, cn.b));
-    body = mix(body, coral, patchy * reefW * 0.8);
-  }
+  // the reef's clear water: the sea bed, its coral and fish show through it (see the alpha below)
+  float reefA = 1.0 - smoothstep(uReef.z, uReef.z + 40.0, length(p - uReef.xy));
+  body = mix(body, body * 0.8, reefA * smoothstep(1.0, 4.0, depth));
+  // the forest lake is fresh water: dark and peaty, tea-green in its shallows, with no surf on its shore
+  float lakeW = 1.0 - smoothstep(uLake.z + 8.0, uLake.z + 24.0, length(p - uLake.xy));
+  body = mix(body, mix(vec3(0.012, 0.035, 0.026), vec3(0.05, 0.085, 0.045), smoothstep(2.5, 0.0, depth)), lakeW);
   body *= mix(light, 1.0, 0.35) * (1.0 - 0.55 * uNight);
   body += uShallow * 0.1 * smoothstep(0.5, 0.85, chop) * (1.0 - 0.7 * uNight) / (1.0 + dist * 0.01);   // light through the ripples' crests
 
@@ -501,11 +588,23 @@ void main(){
   float shore = smoothstep(1.9, 0.0, depth) * smoothstep(0.3, 0.62, lace + surf * 0.28 - depth * 0.1);
   shore = max(shore, smoothstep(0.35, 0.0, depth));
   float crest = smoothstep(0.55, 1.1, vCrest / max(uSwell, 0.4)) * smoothstep(0.55, 0.75, lace) * 0.4 * max(uSwell - 0.4, 0.0) / (1.0 + dist * 0.006);
-  float foam = clamp(shore + crest + wash * 0.85, 0.0, 1.0);
+  // the wakes: a trail of churned white water behind a boat or a seaplane on the water, spreading and breaking up as
+  // it ages, gone in a few seconds
+  float wake = 0.0;
+  for (int i = 0; i < ${WAKE_N}; i++) {
+    vec4 wk = uWake[i];
+    if (wk.w <= 0.0) continue;
+    vec2 dw = p - wk.xy; float w = 0.8 + wk.z * 0.9;
+    wake += 0.7 * wk.w * exp(-dot(dw, dw) / (w * w)) * (1.0 - smoothstep(1.0, 6.5, wk.z));
+  }
+  wake = clamp(wake, 0.0, 1.0);
+  float wakeFoam = wake * smoothstep(0.5, 0.78, lace + 0.3 * wake);
+  float foam = clamp((shore + crest) * (1.0 - 0.85 * lakeW) + wash * 0.85 + wakeFoam * 0.85, 0.0, 1.0);
   vec3 foamCol = mix(vec3(0.95), uHorizon * 0.8 + 0.25, 0.25) * (1.0 - 0.72 * uNight) * (0.75 + 0.25 * light);
   col = mix(col, foamCol, foam);
 
   float alpha = clamp(smoothstep(-0.05, 1.3, depth) * 0.97 + foam, 0.0, 1.0);
+  alpha = mix(alpha, clamp(0.28 + depth * 0.085 + foam + fres * 0.6, 0.0, 1.0), reefA);
   float fogF = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
   col = mix(col, uFogColor, fogF);
   gl_FragColor = vec4(col, alpha);
@@ -532,8 +631,17 @@ function groundMaterial(noiseTex, rocky) {
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vTP; varying vec3 vTN;')
+      .replace('#include <common>', `#include <common>
+        varying vec3 vTP; varying vec3 vTN; varying vec3 vTer;
+        #ifndef ROCKY
+          attribute vec3 aTer;
+        #endif`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
+        #ifndef ROCKY
+          vTer = aTer;
+        #else
+          vTer = vec3(0.0);
+        #endif
         vec4 tw = vec4(transformed, 1.0); vec3 tn = objectNormal;
         #ifdef USE_INSTANCING
           tw = instanceMatrix * tw; tn = mat3(instanceMatrix) * tn;
@@ -544,38 +652,70 @@ function groundMaterial(noiseTex, rocky) {
         uniform sampler2D tSandC, tSandN, tMossC, tMossN, tRockC, tRockN, tNoise;
         uniform vec3 uSnowZ, uAshZ, uPineZ;
         float zoneW(vec3 Z, vec2 p) { return 1.0 - smoothstep(Z.z, Z.z + 40.0, length(p - Z.xy)); }
-        varying vec3 vTP; varying vec3 vTN;
+        varying vec3 vTP; varying vec3 vTN; varying vec3 vTer;
         vec3 twice(sampler2D t, vec2 uv, float n) { return mix(texture2D(t, uv).rgb, texture2D(t, uv * 0.37 + vec2(0.31, 0.17)).rgb, n); }`)
       .replace('#include <map_fragment>', `
         vec3 gn = normalize(vTN);
         vec2 gp = vTP.xz;
         float n1 = texture2D(tNoise, gp / 290.0).r, n2 = texture2D(tNoise, gp / 41.0).g, n3 = texture2D(tNoise, gp / 9.0).b;
         float steep = 1.0 - gn.y;
+        // the land's own shape, baked per vertex: + down a gully or hollow, - along a ridge or crest; and how much of
+        // the ground lies under trees
+        float cav = clamp(vTer.x * 0.55 + vTer.y * 0.45, -1.0, 1.0), under = vTer.z;
         vec3 bw = pow(abs(gn), vec3(4.0)); bw /= bw.x + bw.y + bw.z;
         vec3 rockC = texture2D(tRockC, vTP.zy / 13.0).rgb * bw.x + twice(tRockC, gp / 13.0, n2).rgb * bw.y + texture2D(tRockC, vTP.xy / 13.0).rgb * bw.z;
         rockC = mix(rockC, vec3(dot(rockC, vec3(0.3, 0.5, 0.2))), 0.45) * vec3(1.45, 1.4, 1.36);
+        // weathered pale along the crests, dark down the clefts, and faint bands of strata
+        rockC *= (1.0 + max(-cav, 0.0) * 0.35 - max(cav, 0.0) * 0.5) * (0.9 + 0.2 * smoothstep(0.2, 0.8, sin(vTP.y * 0.85 + n2 * 5.0 + n1 * 3.0) * 0.5 + 0.5));
         vec3 sandC = twice(tSandC, gp / 22.0, n2) * vec3(1.62, 1.44, 1.12);
-        vec3 grass = twice(tMossC, gp / 12.0, n2) * mix(vec3(0.42, 1.0, 0.3), vec3(0.8, 1.08, 0.4), smoothstep(0.3, 0.75, n1)) * 1.35;
+        vec3 grass = twice(tMossC, gp / 12.0, n2) * mix(vec3(0.42, 1.0, 0.3), vec3(0.72, 1.0, 0.4), smoothstep(0.3, 0.75, n1)) * 1.3;
+        // lush and dark down the damp hollows, dry and straw-coloured on the crests and the steeper banks
+        grass = mix(grass, grass * vec3(0.7, 0.88, 0.62), smoothstep(0.05, 0.6, cav));
+        grass = mix(grass, grass * vec3(1.12, 0.92, 0.55), clamp(smoothstep(0.0, -0.5, cav) * 0.7 + smoothstep(0.06, 0.2, steep) * 0.5, 0.0, 0.8));
         float wAsh = zoneW(uAshZ, gp), wPine = zoneW(uPineZ, gp), wSnowZ = zoneW(uSnowZ, gp);
         sandC = mix(sandC, mix(sandC, vec3(0.34, 0.35, 0.37), 0.75), wSnowZ);                       // shingle on the cold shore
         sandC = mix(sandC, vec3(0.075, 0.07, 0.068) * (0.75 + 0.5 * n2), wAsh);                      // black volcanic sand
-        grass = mix(grass, grass * vec3(0.6, 0.55, 0.36), wAsh * 0.8);
-        rockC = mix(rockC, rockC * vec3(0.34, 0.32, 0.32), wAsh);
+        grass = mix(grass, vec3(dot(grass, vec3(0.3, 0.5, 0.2))) * vec3(0.62, 0.66, 0.4), wAsh * 0.85);
+        // volcanic rock: dark brown-grey, rusty where the old lava weathered, high up toward the crater
+        vec3 lava = rockC * mix(vec3(0.4, 0.34, 0.31), vec3(0.62, 0.32, 0.2), smoothstep(0.45, 0.8, n2) * smoothstep(22.0, 40.0, vTP.y));
+        rockC = mix(rockC, lava, wAsh);
+        // and a few ribbons of younger, near-black lava that ran down from the crater, wandering as they go
+        vec2 cd = gp - uAshZ.xy; float cr = length(cd);
+        float fl = texture2D(tNoise, cd / max(cr, 0.01) * 0.22 + vec2(cr * 0.0016, -cr * 0.001)).a;
+        float flow = smoothstep(0.625, 0.665, fl + (n3 - 0.5) * 0.05) * wAsh * smoothstep(78.0, 52.0, cr + n2 * 14.0) * smoothstep(10.0, 16.0, cr);
+        vec3 basalt = vec3(0.085, 0.074, 0.066) * (0.7 + 0.6 * n3) * (0.35 + 1.3 * texture2D(tRockC, gp / 4.0).r);
+        rockC = mix(rockC, basalt, flow * 0.9); sandC = mix(sandC, basalt, flow * 0.9);
         grass = mix(grass, grass * vec3(0.66, 0.74, 0.5), wPine);
+        // up in the cold the grass is a dull, browned tundra, not a spring lawn
+        grass = mix(grass, vec3(dot(grass, vec3(0.3, 0.5, 0.2))) * vec3(0.95, 0.92, 0.72), wSnowZ * 0.6);
+        // the floor of a wood: shade and fallen leaves, or a carpet of needles under the pines
+        vec3 litter = mix(grass * vec3(0.5, 0.42, 0.3) + vec3(0.03, 0.02, 0.0), vec3(0.2, 0.13, 0.07) * (0.8 + 0.4 * n3), wPine * 0.75);
+        grass = mix(grass, litter, under * (0.55 + 0.35 * n3));
+        grass = mix(grass, basalt, flow * 0.85);
         vec3 nm;
         #ifdef ROCKY
           float wMoss = smoothstep(0.72, 0.96, gn.y) * smoothstep(0.35, 0.6, n2) * smoothstep(2.0, 4.0, vTP.y);
           vec3 col = mix(rockC * 1.25, grass, wMoss * 0.8);
           nm = texture2D(tRockN, gp / 13.0).xyz * 2.0 - 1.0;
         #else
-          float wRock = max(smoothstep(0.14, 0.3, steep + (n2 - 0.5) * 0.1), smoothstep(34.0, 46.0, vTP.y + n2 * 9.0));
+          float wRock = max(smoothstep(0.14, 0.3, steep + (n2 - 0.5) * 0.1 - cav * 0.12), smoothstep(34.0, 46.0, vTP.y + n2 * 9.0 - cav * 8.0));
           float wSand = 1.0 - smoothstep(1.5, 2.9, vTP.y + (n2 - 0.5) * 1.6 + (n3 - 0.5) * 0.5);
           wRock *= 1.0 - wSand * smoothstep(0.5, 0.2, steep);
-          vec3 col = mix(mix(grass, sandC, wSand), rockC * 1.25, wRock);
+          // scree: loose stones gathered in the gullies and at the foot of the crags
+          vec3 grit = texture2D(tRockC, gp / 3.1).rgb;
+          vec3 gravel = mix(vec3(dot(grit, vec3(0.3, 0.5, 0.2))) * vec3(1.25, 1.2, 1.14), rockC * 1.25, 0.4) * (0.85 + 0.25 * n3);
+          gravel *= mix(vec3(1.0), vec3(0.42, 0.38, 0.36), wAsh);
+          float wScree = smoothstep(0.1, 0.45, cav + (n2 - 0.5) * 0.2) * smoothstep(0.7, 0.4, steep) * wRock;
+          vec3 col = mix(mix(grass, sandC, wSand), mix(rockC * 1.25, gravel, wScree), wRock);
           nm = mix(mix(texture2D(tMossN, gp / 12.0).xyz, texture2D(tSandN, gp / 22.0).xyz, wSand), texture2D(tRockN, gp / 13.0).xyz, wRock) * 2.0 - 1.0;
         #endif
         // snow lies above the snow line wherever it is not too steep to hold it (on boulders too)
-        float wSnow = wSnowZ * smoothstep(6.0, 11.0, vTP.y + (n2 - 0.5) * 7.0 + (n3 - 0.5) * 1.5) * (1.0 - smoothstep(0.4, 0.62, steep + (n3 - 0.5) * 0.12));
+        // (it drifts deep into the hollows and gullies and is blown off the crests, which stand out dark)
+        float wSnow = wSnowZ * smoothstep(6.0, 11.0, vTP.y + (n2 - 0.5) * 7.0 + (n3 - 0.5) * 1.5 + cav * 6.0)
+          * smoothstep(0.68, 0.42, steep - cav * 0.3 + (n3 - 0.5) * 0.16 + (n2 - 0.5) * 0.1);
+        #ifndef ROCKY
+          wSnow = smoothstep(0.15, 0.75, wSnow + (n3 - 0.5) * 0.25);
+        #endif
         col = mix(col, vec3(0.78, 0.82, 0.9) * (0.92 + 0.12 * n3), wSnow);
         float wet = 1.0 - smoothstep(-0.15, 0.75, vTP.y + (n3 - 0.5) * 0.3);
         col *= mix(1.0, 0.5, wet) * (0.82 + 0.36 * n1);
@@ -625,7 +765,7 @@ function canvasTex(w, h, draw) {
 // ================================================================= build
 export function createWorld(scene, renderer) {
   const rnd = mulberry(20260910);
-  const world = { time: 0, preset: PRESETS[0], nightMats: [], spawn: { sea: [], stacks: [], islets: ISLETS } };
+  const world = { piers: PIERS, time: 0, preset: PRESETS[0], nightMats: [], spawn: { sea: [], stacks: [], islets: ISLETS } };
   const noiseTex = noiseTexture();
 
   // ---------- sky dome
@@ -676,9 +816,16 @@ export function createWorld(scene, renderer) {
   // ---------- terrain
   // The whole map's heights on one grid, then cut into tiles that each own their vertices; a tile with nothing but deep
   // sea bed in it is never built (the sea above it hides it), so a bigger map with open water between costs little.
-  const TN = TSPAN / TSTEP, TR = TN + 1, H = new Float32Array(TR * TR);
-  for (let j = 0; j < TR; j++) for (let i = 0; i < TR; i++) H[j * TR + i] = terrainHeight(i * TSTEP - TSPAN / 2, j * TSTEP - TSPAN / 2);
+  const H = heightGrid();
   const hAt = (i, j) => H[Math.min(TN, Math.max(0, j)) * TR + Math.min(TN, Math.max(0, i))];
+  // how far the ground here lies below (+) or stands above (-) the ground r grid points round it, in units of `unit`
+  // metres: a gully or hollow, or a ridge or crest. The ground shader lays scree, snow and bare rock by it.
+  const hollow = (i, j, r, unit) => {
+    const d = r * 0.7071 | 0 || 1;
+    const ring = hAt(i - r, j) + hAt(i + r, j) + hAt(i, j - r) + hAt(i, j + r) + hAt(i - d, j - d) + hAt(i + d, j - d) + hAt(i - d, j + d) + hAt(i + d, j + d);
+    return Math.max(-1, Math.min(1, (ring / 8 - hAt(i, j)) / unit));
+  };
+  const landGeos = [];
   // (stride: use every stride-th grid point, for a lighter copy; tile: that many cells a side)
   function landTiles(stride, tile, material, setup) {
     const group = new THREE.Group(), cells = TN / stride, n = Math.ceil(cells / tile);
@@ -687,7 +834,7 @@ export function createWorld(scene, renderer) {
       let top = -1e9;
       for (let r = 0; r <= rh; r++) for (let c = 0; c <= cw; c++) top = Math.max(top, hAt((c0 + c) * stride, (r0 + r) * stride));
       if (top < -4) continue;
-      const vn = (cw + 1) * (rh + 1), pos = new Float32Array(vn * 3), nor = new Float32Array(vn * 3), idx = new Uint32Array(cw * rh * 6);
+      const vn = (cw + 1) * (rh + 1), pos = new Float32Array(vn * 3), nor = new Float32Array(vn * 3), ter = new Float32Array(vn * 3), idx = new Uint32Array(cw * rh * 6);
       let k = 0;
       for (let r = 0; r <= rh; r++) for (let c = 0; c <= cw; c++, k++) {
         const i = (c0 + c) * stride, j = (r0 + r) * stride;
@@ -695,6 +842,7 @@ export function createWorld(scene, renderer) {
         // (the normal from the neighbours on the full grid, so tiles meet without a seam of light)
         const nx = hAt(i - stride, j) - hAt(i + stride, j), nz = hAt(i, j - stride) - hAt(i, j + stride), ny = 2 * stride * TSTEP, l = Math.hypot(nx, ny, nz);
         nor[k * 3] = nx / l; nor[k * 3 + 1] = ny / l; nor[k * 3 + 2] = nz / l;
+        ter[k * 3] = hollow(i, j, 2, 1.6); ter[k * 3 + 1] = hollow(i, j, 7, 4.5);
       }
       k = 0;
       for (let r = 0; r < rh; r++) for (let c = 0; c < cw; c++) {
@@ -703,7 +851,9 @@ export function createWorld(scene, renderer) {
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      g.setAttribute('aTer', new THREE.BufferAttribute(ter, 3));
       g.setIndex(new THREE.BufferAttribute(idx, 1)); g.computeBoundingBox(); g.computeBoundingSphere();
+      landGeos.push(g);
       const m = new THREE.Mesh(g, material);
       setup(m);
       group.add(m);
@@ -742,8 +892,8 @@ export function createWorld(scene, renderer) {
     uSunDir: { value: new THREE.Vector3() }, uSunColor: { value: new THREE.Color() },
     uDeep: { value: new THREE.Color() }, uShallow: { value: new THREE.Color() },
     uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0.001 }, uSpec: { value: 20 }, uNight: { value: 0 },
-    uHeightTex: { value: heightTex }, uRipple: { value: rippleTexture() }, uNoise: { value: noiseTex }, uReef: { value: new THREE.Vector3(-290, 355, 120) },
-    uHeli: { value: [new THREE.Vector4(), new THREE.Vector4()] },
+    uHeightTex: { value: heightTex }, uRipple: { value: rippleTexture() }, uNoise: { value: noiseTex }, uReef: { value: new THREE.Vector3(-290, 355, 120) }, uLake: { value: new THREE.Vector3(LAKE.x, LAKE.z, LAKE.r) },
+    uHeli: washUniform, uWake: wakeUniform,
     uLamp: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uReflTex: { value: null }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 },
   };
@@ -800,6 +950,9 @@ export function createWorld(scene, renderer) {
   place('World_Crates', 24, -17, { y: BASE_Y, yaw: -0.3 });
   place('World_Table', -27, 0, { y: BASE_Y, yaw: 0.2 });
   place('World_Jetty', 0, 36, { y: 0.35, scale: 1.2 });
+  // (the jetty model runs 26 m out along its own z and from -1.5 to 2.96 across, scaled 1.2)
+  const jettyAt = (x, z, yaw) => { const ux = Math.sin(yaw), uz = Math.cos(yaw), mid = 0.73 * 1.2; PIERS.push({ a: { x: x + uz * mid, z: z - ux * mid }, b: { x: x + ux * 31.2 + uz * mid, z: z + uz * 31.2 - ux * mid }, w: 2.7 }); };
+  jettyAt(0, 36, 0);
   // sunshades and towels on the dry sand east of the jetty, wherever the beach turns out to be
   place('World_Beach', BEACH.x, BEACH.z, { y: BEACH.y, yaw: 1.5 });
   keepOut.push({ x: STATION.x, z: STATION.z, r: 25 }, { x: 0, z: -6.5, r: 16 }, { x: 0, z: 40, r: 9 }, { x: 0, z: 52, r: 9 }, { x: BEACH.x, z: BEACH.z, r: 9 }, { x: 0, z: 8, r: 34 });
@@ -846,13 +999,19 @@ export function createWorld(scene, renderer) {
   let NEAR = 105, FAR = 400;
   const dm = new THREE.Object3D();
   const species = new Map();        // model name -> [{ m: Matrix4, x, z, s }]
+  // how thickly trees stand round each 4 m square of the map (for the woods' floor in the ground shader)
+  const DN = TSPAN / 4, dens = new Float32Array(DN * DN);
+  const densAt = (x, z) => { const i = Math.floor((x + TSPAN / 2) / 4), j = Math.floor((z + TSPAN / 2) / 4); return i < 0 || j < 0 || i >= DN || j >= DN ? 0 : dens[j * DN + i]; };
   const plant = (name, x, y, z, s, tilt = 0.12) => {
+    if (/Tree|Pine/.test(name)) {
+      const ci = Math.floor((x + TSPAN / 2) / 4), cj = Math.floor((z + TSPAN / 2) / 4);
+      for (let j = cj - 1; j <= cj + 1; j++) for (let i = ci - 1; i <= ci + 1; i++) if (i >= 0 && j >= 0 && i < DN && j < DN) dens[j * DN + i] += i === ci && j === cj ? 1 : 0.45;
+    }
     dm.position.set(x, y, z); dm.rotation.set((rnd() - 0.5) * tilt, rnd() * 6.283, (rnd() - 0.5) * tilt); dm.scale.set(s, s * (0.9 + rnd() * 0.25), s); dm.updateMatrix();
     if (!species.has(name)) species.set(name, []);
     species.get(name).push({ m: dm.matrix.clone(), x, y, z, s });
   };
   const TREES = ['World_Tree3', 'World_Tree4', 'World_Tree5', 'World_Tree3', 'World_Tree4', 'World_Tree', 'World_Tree2'];
-  const PINES = ['World_Pine', 'World_Pine2', 'World_Pine'];
   const PALMS = ['World_Palm', 'World_Palm2', 'World_Palm3'], BUSHES = ['World_Bush', 'World_Bush2'], ROCKS = ['World_Rock', 'World_Rock2', 'World_Rock3'];
   const pick = list => list[(rnd() * list.length) | 0];
   const rocks = { World_Rock: [], World_Rock2: [], World_Rock3: [], World_Driftwood: [] };
@@ -899,40 +1058,127 @@ export function createWorld(scene, renderer) {
     keepOut.push({ x: hx, z: hz, r: 8 });
     s.block = { x: hx, z: hz, r: 6.5 };
   }
-  // harbour town: rows of tall narrow houses stepping round the terrace, facing the harbour, painted every colour,
+  // harbour town: streets of tall narrow houses on the terrace above the harbour, painted every colour,
   // with the quays, moored boats and a crane down at the water, and a little light on the breakwater's head
   world.roofs = [];
   {
     const T = { x: 492, z: -160, r: 34, y: 5 }, sq = SITES.find(q => q.name === 'Town square');
     const WALLS = ['#f4d27a', '#f29a7a', '#9fd3e6', '#f6efe2', '#b9e0a5', '#e8a6c8', '#f2b65e', '#cfd8ff'].map(c => new THREE.Color(c).multiplyScalar(2.1));
     const ROOFS = ['#c8553d', '#a8442f', '#5d6b78', '#3f5f7a', '#b4613f'].map(c => new THREE.Color(c).multiplyScalar(2.6));
-    const spots = [];
-    for (let ring = 0; ring < 3; ring++) {
-      const rr = 9 + ring * 9.5, n = Math.round(rr * 0.62);
-      for (let i = 0; i < n; i++) {
-        const a = (i + ring * 0.5) / n * 6.283 + (rnd() - 0.5) * 0.12, x = T.x + Math.cos(a) * rr, z = T.z + Math.sin(a) * rr;
-        if (Math.hypot(x - sq.x, z - sq.z) < sq.r + 7 || Math.hypot(x - T.x, z - T.z) > T.r - 3) continue;
-        if (Math.abs(terrainHeight(x, z) - T.y) > 0.3) continue;
-        spots.push({ x, z, yaw: Math.atan2(T.x - x, T.z - z) + Math.PI + (rnd() - 0.5) * 0.3 });
+    // The town is laid out on streets: a high street running up from the harbour, two cross streets, and terraces of
+    // houses shoulder to shoulder along both sides of each, their fronts to the street. Three kinds of house (see
+    // tools/build_zones.py), each painted its own colour; only the walls' and roofs' paint takes the colour, so the
+    // window frames stay white and the shutters dark.
+    const STREETS = [[[462, -160], [526, -160]], [[480, -192], [480, -128]], [[506, -192], [506, -128]]];
+    keepOut.push({ x: T.x, z: T.z, r: T.r + 2 });      // (no trees in the middle of town)
+    const HALF = 3.1;
+    const segDist = (x, z, [[ax, az], [bx, bz]]) => { const ux = bx - ax, uz = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * ux + (z - az) * uz) / (ux * ux + uz * uz))); return Math.hypot(x - ax - ux * t, z - az - uz * t); };
+    const onStreet = (x, z, pad) => STREETS.some(S => segDist(x, z, S) < HALF + pad);
+    const KINDS = ['World_HouseA', 'World_HouseB', 'World_HouseC'].map(name => {
+      const w = modelInfo(name), r = modelInfo(name + 'Roof');
+      return { name, W: w.size[0] - 0.4, L: w.size[2] - 1.0, top: r.min[1] + r.size[1], ridge: w.min[1] + w.size[1] + 0.2, list: [] };
+    });
+    const placed = [];
+    // where each kind's chimney pot is, from tools/build_zones.py (front x, left y, up z there; the game's x = y, z = x)
+    const CHIMNEY = { World_HouseA: [-1.5, 1.1, 11.6], World_HouseB: [-1.2, 1.89, 9.0], World_HouseC: [-1.3, 2.3, 8.8] };
+    world.chimneys = [];
+    const inRect = (x, z, R, pad) => { const dx = x - R.x, dz = z - R.z, a = dx * R.fx + dz * R.fz, b = dx * R.fz - dz * R.fx; return Math.abs(a) < R.L / 2 + pad && Math.abs(b) < R.W / 2 + pad; };
+    for (const S of STREETS) {
+      const [[ax, az], [bx, bz]] = S, len = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / len, uz = (bz - az) / len;
+      for (const side of [-1, 1]) {
+        const nx = -uz * side, nz = ux * side;
+        for (let t = 1; t < len - 2;) {
+          const q = rnd(), K = KINDS[q < 0.45 ? 0 : q < 0.8 ? 1 : 2];
+          const off = HALF + 0.6 + K.L / 2, cx = ax + ux * (t + K.W / 2) + nx * off, cz = az + uz * (t + K.W / 2) + nz * off;
+          const R = { x: cx, z: cz, fx: -nx, fz: -nz, L: K.L, W: K.W };
+          const corners = [[1, 1], [1, -1], [-1, 1], [-1, -1], [0, 0]].map(([i, j]) => [cx - nx * i * K.L / 2 + ux * j * K.W / 2, cz - nz * i * K.L / 2 + uz * j * K.W / 2]);
+          const ok = corners.every(([x, z]) => Math.hypot(x - T.x, z - T.z) < T.r - 1 && Math.abs(terrainHeight(x, z) - T.y) < 0.35 && !onStreet(x, z, 0.3)
+            && Math.hypot(x - sq.x, z - sq.z) > sq.r + 4 && !placed.some(P => inRect(x, z, P, 0.15)))
+            && !placed.some(P => inRect(P.x, P.z, R, 0.15));
+          if (!ok) { t += 1.5; continue; }
+          placed.push(R); K.list.push({ x: cx, z: cz, yaw: Math.atan2(-nx, -nz) });
+          t += K.W + 0.2;
+        }
       }
     }
-    const walls = new THREE.InstancedMesh(geo('World_House'), geo('World_House').userData.mats.map(mn => look(mn, { bake: 'World_House' })), spots.length);
-    const roofs = new THREE.InstancedMesh(geo('World_HouseRoof'), geo('World_HouseRoof').userData.mats.map(mn => look(mn, { bake: 'World_HouseRoof' })), spots.length);
-    spots.forEach((s, i) => {
-      const k = 0.9 + rnd() * 0.25;
-      dm.position.set(s.x, T.y, s.z); dm.rotation.set(0, s.yaw, 0); dm.scale.set(k, 0.9 + rnd() * 0.35, k); dm.updateMatrix();
-      walls.setMatrixAt(i, dm.matrix); roofs.setMatrixAt(i, dm.matrix);
-      walls.setColorAt(i, WALLS[(rnd() * WALLS.length) | 0]); roofs.setColorAt(i, ROOFS[(rnd() * ROOFS.length) | 0]);
-      const top = T.y + modelInfo('World_HouseRoof').size[1] * dm.scale.y + modelInfo('World_HouseRoof').min[1] * dm.scale.y;
-      OBSTACLES.push({ x: s.x, z: s.z, r: 4.6 * k, top });
-      keepOut.push({ x: s.x, z: s.z, r: 6 });
-      world.roofs.push({ x: s.x, z: s.z, y: top - 0.25 });
+    // (the paint goes on the walls and roof only: every other material ignores the house's colour)
+    const unpainted = mat => {
+      const m = mat.clone(), prev = mat.onBeforeCompile, key = mat.customProgramCacheKey ? mat.customProgramCacheKey() : '';
+      m.onBeforeCompile = (sh, r) => {
+        if (prev) prev.call(m, sh, r);
+        sh.vertexShader = sh.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\nvColor.xyz = vec3(1.0);\n#endif');
+      };
+      m.customProgramCacheKey = () => key + '|unpainted';
+      return m;
+    };
+    // (and after dark there is a lamp lit behind every window)
+    const windowGlow = [];
+    const paintMats = (name, paint) => geo(name).userData.mats.map(mn => {
+      if (mn === paint) return look(mn, { bake: name });
+      const m = unpainted(look(mn, { bake: name }));
+      if (mn === 'Glass') { m.emissive = new THREE.Color(1.0, 0.72, 0.38); m.emissiveIntensity = 0; world.nightMats.push({ mat: m, max: 1.6, min: 0 }); windowGlow.push(m); }
+      return m;
     });
-    for (const m of [walls, roofs]) { m.castShadow = m.receiveShadow = true; (zoneGroups.harbour ||= new THREE.Group()).add(m); }
+    for (const K of KINDS) {
+      if (!K.list.length) continue;
+      const walls = new THREE.InstancedMesh(geo(K.name), paintMats(K.name, 'Concrete'), K.list.length);
+      const roofs = new THREE.InstancedMesh(geo(K.name + 'Roof'), paintMats(K.name + 'Roof', 'Roof'), K.list.length);
+      K.list.forEach((h, i) => {
+        dm.position.set(h.x, T.y, h.z); dm.rotation.set(0, h.yaw, 0); dm.scale.set(1, 1, 1); dm.updateMatrix();
+        walls.setMatrixAt(i, dm.matrix); roofs.setMatrixAt(i, dm.matrix);
+        { const [bx, by, bz] = CHIMNEY[K.name], c = Math.cos(h.yaw), sn = Math.sin(h.yaw); world.chimneys.push({ x: h.x + by * c + bx * sn, y: T.y + bz, z: h.z - by * sn + bx * c }); }
+        walls.setColorAt(i, WALLS[(rnd() * WALLS.length) | 0]); roofs.setColorAt(i, ROOFS[(rnd() * ROOFS.length) | 0]);
+        const top = T.y + K.top;
+        OBSTACLES.push({ x: h.x, z: h.z, r: Math.hypot(K.L, K.W) * 0.45, top });
+        keepOut.push({ x: h.x, z: h.z, r: Math.max(K.L, K.W) * 0.7 });
+        world.roofs.push({ x: h.x, z: h.z, y: T.y + K.ridge - 0.1 });
+      });
+      for (const m of [walls, roofs]) { m.castShadow = m.receiveShadow = true; (zoneGroups.harbour ||= new THREE.Group()).add(m); }
+    }
+    // the streets: cobbles, kerbed, with lamp posts down one side that light up after dark
+    {
+      const cobbles = canvasTex(256, 256, (g, w) => {
+        g.fillStyle = '#7d766c'; g.fillRect(0, 0, w, w);
+        const r2 = mulberry(31);
+        for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+          const v = 112 + r2() * 34 | 0, ox = (y % 2) * 16;
+          g.fillStyle = `rgb(${v},${v - 6},${v - 14})`;
+          g.beginPath(); g.ellipse((x * 32 + ox + 16) % w, y * 32 + 16, 13 + r2() * 2, 12 + r2() * 2, r2(), 0, 6.283); g.fill();
+        }
+      });
+      cobbles.wrapS = cobbles.wrapT = THREE.RepeatWrapping;
+      const streetMat = new THREE.MeshStandardMaterial({ map: cobbles, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      const kerbMat = new THREE.MeshStandardMaterial({ color: 0xb8b2a6, roughness: 0.85 });
+      const posts = [], lampMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd28a, emissiveIntensity: 0 });
+      world.nightMats.push({ mat: lampMat, max: 5, min: 0 });
+      for (const [[ax, az], [bx, bz]] of STREETS) {
+        const len = Math.hypot(bx - ax, bz - az), yaw = Math.atan2(bx - ax, bz - az);
+        const g = new THREE.PlaneGeometry(HALF * 2, len); g.rotateX(-Math.PI / 2);
+        g.attributes.uv.array.forEach((v, i, arr) => { arr[i] = v * (i % 2 ? len / 2.2 : HALF * 2 / 2.2); });
+        const street = new THREE.Mesh(g, streetMat); street.receiveShadow = true;
+        street.position.set((ax + bx) / 2, T.y + 0.05, (az + bz) / 2); street.rotation.y = yaw;
+        (zoneGroups.harbour ||= new THREE.Group()).add(street);
+        for (const side of [-1, 1]) {
+          const kerb = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.07, len), kerbMat);
+          kerb.position.set((ax + bx) / 2 + Math.cos(yaw) * side * HALF, T.y + 0.05, (az + bz) / 2 - Math.sin(yaw) * side * HALF); kerb.rotation.y = yaw;
+          kerb.receiveShadow = true; zoneGroups.harbour.add(kerb);
+        }
+        for (let t = 6; t < len - 3; t += 13) posts.push([ax + (bx - ax) * t / len + Math.cos(yaw) * (HALF - 0.4), az + (bz - az) * t / len - Math.sin(yaw) * (HALF - 0.4)]);
+        for (let i = 0; i < Math.ceil(len / 4); i++) keepOut.push({ x: ax + (bx - ax) * i * 4 / len, z: az + (bz - az) * i * 4 / len, r: HALF + 1 });
+      }
+      const postGeo = new THREE.CylinderGeometry(0.07, 0.1, 4.2, 6); postGeo.translate(0, 2.1, 0);
+      const headGeo = new THREE.SphereGeometry(0.26, 10, 8); headGeo.translate(0, 4.35, 0);
+      const pm = new THREE.InstancedMesh(postGeo, new THREE.MeshStandardMaterial({ color: 0x1d2a33, roughness: 0.5, metalness: 0.6 }), posts.length);
+      const hm = new THREE.InstancedMesh(headGeo, lampMat, posts.length);
+      posts.forEach(([x, z], i) => { dm.position.set(x, T.y, z); dm.rotation.set(0, 0, 0); dm.scale.set(1, 1, 1); dm.updateMatrix(); pm.setMatrixAt(i, dm.matrix); hm.setMatrixAt(i, dm.matrix); });
+      pm.castShadow = true; zoneGroups.harbour.add(pm, hm);
+      world.town = { houses: placed.length, posts: posts.length };
+    }
     // the quay: two piers out into the harbour from its eastern shore, a crane by them, boats tied up alongside
     for (const qz of [-168, -146]) {
       let qx = 418; while (qx < 470 && terrainHeight(qx, qz) < 0.4) qx += 1;
       zplace('harbour', 'World_Jetty', qx - 2, qz, { y: 0.35, yaw: -Math.PI / 2, scale: 1.2 });
+      jettyAt(qx - 2, qz, -Math.PI / 2);
       keepOut.push({ x: qx - 6, z: qz, r: 8 });
     }
     { let cx = 418; while (cx < 470 && terrainHeight(cx, -185) < 1.2) cx += 1;
@@ -969,6 +1215,10 @@ export function createWorld(scene, renderer) {
     world.wreckMesh = w;
     world.wreck = { x: WRECK.x, z: WRECK.z, y: -1.5, yaw: WRECK.yaw, deck: 1.7, crew: 0, wreck: true };
   }
+  // the reef's coral and fish (see reef.js)
+  const reef = buildReef({ group: (zoneGroups.reef ||= new THREE.Group()), terrainHeight, fbm, centre: { x: -290, z: 355 }, radius: 135,
+    keepOut: (x, z) => Math.hypot(x - WRECK.x, z - WRECK.z) < 12 });
+  world.reef = reef;
 
   const blocked = (x, z) => keepOut.some(k => (x - k.x) ** 2 + (z - k.z) ** 2 < k.r * k.r);
   for (const s of ISLETS) keepOut.push({ x: s.x, z: s.z, r: 6.5 });      // (whoever is stranded on a sandbar stands in the middle)
@@ -999,8 +1249,21 @@ export function createWorld(scene, renderer) {
       const glade = fbm(x * 0.03 + 5.3, z * 0.03 - 8.1);
       const line = I.treeLine || 38, wood = I.forest * smooth((glade - 0.3 + I.forest * 0.22) / 0.22) * (1 - smooth((y - line) / (line < 20 ? 5 : 12)));
 
-      if (r < wood * 0.82) {
-        const s = 0.75 + rnd() * 0.75, name = pick(I.pine ? PINES : TREES);
+      if (r < wood * 0.82 && I.pine) {
+        // a real stand of spruce: tall old trees in some parts, a thicket of young ones in others and along the wood's
+        // edge, and here and there one long dead
+        const age = Math.max(0, Math.min(1, fbm(x * 0.022 + 1.7, z * 0.022 - 3.1) * 1.7 - 0.45 + (wood - 0.6) * 0.6)), q = rnd();
+        const name = q < 0.02 ? 'World_Snag' : q < 0.6 - age * 0.45 ? 'World_Pine3' : rnd() < 0.55 ? 'World_Pine' : 'World_Pine2';
+        const s = name === 'World_Pine3' ? 0.6 + rnd() * 0.75 : (0.72 + age * 0.45) * (0.8 + rnd() * 0.45);
+        plant(name, x, y - 0.3, z, s, name === 'World_Snag' ? 0.3 : 0.08);
+        if (name !== 'World_Snag') raiseCanopy(x, z, name === 'World_Pine3' ? 3.5 : 6, modelInfo(name).size[1] * s * 1.05);
+        // (young ones come up in little huddles, and the old ones stand close)
+        if (name !== 'World_Snag' && rnd() < (name === 'World_Pine3' ? 0.55 : 0.35)) {
+          const a = rnd() * 6.283, d = 1.8 + rnd() * 1.8, x2 = x + Math.cos(a) * d, z2 = z + Math.sin(a) * d, y2 = terrainHeight(x2, z2), s2 = 0.45 + rnd() * 0.55;
+          if (y2 > 3.4 && !blocked(x2, z2)) { plant('World_Pine3', x2, y2 - 0.3, z2, s2, 0.08); raiseCanopy(x2, z2, 3, modelInfo('World_Pine3').size[1] * s2); }
+        }
+      } else if (r < wood * 0.82) {
+        const s = 0.75 + rnd() * 0.75, name = pick(TREES);
         plant(name, x, y - 0.35, z, s);
         raiseCanopy(x, z, 7, modelInfo(name).size[1] * s * 1.1);
       } else if (r < wood * 0.82 + 0.16 && y < line + 3) plant(pick(BUSHES), x, y - 0.05, z, 0.8 + rnd() * 1.4);
@@ -1057,6 +1320,15 @@ export function createWorld(scene, renderer) {
   for (const name in rocks) rocks[name] = rocks[name].filter(it => it.cy < 2 || !nearLedge(it));
   // the trees round a landing site stand back from it, so their tops must not roof it over either
   for (const s of SITES) clearCanopy(s.x, s.z, s.r + 3);
+  // the woods' floor, for the ground shader: how much of the ground round each point of the land lies under trees
+  for (const g of landGeos) {
+    const P = g.attributes.position.array, T = g.attributes.aTer;
+    for (let k = 0; k < T.count; k++) {
+      const x = P[k * 3], z = P[k * 3 + 2];
+      T.array[k * 3 + 2] = Math.min(1, (densAt(x, z) * 2 + densAt(x + 3, z) + densAt(x - 3, z) + densAt(x, z + 3) + densAt(x, z - 3)) / 6 / 1.1);
+    }
+    T.needsUpdate = true;
+  }
   for (const zone in zoneGroups) scene.add(zoneGroups[zone]);
   world.zoneGroups = zoneGroups;
   const lodded = [];
@@ -1074,7 +1346,7 @@ export function createWorld(scene, renderer) {
     });
     const size = modelInfo(name).size;
     for (const it of list) { it.r = Math.max(size[0], size[1], size[2]) * it.s * 0.6; it.cy = it.y + size[1] * it.s * 0.5; }
-    lodded.push({ list, tiers, leaf: look(leaf ? leaf.mat : 'Leaf').color, size, bushy: /Bush/.test(name) });
+    lodded.push({ list, tiers, leaf: look(leaf ? leaf.mat : /Snag/.test(name) ? 'Bleached' : 'Leaf').color, size, bushy: /Bush/.test(name), palm: /Palm/.test(name) });
     plantCount += list.length;
   }
   // the far hills' trees: one soft lump each, coloured like the tree it stands for
@@ -1163,7 +1435,9 @@ export function createWorld(scene, renderer) {
           const dx = it.x - px, dz = it.z - pz, d2 = dx * dx + dz * dz;
           if ((d2 >= far2 && L.bushy) || !seen(it)) continue;
           if (d2 < near2) { t0.setMatrixAt(n0, it.m); t0.setColorAt(n0++, it.fireTint); }
-          else if (d2 < far2) { t1.setMatrixAt(n1, it.m); t1.setColorAt(n1++, it.fireTint); }
+          else if (d2 < far2 || (L.palm && d2 < far2 * 3)) { t1.setMatrixAt(n1, it.m); t1.setColorAt(n1++, it.fireTint); }
+          // (a palm is a tall bare trunk under a small crown: as a lump it would be a green ball floating in the air)
+          else if (L.palm) continue;
           else { lumps.setMatrixAt(nl, it.lump); lumps.setColorAt(nl++, it.charCol); }
         }
       }
@@ -1244,6 +1518,7 @@ export function createWorld(scene, renderer) {
   const grey = new THREE.Color(), tmpC = new THREE.Color();
   const dull = (out, c, w, dim) => { const l = c.r * 0.3 + c.g * 0.5 + c.b * 0.2; return out.copy(c).lerp(grey.setRGB(l, l, l * 1.06), w * 0.75).multiplyScalar(1 - dim * w); };
   world.blow = function (w) {
+    world.weatherNow = w;
     const p = world.preset, u = waterUniforms;
     skyUniforms.uCloud.value = Math.min(0.98, p.cloud + w * 0.6);
     dull(skyUniforms.uCloudLit.value, p.cloudLit, w, 0.5); dull(skyUniforms.uCloudDark.value, p.cloudDark, w, 0.45);
@@ -1257,10 +1532,12 @@ export function createWorld(scene, renderer) {
     gustUniform.value = 0.7 + 3.3 * w;
   };
 
+
   world.update = function (dt, t) {
     world.time = t;
     waterUniforms.uTime.value = t; waterUniforms.uSwell.value = sea.swell; skyUniforms.uTime.value = t;
     windUniform.value = t;
+    reef.update(t);
     beamPivot.rotation.y = t * 0.5;
     beaconMat.emissiveIntensity = (t % 1.4) < 0.25 ? 6 : 0;
   };
@@ -1357,12 +1634,24 @@ function foliage(name, cards) {
   const base = look(name);
   if (!/^Leaf/.test(name)) { foliageCache.set(key, base); return base; }
   const mat = new THREE.MeshStandardMaterial({ color: base.color.clone().multiplyScalar(cards && cards !== 'core' ? 2.1 : 0.85), roughness: 0.8, side: THREE.DoubleSide, envMapIntensity: 0.35 });
-  if (cards === 'core') mat.color.multiplyScalar(0.3);         // (the shadowed heart of a pine, seen between its boughs)
-  else if (cards) { mat.map = cards === 'needles' ? needleSpray() : leafSpray(); mat.alphaTest = 0.42; mat.alphaToCoverage = true; }
+  // (spruce needles are a deep blue-green, not the spring green of the broad-leaved trees)
+  if (cards === 'needles') mat.color.multiplyScalar(0.72).multiply(new THREE.Color(0.8, 0.95, 1.05));
+  if (cards === 'core') {
+    // (the shadowed heart of a pine between its boughs: the same needles, in shade)
+    mat.color.multiplyScalar(0.42).multiply(new THREE.Color(0.8, 0.95, 1.05)); mat.map = needleSpray();
+    // (solid, not cut out: from across the bay the boughs thin away to nothing and this is what gives a pine its mass)
+  } else if (cards) { mat.map = cards === 'needles' ? needleSpray() : leafSpray(); mat.alphaTest = 0.42; mat.alphaToCoverage = true; }
+  // (a pine's crown is lit as one rounded mass, by normals pointing out from its trunk, not card by card)
+  const volume = cards === 'needles' || cards === 'core';
+  if (volume) mat.defines = { VOLUME: 1 };
   mat.onBeforeCompile = sh => {
-    sh.uniforms.uWind = windUniform; sh.uniforms.uGust = gustUniform; sh.uniforms.uSnowZ = zoneUniforms.uSnowZ;
+    sh.uniforms.uWind = windUniform; sh.uniforms.uGust = gustUniform; sh.uniforms.uSnowZ = zoneUniforms.uSnowZ; sh.uniforms.uHeli = washUniform;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uWind, uGust; varying float vHigh; varying vec3 vFW; varying float vUp;')
+      .replace('#include <common>', '#include <common>\nuniform float uWind, uGust; uniform vec4 uHeli[2]; varying float vHigh; varying vec3 vFW; varying float vUp;')
+      .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+        #ifdef VOLUME
+          objectNormal = normalize(normalize(vec3(position.x, 0.75 + (position.y - 6.0) * 0.08, position.z)) + objectNormal * 0.3);
+        #endif`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         #ifdef USE_INSTANCING
           vec3 root = instanceMatrix[3].xyz;
@@ -1373,11 +1662,23 @@ function foliage(name, cards) {
         float gust = sin(uWind * 1.3 + root.x * 0.11 + root.z * 0.07) + 0.5 * sin(uWind * 2.9 + root.x * 0.31 + position.y);
         transformed.x += (gust + uGust * 0.6) * lift * 0.022 * uGust; transformed.z += (gust + uGust * 0.4) * lift * 0.014 * uGust;
         transformed.y += sin(uWind * (3.7 + uGust) + position.x * 2.1 + position.z * 1.7 + root.x) * 0.03 * uGust * min(lift, 2.0);
+        #ifdef USE_INSTANCING
+          // (a helicopter hovering low blows the crowns away from it, thrashing)
+          for (int i = 0; i < 2; i++) {
+            vec2 dv = root.xz - uHeli[i].xz; float d = length(dv);
+            float blow = uHeli[i].w * exp(-d * 0.085) * (1.0 - smoothstep(14.0, 34.0, uHeli[i].y - root.y));
+            if (blow > 0.01) {
+              vec3 away = transpose(mat3(instanceMatrix)) * vec3(dv / max(d, 0.5), 0.0).xzy;
+              away = normalize(away + vec3(0.0001));
+              transformed += away * lift * 0.075 * blow * (0.75 + 0.35 * sin(uWind * 19.0 + position.y * 3.0 + root.x));
+            }
+          }
+        #endif
         vHigh = clamp(position.y / 9.0, 0.0, 1.0);
         #ifdef USE_INSTANCING
-          vFW = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz; vUp = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal).y;
+          vFW = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz; vUp = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal).y;
         #else
-          vFW = (modelMatrix * vec4(transformed, 1.0)).xyz; vUp = normalize(mat3(modelMatrix) * objectNormal).y;
+          vFW = (modelMatrix * vec4(transformed, 1.0)).xyz; vUp = normalize(mat3(modelMatrix) * normal).y;
         #endif`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform vec3 uSnowZ; varying float vHigh; varying vec3 vFW; varying float vUp;')
@@ -1390,7 +1691,7 @@ function foliage(name, cards) {
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.16,.085,.04), (1.0 - vColor.r) * .92);
         #endif`);
   };
-  mat.customProgramCacheKey = () => 'foliage';
+  mat.customProgramCacheKey = () => 'foliage' + (volume ? 'V' : '');
   foliageCache.set(key, mat);
   return mat;
 }

@@ -6,7 +6,9 @@
   "scripts": {
     "test": "node tools/test-flight-safety.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs && node tools/test-fire-scene.mjs",
     "build": "node build.mjs",
-    "serve": "node serve.mjs"
+    "serve": "node serve.mjs",
+    "check": "node tools/check.mjs",
+    "play-check": "node tools/play-check.mjs"
   },
   "keywords": [],
   "author": "",
