@@ -31,6 +31,38 @@ const fragment = `
 export function buildFireScene(scene, fire) {
   const group = new THREE.Group(); group.position.set(fire.x, 0, fire.z); scene.add(group);
   const n = fire.cells.length;
+  // Fuel belongs to individual simulation cells: an untouched pile stays intact,
+  // a soaked pile darkens, and burned timbers retain their damage after cooling.
+  const fuel = [], charColor = new THREE.Color(0x242322);
+  const roof = fire.label === 'Rooftop fire';
+  fire.cells.forEach((cell, i) => {
+    if (i % 3 !== 0) return;
+    const body = new THREE.Group(); body.position.set(cell.x-fire.x,cell.y,cell.z-fire.z); body.rotation.y=i*1.73; group.add(body);
+    const base = new THREE.Color(roof ? 0x9b8261 : 0x9d693c);
+    const mat = new THREE.MeshStandardMaterial({color:base,roughness:.9});
+    const pieces = [];
+    const part = (geometry,x,y,z,rx=0,rz=0) => {
+      const m = new THREE.Mesh(geometry,mat); m.position.set(x,y,z); m.rotation.set(rx,0,rz); m.castShadow=m.receiveShadow=true; body.add(m);
+      pieces.push({mesh:m,y,rx,rz}); return m;
+    };
+    if (roof || i % 2 === 0) {
+      // Stacked shipping crates and pallets; lids settle as the supporting timber burns.
+      for(let k=0;k<3;k++) {
+        part(new THREE.BoxGeometry(1.5,.85,1.4),(k%2)*.8-.4,.48+Math.floor(k/2)*.9,0);
+        for(const side of [-1,1]) part(new THREE.BoxGeometry(1.6,.1,.12),(k%2)*.8-.4,.2+Math.floor(k/2)*.9,side*.72);
+      }
+    } else {
+      for(let k=0;k<5;k++) part(new THREE.CylinderGeometry(.33,.4,3.1,7), (k%3-1)*.7,.4+Math.floor(k/3)*.65,0,Math.PI/2);
+      // A simple timber drying rack gives the blaze a readable silhouette.
+      for(const side of [-1,1]) part(new THREE.BoxGeometry(.18,2.7,.18),side*1.25,1.35,0,0,side*.12);
+      part(new THREE.BoxGeometry(3.1,.2,.25),0,2.6,0);
+    }
+    fuel.push({cell,body,mat,base,pieces,damage:0});
+  });
+  const emberGeo = new THREE.BufferGeometry(), emberPos = new Float32Array(n*2*3);
+  emberGeo.setAttribute('position',new THREE.BufferAttribute(emberPos,3).setUsage(THREE.DynamicDrawUsage));
+  const emberMat = new THREE.PointsMaterial({color:0xffa127,size:.22,transparent:true,opacity:.85,depthWrite:false,blending:THREE.AdditiveBlending});
+  const embers = new THREE.Points(emberGeo,emberMat); embers.frustumCulled=false; group.add(embers);
   const flameGeometry = new THREE.PlaneGeometry(1, 1, 4, 8); flameGeometry.translate(0, .5, 0);
   const heat = new Float32Array(n * 6); flameGeometry.setAttribute('aHeat', new THREE.InstancedBufferAttribute(heat, 1));
   const material = new THREE.ShaderMaterial({ vertexShader: vertex, fragmentShader: fragment,
@@ -50,11 +82,24 @@ export function buildFireScene(scene, fire) {
   smokeGeo.setAttribute('aSize', new THREE.BufferAttribute(smokeSize, 1).setUsage(THREE.DynamicDrawUsage));
   smokeGeo.setAttribute('aAlpha', new THREE.BufferAttribute(smokeAlpha, 1).setUsage(THREE.DynamicDrawUsage));
   const smokeMat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false,
-    vertexShader: `attribute float aSize;attribute float aAlpha;varying float vAlpha;void main(){vAlpha=aAlpha;vec4 p=modelViewMatrix*vec4(position,1.);gl_PointSize=aSize*650./max(1.,-p.z);gl_Position=projectionMatrix*p;}`,
-    fragmentShader: `varying float vAlpha;void main(){vec2 p=gl_PointCoord-.5;float a=exp(-dot(p,p)*10.)*(1.-smoothstep(.35,.5,length(p)))*vAlpha;if(a<.008)discard;gl_FragColor=vec4(vec3(.14,.15,.17),a);}` });
+    vertexShader: `attribute float aSize;attribute float aAlpha;varying float vAlpha;varying float vSeed;void main(){vSeed=position.x*.7+position.z*.3;vAlpha=aAlpha;vec4 p=modelViewMatrix*vec4(position,1.);gl_PointSize=aSize*650./max(1.,-p.z);gl_Position=projectionMatrix*p;}`,
+    fragmentShader: `varying float vAlpha;varying float vSeed;void main(){vec2 p=gl_PointCoord-.5;float billow=sin(p.x*21.+vSeed)*sin(p.y*19.-vSeed)*.055;float a=exp(-dot(p,p)*7.)*(1.-smoothstep(.3,.5,length(p)+billow))*vAlpha;if(a<.008)discard;gl_FragColor=vec4(mix(vec3(.12,.13,.15),vec3(.32,.29,.25),gl_PointCoord.y),a);}` });
   const smoke = new THREE.Points(smokeGeo, smokeMat); smoke.frustumCulled = false; smoke.renderOrder = 4; group.add(smoke);
   function update(t, wind, fade = 1) {
     material.uniforms.uTime.value = t;
+    for(const f of fuel) {
+      f.damage=Math.max(f.damage, Math.min(1,f.cell.burned*1.8));
+      f.mat.color.copy(f.base).lerp(charColor,f.damage*.95);
+      if(f.cell.wet>.03) f.mat.color.multiplyScalar(1-Math.min(.3,f.cell.wet*.4));
+      f.mat.roughness=f.cell.wet>.03?.32:.9;
+      f.mat.emissive.setRGB(f.cell.heat*.22*(1-f.cell.wet),f.cell.heat*.025,0);
+      f.pieces.forEach((p,k)=>{
+        const settle=Math.max(0,f.damage-.3)/.7;
+        p.mesh.position.y=p.y*(1-settle*.55);
+        p.mesh.rotation.z=p.rz+Math.sin(k*4.7)*settle*.45;
+        p.mesh.rotation.x=p.rx+Math.cos(k*2.1)*settle*.12;
+      });
+    }
     fire.cells.forEach((c, i) => {
       const intensity = c.heat > .16 ? c.heat : 0;
       const canopy = Math.min(c.canopy, 24), height = 6 + Math.min(canopy * .12, 3);
@@ -64,29 +109,41 @@ export function buildFireScene(scene, fire) {
         const alive = layer === 0 || canopy > 5;
         dummy.position.set(c.x - fire.x, c.y + layer * canopy * .35, c.z - fire.z);
         dummy.rotation.set(0, (k % 2) * Math.PI / 2 + i * .47 + layer * .3, 0);
-        dummy.scale.set(fire.spacing * (1.05 + .2 * Math.sin(i + k)), height * (.82 + .23 * Math.sin(i * 2.1 + k)), 1);
+        dummy.scale.set(fire.spacing * (1.05 + .2 * Math.sin(i + k)), height * (.82 + .23 * Math.sin(i * 2.1 + k)) * (.35 + Math.sqrt(intensity) * .65), 1);
         dummy.updateMatrix(); flames.setMatrixAt(at, dummy.matrix); heat[at] = alive ? intensity * fade * (layer === 0 ? 1 : .8) : 0;
       }
       dummy.rotation.set(0, 0, 0); dummy.position.set(c.x - fire.x, c.y + .04, c.z - fire.z); dummy.scale.setScalar(c.everBurned || c.wet > .03 ? 1 : .001); dummy.updateMatrix(); patches.setMatrixAt(i, dummy.matrix);
       color.set(c.wet > .05 ? 0x284b4d : 0x392b22); patches.setColorAt(i, color);
       dummy.position.y += .03; dummy.scale.setScalar(c.heat > .025 ? .35 + c.heat * .65 : .001); dummy.updateMatrix(); glow.setMatrixAt(i, dummy.matrix);
+      for(let k=0;k<2;k++) {
+        const a=i*2+k, age=(t*.4+i*.37+k*.5)%1;
+        emberPos[a*3]=c.x-fire.x+Math.sin(i+age*5)*1.4+wind.x*age*.3;
+        emberPos[a*3+1]=c.heat>.18 ? c.y+1+age*12+Math.min(c.canopy,15) : -1000;
+        emberPos[a*3+2]=c.z-fire.z+Math.cos(i+age*3)*1.4+wind.z*age*.3;
+      }
       for (let k = 0; k < 4; k++) {
         const at = i * 4 + k, age = ((t * .18 + i * .17 + k * .25) % 1), rise = age * 32;
         smokePos[at * 3] = c.x - fire.x + wind.x * age * .8 + Math.sin(i + age * 4) * 2;
         smokePos[at * 3 + 1] = c.y + Math.max(3, c.canopy * .9, height * .6) + rise;
         smokePos[at * 3 + 2] = c.z - fire.z + wind.z * age * .8;
         smokeSize[at] = (5 + age * 12) * (.4 + c.heat * .6);
-        smokeAlpha[at] = Math.sin(age * Math.PI) * (c.heat > .025 ? .2 + c.heat * .16 : 0) * fade;
+        smokeAlpha[at] = Math.sin(age * Math.PI) * (c.heat > .025 ? .28 + c.heat * .18 : 0) * fade;
       }
     });
+    emberGeo.attributes.position.needsUpdate=true; emberMat.opacity=.85*fade;
     flames.instanceMatrix.needsUpdate = true; flameGeometry.attributes.aHeat.needsUpdate = true;
     patches.instanceMatrix.needsUpdate = true; if (patches.instanceColor) patches.instanceColor.needsUpdate = true; glow.instanceMatrix.needsUpdate = true;
     for (const a of Object.values(smokeGeo.attributes)) a.needsUpdate = true;
     patchMat.uniforms.uFade.value = fade; glowMat.opacity = .18 * fade;
   }
-  function dispose() { scene.remove(group); group.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); }
+  function dispose() {
+    scene.remove(group);
+    const resources = new Set();
+    group.traverse(o => { if (o.geometry) resources.add(o.geometry); if (o.material) resources.add(o.material); });
+    for (const resource of resources) resource.dispose();
+  }
   update(0, { x: 0, z: 0 });
-  return { group, update, dispose };
+  return { group, update, dispose, fuel };
 }
 // A coherent curved water column, with particles continuing after its valve closes.
 export function buildWaterStream(scene) {

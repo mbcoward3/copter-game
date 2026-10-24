@@ -81,10 +81,10 @@ export function buildBasket(accent) {
 // A firefighting bucket on the winch cable: orange fabric on a dark rim, four straps up to the hook ring
 export function buildBucket() {
   const g = new THREE.Group();
-  const orange = std(0xd8471e, { roughness: 0.8 }), dark = std(0x24262a, { roughness: 0.6 });
-  mesh(new THREE.CylinderGeometry(1.15, 0.8, 1.7, 18), orange, 0, 0.85, 0, g);
+  const orange = std(0xd8471e, { roughness: 0.8, side: THREE.DoubleSide }), dark = std(0x24262a, { roughness: 0.6 });
+  mesh(new THREE.CylinderGeometry(1.15, 0.8, 1.7, 18, 1, true), orange, 0, 0.85, 0, g);
   mesh(new THREE.TorusGeometry(1.15, 0.08, 6, 20), dark, 0, 1.7, 0, g).rotation.x = Math.PI / 2;
-  const inside = mesh(new THREE.CircleGeometry(1.08, 18), dark, 0, 1.705, 0, g); inside.rotation.x = -Math.PI / 2;
+  const inside = mesh(new THREE.RingGeometry(.45, .82, 18), dark, 0, 0.08, 0, g); inside.rotation.x = -Math.PI / 2;
   const water = mesh(new THREE.CircleGeometry(1.05, 18), std(0x2f7f9c, { roughness: 0.08 }), 0, 1.0, 0, g); water.rotation.x = -Math.PI / 2;
   water.position.y = 1.71; water.visible = false;
   for (let i = 0; i < 4; i++) {
@@ -94,6 +94,9 @@ export function buildBucket() {
     strap.position.copy(from).lerp(to, 0.5);
     strap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), to.clone().sub(from).normalize());
   }
+  const flap = new THREE.Group(); flap.position.set(-.45, -.06, 0); g.add(flap);
+  mesh(new THREE.CircleGeometry(.45, 16), std(0x98a5a8, {side: THREE.DoubleSide}), .45, 0, 0, flap).rotation.x = -Math.PI / 2;
+  g.userData.valve = flap;
   g.userData.water = water;
   return g;
 }
@@ -171,7 +174,16 @@ export function buildPlane(accent) {
   const fireTank = new THREE.Group(); g.add(fireTank); fireTank.visible = false;
   const tank = mesh(new THREE.CylinderGeometry(0.65, 0.65, 2.7, 14), std(0xf1ba37), 0, -0.3, -0.2, fireTank); tank.rotation.x = Math.PI / 2;
   mesh(new THREE.BoxGeometry(0.6, 0.3, 0.5), std(0x263b48), 0, -0.95, -0.2, fireTank);
-  return { group: g, prop, discMat, bladeMat, strobe, beacon, lampMat, seat, fireTank };
+  const gates = [], scoops = [];
+  for (const side of [-1, 1]) {
+    const gate = new THREE.Group(); gate.position.set(side * .52, -.98, -.2); fireTank.add(gate);
+    mesh(new THREE.BoxGeometry(.52, .12, 1.4), std(0xdee4df), -side * .25, 0, 0, gate); gates.push(gate);
+    const scoop = new THREE.Group(); scoop.position.set(side * 1.5, -1.4, .5); fireTank.add(scoop);
+    mesh(new THREE.BoxGeometry(.24, .72, .28), std(0x536d78), 0, -.25, 0, scoop);
+    mesh(new THREE.BoxGeometry(.4, .18, .5), std(0xe9b93b), 0, -.6, .12, scoop); scoops.push(scoop);
+  }
+  const level = mesh(new THREE.BoxGeometry(.08, 1, 1.7), std(0x43c9ea, {emissive:0x126078, emissiveIntensity:.3}), .66, -.3, -.2, fireTank);
+  return { group: g, prop, discMat, bladeMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
 }
 
 
@@ -198,5 +210,15 @@ export function buildBoat(accent) {
   const barrel = new THREE.Group(); barrel.position.y = 0.32; monitor.add(barrel);
   const nozzle = mesh(new THREE.CylinderGeometry(0.15, 0.22, 1.45, 12), std(0xe4e8e9), 0, 0, 0.55, barrel); nozzle.rotation.x = Math.PI / 2;
   mesh(new THREE.TorusGeometry(0.18, 0.055, 6, 12), std(0x2e3e48), 0, 0, 1.28, barrel);
-  return { group: g, seat, strobe, beacon, lampMat, motors, monitor, barrel };
+  const pump = new THREE.Group(); pump.position.set(-.8, 1, 1.8); g.add(pump); pump.visible = false;
+  mesh(new THREE.BoxGeometry(.7, .65, .9), std(0xd24827), 0, 0, 0, pump);
+  const gauge = mesh(new THREE.CircleGeometry(.19, 16), std(0xf5f0d8), -.36, .1, .1, pump); gauge.rotation.y = -Math.PI/2;
+  const needle = new THREE.Group(); needle.position.set(-.37, .1, .1); pump.add(needle);
+  mesh(new THREE.BoxGeometry(.02, .13, .025), std(0x202d35), 0, .06, 0, needle);
+  const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0,.2,0),new THREE.Vector3(-.3,.4,.6),new THREE.Vector3(.2,1,.85),new THREE.Vector3(.8,1.3,.85)]);
+  pump.add(new THREE.Mesh(new THREE.TubeGeometry(curve,18,.13,8,false),std(0xe0b44d)));
+  const crew = buildAnimal('puppy'); crew.scale.setScalar(.42); crew.position.set(.65,1.2,2.1); g.add(crew); crew.visible=false;
+  mesh(new THREE.SphereGeometry(.6,12,8,0,Math.PI*2,0,Math.PI/2), std(0xf8c738), 0, 1.9, 0, crew);
+  mesh(new THREE.CylinderGeometry(.72,.72,.08,14), std(0xf8c738), 0, 1.9, 0, crew);
+  return { group: g, seat, strobe, beacon, lampMat, motors, monitor, barrel, pump, needle, crew };
 }

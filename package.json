@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node tools/test-flight-safety.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs",
+    "test": "node tools/test-flight-safety.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs && node tools/test-fire-scene.mjs",
     "build": "node build.mjs",
     "serve": "node serve.mjs"
   },
