@@ -53,6 +53,7 @@ function layer(name, dest) {
   return L;
 }
 
+let badEngine = false;
 export const audio = {
   unlock() {
     if (!actx) {
@@ -88,6 +89,11 @@ export const audio = {
   // air 0..1 (off the ground or water); pan -1..1
   setEngine(i, kind, spin, load, air, pan, active) {
     const e = engines[i]; if (!e) return;
+    // (a value that is not a number would make the browser throw on every frame: note it once, and play it safe)
+    if (!Number.isFinite(spin + load + air + pan)) {
+      if (!badEngine) { badEngine = true; console.warn('engine sound given a bad value', { i, kind, spin, load, air, pan }); (window.__gameProblems ||= []).push({ what: 'engine sound value', i, kind, spin, load, air, pan }); }
+      spin = Number.isFinite(spin) ? spin : 0; load = Number.isFinite(load) ? load : 0; air = Number.isFinite(air) ? air : 0; pan = Number.isFinite(pan) ? pan : 0;
+    }
     const t = actx.currentTime;
     const set = (name, gain, rate) => { const L = e.L[name]; if (!L) return; L.g.gain.setTargetAtTime(gain, t, 0.18); if (L.src) L.src.playbackRate.setTargetAtTime(rate, t, 0.18); };
     const on = active ? 1 : 0, s = spin;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { model } from './assets.js';
+import { model, geo } from './assets.js';
 
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.75, ...o });
 function mesh(geo, mat, x = 0, y = 0, z = 0, parent) {
@@ -128,13 +128,64 @@ export const ANIMAL_TYPES = [
   { id: 'panda', e: '🐼', fur: fur([0.92, 0.92, 0.9], [0.02, 0.02, 0.02]) }, { id: 'fox', e: '🦊', fur: fur([0.8, 0.14, 0.02], [0.95, 0.92, 0.88]) },
   { id: 'frog', e: '🐸', fur: fur([0.09, 0.48, 0.06], [0.55, 0.8, 0.3]) }, { id: 'penguin', e: '🐧', fur: fur([0.02, 0.025, 0.04], [0.95, 0.95, 0.95]) },
 ];
+// The friends come alive without a skeleton: each is one mesh, and its vertex shader moves parts of it by where they
+// are on the body (every friend is built on the same frame, about 1.66 tall, facing +z). The eyes blink now and then;
+// the head tilts and nods, gently when idle and happily when help is near; and one arm lifts and waves.
+// Per friend: anim.uWave and anim.uHappy, 0..1, eased by the game; time is shared (tickFriends).
+const FRIEND_TIME = { value: 0 };
+export function tickFriends(t) { FRIEND_TIME.value = t; }
+const POSE = /* glsl */`
+uniform float uTime, uPhase, uWave, uHappy;
+// the turns for a point of the body: x the arm's lift, y the head's tilt, z the head's nod
+vec3 poseAngles(vec3 p) {
+  float arm = 0.0;
+  #ifdef ARM
+    arm = smoothstep(0.37, 0.46, p.x) * smoothstep(0.32, 0.44, p.y) * (1.0 - smoothstep(0.9, 1.0, p.y)) * uWave * (1.75 + 0.45 * sin(uTime * 10.0 + uPhase));
+  #endif
+  float hw = smoothstep(0.9, 1.05, p.y);
+  float tilt = (sin(uTime * 3.1 + uPhase) * 0.14 * uHappy + sin(uTime * 0.7 + uPhase) * 0.045) * hw;
+  float nod = sin(uTime * 2.3 + uPhase * 2.0) * 0.07 * uHappy * hw;
+  return vec3(arm, tilt, nod);
+}
+vec2 turn(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(v.x * c - v.y * s, v.x * s + v.y * c); }
+vec3 posePoint(vec3 p, vec3 a) {
+  p.xy = vec2(0.36, 0.82) + turn(p.xy - vec2(0.36, 0.82), a.x);
+  p.xy = vec2(0.0, 0.95) + turn(p.xy - vec2(0.0, 0.95), a.y);
+  p.zy = vec2(0.0, 0.95) + turn(p.zy - vec2(0.0, 0.95), a.z);
+  return p;
+}
+vec3 poseDir(vec3 n, vec3 a) { n.xy = turn(n.xy, a.x); n.xy = turn(n.xy, a.y); n.zy = turn(n.zy, a.z); return n; }
+`;
+function animateFriend(mat, anim, flags) {
+  const prev = mat.onBeforeCompile, key = mat.customProgramCacheKey ? mat.customProgramCacheKey() : '';
+  mat.onBeforeCompile = (sh, r) => {
+    if (prev) prev.call(mat, sh, r);
+    Object.assign(sh.uniforms, anim);
+    const defs = flags.map(f => '#define ' + f + '\n').join('');
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + defs + POSE)
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvec3 poseA = poseAngles(position);\nobjectNormal = poseDir(objectNormal, poseA);')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        #ifdef EYE
+          // (a blink: the eye squeezes shut to a line and opens again, every few seconds)
+          float blinkC = mod(uTime + uPhase * 7.0, 3.7), blink = 1.0 - smoothstep(0.0, 0.08, abs(blinkC - 0.1));
+          if (transformed.y > 1.13 && transformed.z > 0.25) transformed.y = 1.215 + (transformed.y - 1.215) * (1.0 - 0.92 * blink);
+        #endif
+        transformed = posePoint(transformed, poseA);`);
+  };
+  mat.customProgramCacheKey = () => key + '|friend' + flags.join('');
+}
 export function buildAnimal(id) {
   const type = ANIMAL_TYPES.find(t => t.id === id);
   const g = new THREE.Group();
-  const body = model('Friend_' + id[0].toUpperCase() + id.slice(1), { tints: type.fur });
+  const name = 'Friend_' + id[0].toUpperCase() + id.slice(1);
+  const body = model(name, { tints: type.fur, own: geo(name).userData.mats });
+  const anim = { uTime: FRIEND_TIME, uPhase: { value: Math.random() * 10 }, uWave: { value: 0 }, uHappy: { value: 0 } };
+  for (const mat of [].concat(body.material)) animateFriend(mat, anim, [...(/^(Paint|Dark)$/.test(mat.name) ? ['EYE'] : []), ...(/^Fur/.test(mat.name) ? ['ARM'] : [])]);
   body.scale.setScalar(1.45);
   g.add(body);
   g.userData.body = body;
+  g.userData.anim = anim;
   return g;
 }
 
@@ -148,42 +199,57 @@ export function buildBeam() {
 }
 
 
-// ================================================================= rescue seaplane
-// A Coast Guard Beaver on floats (tools/build_vehicles.py). Nose toward +Z; the floats touch the water at
-// y = -PLANE_FLOAT. Friends ride home in the open rear cockpit.
-export const PLANE_FLOAT = 1.85;
+// ================================================================= rescue flying boat
+// A Coast Guard rescue amphibian after the Grumman HU-16 Albatross (tools/build_vehicles.py): a boat hull that sits
+// in the water, two engines on a high wing, wingtip floats, and a big door open in the port side where rescued friends
+// sit and look out. Nose toward +Z; the keel is at y = -1.85.
+// (the hull floats with its keel 0.4 m down in the water: its origin is this far above the calm sea)
+export const PLANE_FLOAT = 1.45;
+// where each engine's propeller turns (game axes: x is to port)
+const ENGINES = [[2.5, 0.75, 3.22], [-2.5, 0.75, 3.22]];
 export function buildPlane(accent) {
   const g = new THREE.Group();
   g.add(model('Vehicle_Plane', { tints: { Accent: new THREE.Color(accent) } }));
-  const prop = new THREE.Group(); prop.position.set(0, 0, 4.72); g.add(prop);
-  const blades = model('Vehicle_PlaneProp', { own: ['Dark', 'Tip'] });
-  const bladeMat = blades.userData.mat('Dark');
-  bladeMat.transparent = blades.userData.mat('Tip').transparent = true;
-  prop.add(blades);
+  // (two propellers that turn together: prop is the list, and each blurs into a disc as it spins up)
   const discMat = new THREE.MeshBasicMaterial({ color: 0x1b1f24, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(1.45, 32), discMat); disc.position.set(0, 0, 4.8); g.add(disc);
-  const seat = new THREE.Group(); seat.position.set(0, 0.55, -1.3); g.add(seat);
+  let bladeMat = null;
+  const props = ENGINES.map(([x, y, z]) => {
+    const prop = new THREE.Group(); prop.position.set(x, y, z + 0.02); g.add(prop);
+    const blades = model('Vehicle_PlaneProp', { own: ['Dark', 'Tip'] });
+    blades.scale.setScalar(0.95);
+    if (!bladeMat) bladeMat = blades.userData.mat('Dark');
+    else blades.material = blades.material.map(m => m.name === 'Dark' ? bladeMat : m);
+    blades.userData.mat('Tip').transparent = true; bladeMat.transparent = true;
+    prop.add(blades);
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(1.4, 32), discMat); disc.position.set(x, y, z + 0.1); g.add(disc);
+    return prop;
+  });
+  // the friends sit in the open door, looking out, with room for three along the sill
+  // (friend-sized for the door: three abreast on the sill, a little smaller than life, all facing out)
+  const seat = new THREE.Group(); seat.position.set(0.62, -1.02, -0.55); seat.rotation.y = Math.PI / 2; seat.scale.setScalar(0.5); seat.userData.facingOut = true; g.add(seat);
 
   const lightMat = (c) => new THREE.MeshStandardMaterial({ color: 0x111111, emissive: c, emissiveIntensity: 3 });
-  mesh(new THREE.SphereGeometry(0.1, 8, 6), lightMat(0xff2020), 7.25, 1.26, 2.3, g).castShadow = false;
-  mesh(new THREE.SphereGeometry(0.1, 8, 6), lightMat(0x20ff40), -7.25, 1.26, 2.3, g).castShadow = false;
-  const strobe = mesh(new THREE.SphereGeometry(0.11, 8, 6), lightMat(0xffffff), 0, 2.32, -4.62, g); strobe.castShadow = false;
-  const beacon = mesh(new THREE.SphereGeometry(0.12, 8, 6), lightMat(0xff2030), 0, -0.78, 0.5, g); beacon.castShadow = false;
+  mesh(new THREE.SphereGeometry(0.1, 8, 6), lightMat(0xff2020), 7.4, 0.98, 1.5, g).castShadow = false;
+  mesh(new THREE.SphereGeometry(0.1, 8, 6), lightMat(0x20ff40), -7.4, 0.98, 1.5, g).castShadow = false;
+  const strobe = mesh(new THREE.SphereGeometry(0.11, 8, 6), lightMat(0xffffff), 0, 2.95, -5.5, g); strobe.castShadow = false;
+  const beacon = mesh(new THREE.SphereGeometry(0.12, 8, 6), lightMat(0xff2030), 0, 0.98, 0.9, g); beacon.castShadow = false;
   const lampMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xdcecff, emissiveIntensity: 0 });
-  mesh(new THREE.SphereGeometry(0.16, 10, 8), lampMat, 2.2, 1.1, 2.6, g).castShadow = false;
+  mesh(new THREE.SphereGeometry(0.16, 10, 8), lampMat, 0, -0.35, 5.62, g).castShadow = false;
+  // the water bomber's kit, shown on fire missions: the tank sits inside the hull, so outside there are only the drop
+  // doors in the hull bottom, the two scoop probes behind the step, and a gauge on the hull side showing how full it is
   const fireTank = new THREE.Group(); g.add(fireTank); fireTank.visible = false;
-  const tank = mesh(new THREE.CylinderGeometry(0.65, 0.65, 2.7, 14), std(0xf1ba37), 0, -0.3, -0.2, fireTank); tank.rotation.x = Math.PI / 2;
-  mesh(new THREE.BoxGeometry(0.6, 0.3, 0.5), std(0x263b48), 0, -0.95, -0.2, fireTank);
   const gates = [], scoops = [];
   for (const side of [-1, 1]) {
-    const gate = new THREE.Group(); gate.position.set(side * .52, -.98, -.2); fireTank.add(gate);
-    mesh(new THREE.BoxGeometry(.52, .12, 1.4), std(0xdee4df), -side * .25, 0, 0, gate); gates.push(gate);
-    const scoop = new THREE.Group(); scoop.position.set(side * 1.5, -1.4, .5); fireTank.add(scoop);
-    mesh(new THREE.BoxGeometry(.24, .72, .28), std(0x536d78), 0, -.25, 0, scoop);
-    mesh(new THREE.BoxGeometry(.4, .18, .5), std(0xe9b93b), 0, -.6, .12, scoop); scoops.push(scoop);
+    const gate = new THREE.Group(); gate.position.set(side * 0.42, -1.8, 0.4); fireTank.add(gate);
+    mesh(new THREE.BoxGeometry(0.42, 0.06, 1.5), std(0xdee4df), -side * 0.21, 0, 0, gate); gates.push(gate);
+    const scoop = new THREE.Group(); scoop.position.set(side * 0.35, -1.7, -0.5); fireTank.add(scoop);
+    mesh(new THREE.BoxGeometry(0.16, 0.5, 0.22), std(0x536d78), 0, -0.2, 0, scoop);
+    mesh(new THREE.BoxGeometry(0.3, 0.12, 0.4), std(0xe9b93b), 0, -0.45, 0.1, scoop); scoops.push(scoop);
   }
-  const level = mesh(new THREE.BoxGeometry(.08, 1, 1.7), std(0x43c9ea, {emissive:0x126078, emissiveIntensity:.3}), .66, -.3, -.2, fireTank);
-  return { group: g, prop, discMat, bladeMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
+  // (the gauge: a window in the starboard side with the water rising in it)
+  mesh(new THREE.BoxGeometry(0.06, 1.1, 1.5), std(0x263b48), -0.93, -0.3, 1.2, fireTank);
+  const level = mesh(new THREE.BoxGeometry(0.08, 1, 1.3), std(0x43c9ea, { emissive: 0x126078, emissiveIntensity: 0.3 }), -0.95, -0.3, 1.2, fireTank);
+  return { group: g, prop: props[0], props, discMat, bladeMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
 }
 
 

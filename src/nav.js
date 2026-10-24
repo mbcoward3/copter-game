@@ -1,10 +1,10 @@
 // Navigation for the autopilots. Two charts of the world on a 5 m grid, each holding how far it is from every point to
 // the nearest thing in the way:
 //   water: to land, shallows, rock or the pier (for the boat, and the seaplane on the water)
-//   air:   to anything standing up taller than a given height (for the helicopter and the seaplane in the air; they
-//          climb over the ground by themselves, so only towers, stacks, the arch and the like are in the way)
+//   air:   to anything standing up taller than a given height: towers, stacks, the arch and the like, and hills and
+//          treetops (for the seaplane in the air, which goes round high ground rather than hopping over it)
 // and routes over them that keep to the middle of the open water, smoothed into a few straight legs.
-import { terrainHeight, OBSTACLES, SHOALS, WORLD_R } from './world.js';
+import { terrainHeight, canopyAt, OBSTACLES, SHOALS, PIERS, WORLD_R } from './world.js';
 
 const CELL = 5, HALF = WORLD_R + 60, N = Math.ceil((HALF * 2) / CELL);
 const idx = (x, z) => {
@@ -61,7 +61,8 @@ export function createNav() {
   }
   for (const o of OBSTACLES) if (!o.easy) stamp(wet, o.x, o.z, (o.wr || o.r) + 1);
   for (const o of SHOALS) stamp(wet, o.x, o.z, o.r + 1);
-  for (let z = 34; z <= 56; z += 2) stamp(wet, 0, z, 2.6);           // the base's pier
+  // the piers and jetties, along their whole length
+  for (const P of PIERS) { const l = Math.hypot(P.b.x - P.a.x, P.b.z - P.a.z); for (let s = 0; s <= l; s += 2) stamp(wet, P.a.x + (P.b.x - P.a.x) * s / l, P.a.z + (P.b.z - P.a.z) * s / l, P.w); }
   const water = distances(wet);
 
   // ---- air charts, one for each height that matters, made when first asked for
@@ -70,10 +71,32 @@ export function createNav() {
     if (!airs.has(top)) {
       const b = new Uint8Array(N * N);
       for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) if (Math.hypot(cx(i), cx(j)) > WORLD_R + 20) b[j * N + i] = 1;
-      for (const o of OBSTACLES) if (o.top > top) stamp(b, o.x, o.z, o.r);
+      for (const o of OBSTACLES) if (o.top > top - 8) stamp(b, o.x, o.z, Math.max(o.r, o.wr || 0));      // (with room over the top too)
+      // (and high ground: hills and the treetops on them that stand within a couple of metres of this height)
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const x = cx(i), z = cx(j); if (terrainHeight(x, z) + canopyAt(x, z) > top - 2) b[j * N + i] = 1; }
       airs.set(top, distances(b));
     }
     return airs.get(top);
+  };
+
+  // ---- the ceiling chart: the top of the highest thing (ground, treetops, towers, stacks, the arch) within a wingspan
+  // and some of every point, so the seaplane can simply fly higher than it wherever it is going (made when first asked)
+  let ceil = null;
+  const ceiling = () => {
+    if (ceil) return ceil;
+    const top = new Float32Array(N * N);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const x = cx(i), z = cx(j), g = terrainHeight(x, z); top[j * N + i] = g > 0.5 ? g + canopyAt(x, z) : Math.max(g, 0); }
+    for (const o of OBSTACLES) {
+      const r = Math.max(o.r, o.wr || 0);
+      const i0 = Math.max(0, Math.floor((o.x - r + HALF) / CELL)), i1 = Math.min(N - 1, Math.floor((o.x + r + HALF) / CELL));
+      const j0 = Math.max(0, Math.floor((o.z - r + HALF) / CELL)), j1 = Math.min(N - 1, Math.floor((o.z + r + HALF) / CELL));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if ((cx(i) - o.x) ** 2 + (cx(j) - o.z) ** 2 < r * r) top[j * N + i] = Math.max(top[j * N + i], o.top);
+    }
+    // (spread out by the reach: highest within R metres, done as two passes along the rows and the columns)
+    const R = 5, tmp = new Float32Array(N * N); ceil = new Float32Array(N * N);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { let m = 0; for (let k = Math.max(0, i - R); k <= Math.min(N - 1, i + R); k++) m = Math.max(m, top[j * N + k]); tmp[j * N + i] = m; }
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { let m = 0; for (let k = Math.max(0, j - R); k <= Math.min(N - 1, j + R); k++) m = Math.max(m, tmp[k * N + i]); ceil[j * N + i] = m; }
+    return ceil;
   };
 
   const at = (d, x, z) => { const k = idx(x, z); return k < 0 ? 0 : d[k]; };
@@ -141,6 +164,7 @@ export function createNav() {
 
   return {
     water: { at: (x, z) => at(water, x, z), clear: (ax, az, bx, bz, need) => clear(water, ax, az, bx, bz, need), open: (x, z, need, r) => open(water, x, z, need, r), route: (a, b, need, snap) => route(water, a, b, need, snap) },
+    ceiling: (x, z) => { const k = idx(x, z); return k < 0 ? 0 : ceiling()[k]; },
     air: top => { const d = air(top); return { at: (x, z) => at(d, x, z), clear: (ax, az, bx, bz, need) => clear(d, ax, az, bx, bz, need), open: (x, z, need, r) => open(d, x, z, need, r), route: (a, b, need, snap) => route(d, a, b, need, snap) }; },
   };
 }

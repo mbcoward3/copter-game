@@ -1,6 +1,25 @@
 # Spec: airplane option
 
-Status: the seaplane is built in v1 (`src/main.js` `updatePlane`, `src/models.js` `buildPlane`) using the defaults below; the parachute raft and a taxi-to-mooring animation were not built. Written so it can be handed to a session working on either v1 (`src/`) or v2 (`v2/`).
+Status (2026-10-24): the seaplane is a Coast Guard flying boat (`src/models.js` `buildPlane`, `tools/build_vehicles.py`), flown in assisted mode by `planePilot` in `src/main.js`. The sections below the acceptance checks are the original v1 design notes.
+
+## Acceptance checks (assisted mode, holding only go)
+
+These are what a child and a parent would notice, written as numbers. Each one is checked automatically by
+`npm run check` (fast simulation, every mission x 3 seeds) and `npm run play-check` (the real page, drawn, with real
+key presses), under the check name in brackets. A change to the seaplane is not done until both pass and the
+play-check screenshots have been looked at.
+
+| What you would see | Limit | Check |
+|---|---|---|
+| From a fresh start at the pier it is in the air quickly | airborne within 15 s (not counting taxiing to friends near enough to fetch by water) | `slowTakeoff` |
+| It heads for where it is going: no flying off somewhere else | while more than 400 m from its goal, flying away from it at most 15% of that time (circling nearer in to line up a landing is fine, and so is the circuit within 450 m of the landing spot it chose: out past it and back round) | `fliesAway` |
+| It never skims a hill, the trees or a tower | 8 m clear of ground, treetops and towers whenever in the air and not landing | `planeIntoHill` |
+| It lands near the friend, not somewhere far off | touches down within 250 m of the friend (or the fire's water) | `landsFarAway` |
+| It never lands on a beach, a reef or a rock | every touchdown on water at least 3 m deep | `planeOnLand` |
+| On a fire mission it fetches water from near the fire | scoops within 400 m of the fire | `scoopsFarAway` |
+| It never gives up or circles | a pickup or a drop at least every 60 s of play | `noProgress` |
+| No errors, no frozen screen | nothing thrown, nothing recorded in `__gameProblems` | `pageError` |
+
 
 ## Recommendation: a rescue seaplane
 
