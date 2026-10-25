@@ -601,16 +601,36 @@ def hut():
              slab('Wall', (1.9, 0, 3.4), (0.1, 2.6, 2.2), 'Deck', 0.02), slab('Wall', (-1.1, 0.75, 3.4), (0.1, 1.1, 2.2), 'Deck', 0.02),
              slab('Wall', (-1.1, -0.75, 3.4), (0.1, 1.1, 2.2), 'Deck', 0.02), slab('Lintel', (-1.1, 0, 4.3), (0.1, 0.5, 0.4), 'Deck', 0.02),
              slab('Shutter', (0.6, 1.36, 3.6), (0.9, 0.06, 0.7), 'Raft', 0.02), slab('Window', (0.6, 1.33, 3.6), (0.7, 0.04, 0.55), 'Dark', 0.0)]
+    # plank walls: seams between the boards, posts at the corners, and a frame round the window
+    for z in (2.62, 3.02, 3.42, 3.82, 4.22):
+        for sy in (1, -1):
+            bits.append(rod('Plank', (-1.1, sy * 1.36, z), (1.9, sy * 1.36, z), 0.016, 'Bark', 5))
+        bits.append(rod('Plank', (1.96, -1.3, z), (1.96, 1.3, z), 0.016, 'Bark', 5))
+    for x, y in ((-1.12, 1.32), (-1.12, -1.32), (1.92, 1.32), (1.92, -1.32)):
+        bits.append(rod('Post', (x, y, 2.3), (x, y, 4.55), 0.07, 'Bark', 8))
+    for (a0, a1) in (((0.12, 1.38, 3.28), (1.08, 1.38, 3.28)), ((0.12, 1.38, 3.92), (1.08, 1.38, 3.92)),
+                     ((0.12, 1.38, 3.28), (0.12, 1.38, 3.92)), ((1.08, 1.38, 3.28), (1.08, 1.38, 3.92))):
+        bits.append(rod('WindowFrame', a0, a1, 0.035, 'Bark', 6))
+    # the thatch: three overlapping rows a side, each lapping over the one below, with eaves past the walls
     for side in (1, -1):
-        bits.append(box('Thatch', [(-1.9, 0, 5.9), (2.4, 0, 5.9), (2.4, side * 2.4, 4.2), (-1.9, side * 2.4, 4.2)],
-                        [(-1.9, 0, 6.15), (2.4, 0, 6.15), (2.4, side * 2.4, 4.45), (-1.9, side * 2.4, 4.45)], 'LeafDry', 0.05))
-    bits += [rod('Ridge', (-2.0, 0, 6.15), (2.5, 0, 6.15), 0.12, 'Bark', 8)]
+        for k in range(3):
+            t0, t1 = k / 3 - 0.04, (k + 1) / 3 + 0.04
+            y0, y1 = side * 2.5 * t0, side * 2.5 * t1
+            z0, z1 = 6.05 - 1.75 * t0 + 0.07 * (2 - k), 6.05 - 1.75 * t1 + 0.07 * (2 - k)
+            bits.append(box('Thatch', [(-2.05, y0, z0), (2.55, y0, z0), (2.55, y1, z1), (-2.05, y1, z1)],
+                            [(-2.05, y0, z0 + 0.2), (2.55, y0, z0 + 0.2), (2.55, y1, z1 + 0.2), (-2.05, y1, z1 + 0.2)], 'LeafDry', 0.05))
+    bits += [rod('Ridge', (-2.1, 0, 6.3), (2.6, 0, 6.3), 0.13, 'Bark', 8)]
     for z in range(5):
         bits.append(rod('Rung', (-2.7, -0.4, 0.3 + z * 0.45), (-2.7, 0.4, 0.3 + z * 0.45), 0.04, 'Bark', 6))
     bits += [rod('Rail', (-2.7, -0.4, -0.5), (-2.25, -0.4, 2.3), 0.05, 'Bark', 6), rod('Rail', (-2.7, 0.4, -0.5), (-2.25, 0.4, 2.3), 0.05, 'Bark', 6),
-             rod('NetPole', (-1.9, 1.6, 2.2), (-1.9, 2.8, 4.2), 0.05, 'Bark', 6), rod('NetPole', (1.9, 1.6, 2.2), (1.9, 2.8, 4.2), 0.05, 'Bark', 6),
-             box('Net', [(-1.9, 2.8, 4.2), (1.9, 2.8, 4.2), (1.9, 2.3, 2.6), (-1.9, 2.3, 2.6)], [(-1.9, 2.84, 4.2), (1.9, 2.84, 4.2), (1.9, 2.34, 2.6), (-1.9, 2.34, 2.6)], 'Seam', 0.0),
-             ball('Float', (-1.0, 2.5, 3.0), (0.16, 0.16, 0.16), 'Raft'), ball('Float', (0.6, 2.45, 2.8), (0.16, 0.16, 0.16), 'Tip'),
+             rod('NetPole', (-1.9, 1.6, 2.2), (-1.9, 2.8, 4.2), 0.05, 'Bark', 6), rod('NetPole', (1.9, 1.6, 2.2), (1.9, 2.8, 4.2), 0.05, 'Bark', 6)]
+    # the net hung between its poles to dry: a mesh of cord sagging in the middle, its floats caught in it
+    net = lambda u, v: (-1.9 + 3.8 * u, 2.8 - 0.5 * v - 0.08 * math.sin(math.pi * u), 4.2 - 1.6 * v - 0.25 * math.sin(math.pi * u) * (1 - v))
+    for i in range(9):
+        bits.append(tube('NetCord', [net(i / 8, k / 6) for k in range(7)], 0.012, 'Seam', 4))
+    for j in range(5):
+        bits.append(tube('NetCord', [net(k / 12, j / 4) for k in range(13)], 0.012, 'Seam', 4))
+    bits += [ball('Float', net(0.25, 0.75), (0.16, 0.16, 0.16), 'Raft'), ball('Float', net(0.65, 0.85), (0.16, 0.16, 0.16), 'Tip'),
              ball('Lamp', (-1.25, 0.6, 4.1), (0.1, 0.1, 0.13), 'Glow'), slab('Crate', (1.3, -0.9, 2.55), (0.6, 0.5, 0.5), 'Bleached', 0.02)]
     return join('World_Hut', bits)
 
