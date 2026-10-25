@@ -84,7 +84,7 @@ const mean = (list, k) => { const v = list.map(r => r.scores[k]).filter(x => typ
 const summary = {};
 for (const key of Object.keys(byKey).sort()) {
   const list = byKey[key], s = { runs: list.length, unfinished: list.filter(r => !r.scores.done).map(r => r.seed) };
-  for (const k of ['finishS', 'metresPerRescue', 'turnDegPerRescue', 'flipsPerMin', 'stuckS', 'goArounds', 'bumps']) s[k] = mean(list, k);
+  for (const k of ['finishS', 'metresPerRescue', 'turnDegPerRescue', 'flipsPerMin', 'stuckS', 'goArounds', 'bumps', 'detourPct']) s[k] = mean(list, k);
   s.rules = {};
   for (const r of list) for (const [rule, v] of Object.entries(r.rules)) (s.rules[rule] ||= []).push({ seed: r.seed, seconds: v, first: r.worst?.[rule] });
   summary[key] = s;

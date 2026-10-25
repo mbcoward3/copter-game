@@ -20,6 +20,7 @@
     const doing = () => { const A = p.ap || {}; return [A.key, A.final ? 'final' : '', A.land ? 'land@' + Math.round(A.land.x) + ',' + Math.round(A.land.z) : '', A.climbH != null ? 'climbOut' : '', A.run != null ? 'run' : '', A.tk ? 'taxiOut' : '', A.bomb ? 'bomb:' + A.bomb.stage : '', p.afloat ? 'water' : 'air', 'alt' + Math.round(p.pos.y - (G.PLANE_FLOAT || 0)), 'w' + (p.water || 0).toFixed(1)].filter(Boolean).join(' '); };
     const broke = (rule, at) => { rules[rule] = +((rules[rule] || 0) + 0.1).toFixed(1); if (!worst[rule]) worst[rule] = { t: Math.round(G.game.t), at: at.map(Math.round), doing: vehicle === 'plane' ? doing() : undefined }; };
     const m0 = G.game.mission, r0 = p.rescued;
+    const legs = { flown: 0, straight: 0 };
     let dist = 0, turn = 0, flips = 0, lastSign = 0, overs = 0, overNear = false, stuck = 0, still = 0, landings = 0, wasAfloat = p.afloat, firstAt = null, done = null;
     let lastYaw = p.yaw;
     const last = p.pos.clone(), sec0 = p.pos.clone();
@@ -76,7 +77,9 @@
           P.lastGoalD = d;
         } else P.lastGoalD = null;
         // progress: someone aboard, someone home, water taken on, water dropped
-        if (p.cargo.length > P.cargo || p.rescued > P.rescued || (p.water >= 1 && P.water < 1) || (p.water < 0.1 && P.water > 0.9)) P.lastProgress = t;
+        // (and lining up at the home pier with friends aboard: from the far zones the flight home and the berthing take a while)
+        if (p.cargo.length > P.cargo || p.rescued > P.rescued || (p.water >= 1 && P.water < 1) || (p.water < 0.1 && P.water > 0.9) || (p.berthing && !P.berthing && p.cargo.length)) P.lastProgress = t;
+        P.berthing = p.berthing;
         if (p.water > 0 && P.water === 0 && p.fireJob) { const F = p.fireJob.fire; if (Math.hypot(F.x - p.pos.x, F.z - p.pos.z) > 400) broke('scoopsFarAway', p.pos.toArray()); }
         P.cargo = p.cargo.length; P.rescued = p.rescued; P.water = p.water;
         if (t - P.lastProgress > 60 && !G.game.celebrate) { broke('noProgress', p.pos.toArray()); P.lastProgress = t; }
@@ -84,6 +87,14 @@
         for (const o of G.OBSTACLES) if (!o.easy && p.pos.y - 1.9 < o.top - 1 && Math.hypot(p.pos.x - o.x, p.pos.z - o.z) < o.r * 0.8) broke('heliInObstacle', p.pos.toArray());
         if (p.pos.y < T(p.pos.x, p.pos.z) + 0.5) broke('heliUnderground', p.pos.toArray());
       }
+      // (a hull, boat or flying boat, never through a pier or a jetty: its middle stays off every deck)
+      if (vehicle !== 'heli') for (const Q of G.world.piers || []) {
+        const L = Math.hypot(Q.b.x - Q.a.x, Q.b.z - Q.a.z), ax = (Q.b.x - Q.a.x) / L, az = (Q.b.z - Q.a.z) / L;
+        const tt = (p.pos.x - Q.a.x) * ax + (p.pos.z - Q.a.z) * az, nn = -(p.pos.x - Q.a.x) * az + (p.pos.z - Q.a.z) * ax;
+        if (tt > 0 && tt < L && Math.abs(nn) < Q.w && p.pos.y < 3) broke('hullInPier', p.pos.toArray());
+      }
+      // (friends brought home walk to the pen: nobody still on their way after 30 s)
+      for (const h of G.hoppers || []) if (h.state === 'home' && G.game.t - h.homeT > 30) { broke('walkHomeStuck', h.model.position.toArray()); h.homeT = G.game.t; }
       for (const o of ambient) if (o.visible !== false && T(o.position.x, o.position.z) > -1.2) broke('ambientBoatAground', o.position.toArray());
       // (and never through a pier or a jetty)
       for (const o of ambient) for (const Q of G.world.piers || []) { const ux = Q.b.x - Q.a.x, uz = Q.b.z - Q.a.z, tt = Math.max(0, Math.min(1, ((o.position.x - Q.a.x) * ux + (o.position.z - Q.a.z) * uz) / (ux * ux + uz * uz))); if (Math.hypot(o.position.x - Q.a.x - ux * tt, o.position.z - Q.a.z - uz * tt) < Q.w + 2.5) broke('boatInPier', o.position.toArray()); }
@@ -94,8 +105,26 @@
       if (sg) lastSign = sg;
       if (vehicle === 'plane') {
         // (a jump of many metres in a tenth of a second is the game placing the plane, as a new fire does: not a landing)
+        if (!p.afloat && wasAfloat) { P.leg = { x: p.pos.x, z: p.pos.z, flown: 0, drop: false }; }
+        if (P.leg && !p.afloat) { P.leg.flown += Math.hypot(p.pos.x - last.x, p.pos.z - last.z); if (p.attack) P.leg.drop = true; }
         if (p.afloat && !wasAfloat && p.pos.distanceTo(last) < 15) {
           landings++;
+          // (a hop from one stretch of water to the next flies a smooth curve, not a loop out and back: at most half as far
+          // again as the straight line, plus a turn about. A leg that flew a water drop is a bombing run, not a hop)
+          if (P.leg && !P.leg.drop) {
+            // (measured against the shortest way it could fly, round anything standing at cruising height, which is
+            // the straight line unless an island's hills are in the way. A turn about is one circle at its turn radius,
+            // 400 m; or, when the water it lands on faces back the way it came (the home berth's bay, from the south),
+            // out past the spot by the length of its final, one circle, and back: 650 m)
+            const straight = Math.hypot(p.pos.x - P.leg.x, p.pos.z - P.leg.z);
+            const way = G.nav.air(26).route({ x: P.leg.x, z: P.leg.z }, { x: p.pos.x, z: p.pos.z }, 12, 60);
+            let round = straight;
+            if (way) { round = 0; for (let i = 1; i < way.length; i++) round += Math.hypot(way[i].x - way[i - 1].x, way[i].z - way[i - 1].z); round = Math.max(round, straight); }
+            legs.flown += P.leg.flown; legs.straight += straight;
+            const back = Math.abs(Math.atan2(Math.sin(p.yaw - Math.atan2(p.pos.x - P.leg.x, p.pos.z - P.leg.z)), Math.cos(p.yaw - Math.atan2(p.pos.x - P.leg.x, p.pos.z - P.leg.z)))) > 2.1;
+            if (P.leg.flown > round * 1.5 + (back ? 650 : 400)) { rules.roundabout = (rules.roundabout || 0) + 1; worst.roundabout ||= { t: Math.round(G.game.t), at: [Math.round(P.leg.x), Math.round(P.leg.z), Math.round(p.pos.x), Math.round(p.pos.z)], doing: `flew ${Math.round(P.leg.flown)} m for ${Math.round(straight)} m (${Math.round(round)} m round) ` + doing() }; }
+          }
+          P.leg = null;
           // (on deep water, and near whoever or whatever it came down for)
           if (T(p.pos.x, p.pos.z) > -3) broke('planeOnLand', p.pos.toArray());
           const goal = goalOf();
@@ -109,7 +138,8 @@
       dist += p.pos.distanceTo(last); last.copy(p.pos);
       if (k % 10 === 9) {
         const moved = p.pos.distanceTo(sec0); sec0.copy(p.pos);
-        const busy = p.incoming || p.pickup || p.parked || p.spray || (vehicle === 'heli' && (p.mode === 'pickup' || p.mode === 'deliver' || p.mode === 'dip' || p.grounded)) || G.game.celebrate > 0 || G.game.switchT > 0;
+        // (lying at the pier while friends climb off, or swinging round on the spot to leave it, is not being stuck)
+        const busy = p.incoming || p.pickup || p.parked || p.spray || p.unloading || (p.berthed && p.cargo.length) || p.unberth || (p.ap && p.ap.unberth) || (vehicle === 'heli' && (p.mode === 'pickup' || p.mode === 'deliver' || p.mode === 'dip' || p.grounded)) || G.game.celebrate > 0 || G.game.switchT > 0;
         if (moved < 2 && !busy) { if (++still >= 3) stuck++; } else still = 0;
       }
       if (firstAt === null && p.rescued > r0) firstAt = t;
@@ -124,7 +154,7 @@
         done: done !== null, finishS: done, firstRescueS: firstAt, rescued,
         metresPerRescue: Math.round(dist / Math.max(1, rescued)), turnDegPerRescue: Math.round(turn * 57.3 / Math.max(1, rescued)),
         flipsPerMin: +(flips / ((done || seconds) / 60)).toFixed(1), stuckS: stuck, goArounds: vehicle === 'plane' ? overs : undefined,
-        landings: vehicle === 'plane' ? landings : undefined, awayPct: vehicle === 'plane' ? Math.round(P.away / Math.max(1, P.airborne) * 100) : undefined, bumps: Object.values(b).reduce((n, v) => n + v, 0),
+        landings: vehicle === 'plane' ? landings : undefined, awayPct: vehicle === 'plane' ? Math.round(P.away / Math.max(1, P.airborne) * 100) : undefined, detourPct: vehicle === 'plane' && legs.straight ? Math.round(legs.flown / legs.straight * 100) : undefined, bumps: Object.values(b).reduce((n, v) => n + v, 0),
       },
     };
   };
