@@ -1,6 +1,6 @@
 # Spec: airplane option
 
-Status (2026-10-24): the seaplane is a Coast Guard flying boat (`src/models.js` `buildPlane`, `tools/build_vehicles.py`), flown in assisted mode by `planePilot` in `src/main.js`. The sections below the acceptance checks are the original v1 design notes.
+Status (2026-10-25): the seaplane is a Coast Guard flying boat (`src/models.js` `buildPlane`, `tools/build_vehicles.py`), flown in assisted mode by `planePilot` in `src/main.js`. Since 2026-10-25 it flies smooth curves (`src/flightpath.mjs`: turn, straight, turn onto a 90 m final, a steady 1-in-6 glide from cruising height that starts in the turn) instead of the old lead-in point and teardrop, and moors at the home pier with its door to it (see "Home pier" in `VEHICLE-UI.md`). The sections below the acceptance checks are the original v1 design notes.
 
 ## Acceptance checks (assisted mode, holding only go)
 
@@ -17,10 +17,20 @@ play-check screenshots have been looked at.
 | It lands near the friend, not somewhere far off | touches down within 250 m of the friend (or the fire's water) | `landsFarAway` |
 | It never lands on a beach, a reef or a rock | every touchdown on water at least 3 m deep | `planeOnLand` |
 | On a fire mission it fetches water from near the fire | scoops within 400 m of the fire | `scoopsFarAway` |
-| It never gives up or circles | a pickup or a drop at least every 60 s of play | `noProgress` |
+| It never gives up or circles | a pickup or a drop at least every 60 s of play (or lining up at the home pier with friends aboard) | `noProgress` |
+| It flies a smooth curve to where it lands, not a loop out and back | each hop between stretches of water flies at most 1.5× the shortest way round anything at cruising height, plus a turn about: 400 m, one circle at its turn radius; 650 m when the only water to land on faces back the way it came (out past the spot by the length of its final, round and back). The October 2026 teardrop flew 650–1150 m for 80–300 m hops and broke this in 6 of 8 missions | `roundabout` |
+| Its hull never goes through a pier or a jetty | the hull's middle never over a deck | `hullInPier` |
+| Friends it brings home walk to the pen | each is off the plane, along the pier and in the pen within 30 s | `walkHomeStuck` |
 | Flying with the boat on a fire mission, it has a fire to fight too | in each zone, at most 20% of new fires are ones only the boat can fight (the boat needs a shore, the seaplane open water to scoop); before October 2026 it was 33–92%, and the seaplane flew about with nothing to do | `crewLint` |
 | No errors, no frozen screen | nothing thrown, nothing recorded in `__gameProblems` | `pageError` |
 
+
+Rule changes on 2026-10-25 (HOW-WE-CHECK rule 7), each because the rule was measuring the wrong thing once friends
+are landed at the pier rather than dropped off in passing:
+- `stuckS` no longer counts lying at the pier while friends climb off, or swinging round on the spot to leave it.
+- `noProgress` counts lining up at the home pier with friends aboard: from the far zones (snow, harbour) the flight
+  home and the berthing together can take a little over a minute, and nothing about that is giving up.
+- `roundabout` (new) is checked against the old teardrop: it flags 6 of 8 missions there, none now.
 
 ## Recommendation: a rescue seaplane
 

@@ -10,6 +10,7 @@ import { buildHeli, buildBasket, buildBucket, buildRing, buildRaft, buildAnimal,
 import { model } from './assets.js';
 import { createFx } from './fx.js';
 import { createNav, lookAhead, routeLeft } from './nav.js';
+import { dubins, dubinsLength, samplePath, track, pursuitRate } from './flightpath.mjs';
 import { createLife } from './life.js';
 import { createTraffic } from './traffic.js';
 import { audio, sfx, animalVoice } from './audio.js';
@@ -137,27 +138,134 @@ function setVehicle(p, kind) {
   p.vehicle = kind;
   p.model = p[kind];
   p.basket = kind === 'heli' ? p.heliBasket : p[kind].seat;
+  assignBerths();
   parkPlayer(p); showVehicle(p, p.active);
 }
-const BERTH = [{ x: -4.6, z: 52 }, { x: 6.4, z: 52 }];       // the boats tie up alongside the pier
-const MOORING = [{ x: -8, z: 60 }, { x: 8, z: 60 }];   // either side of the pier
-const DOCK = new THREE.Vector3(0, 0, 66);
+// ---- the home pier. The boat comes in across the end of it (from whichever side is nearer: from the west on a short
+// run, clear of the sea arch's foot) and lies there, and once its friends are off carries straight on; a second boat ties up alongside the west side, and backs out after. The flying
+// boat moors along the east side with its door (in its port side) to the pier, its wing float just clear of the deck,
+// and swings round on the spot to leave; a second one lies across the end of the pier, coming in from the west on a short
+// run that keeps its wing clear of the sea arch, and carries straight on. Each berth is where the hull stops and the
+// heading it lies at; the way in is straight along that heading for the last `run` metres (BERTH_RUN unless it says), from
+// `lead` metres further back. (The deck is 1.62 m above the calm sea and 2.7 m either side of its line.)
+const HOME_PIER = world.piers.find(P => Math.abs(P.a.z - 36) < 0.5 && Math.abs(P.a.x - 0.88) < 0.1) || world.piers[0];
+const PIER_X = HOME_PIER.a.x, DECK_Y = 1.62, DECK = { x0: PIER_X - 2.1, x1: PIER_X + 2.1, z0: HOME_PIER.a.z + 3, z1: HOME_PIER.b.z - 0.7 };
+const BERTHS = {
+  boat: [
+    { id: 'boatT', x: PIER_X, z: HOME_PIER.b.z + 2.2, h: -Math.PI / 2, through: true, lead: 18 },
+    { id: 'boatT', x: PIER_X, z: HOME_PIER.b.z + 2.2, h: Math.PI / 2, through: true, run: 20, lead: 14 },      // (from the west, short of the sea arch)
+    { id: 'boatW', x: PIER_X - 4.8, z: 58, h: Math.PI, clear: HOME_PIER.b.z - 58 + 4 },      // (clear: how far it backs out, its stern past the end of the pier, before it swings round)
+  ],
+  plane: [
+    { id: 'planeE', x: PIER_X + 10.7, z: 58, h: Math.PI, leave: Math.PI / 2 },      // (leave: the way it swings round to set off, away from the pier)
+    { id: 'planeT', x: PIER_X + 0.55, z: HOME_PIER.b.z + 8, h: Math.PI / 2, through: true, run: 20, lead: 14 },
+  ],
+};
+const BERTH_CLASH = { boatT: 'planeT', planeT: 'boatT' };      // (both lie across the end of the pier)
+const BERTH_RUN = 32;
+const DOCK = new THREE.Vector3(PIER_X, 0, HOME_PIER.b.z);       // the end of the pier
+// which berth each pilot uses: the red pilot's first choice, then the blue pilot's first choice that is still free (with
+// both ways in to a berth across the end of the pier: whichever is nearer when it heads home)
+function assignBerths() {
+  const used = [];
+  for (const p of players) {
+    p.berth = null; p.berthOpts = [];
+    const list = BERTHS[p.vehicle]; if (!list) continue;
+    const B = list.find(B => !used.some(u => u === B.id || BERTH_CLASH[u] === B.id));
+    if (!B) continue;
+    p.berthOpts = list.filter(q => q.id === B.id); p.berth = p.berthOpts[0]; used.push(B.id);
+  }
+}
+// heading home: the nearer way in to its berth
+function chooseBerth(p) {
+  if (p.berthing || p.berthed || !p.berthOpts || p.berthOpts.length < 2) return;
+  let bd = 1e9;
+  for (const B of p.berthOpts) { const S = berthStart(B), d = Math.hypot(S.x - p.pos.x, S.z - p.pos.z); if (d < bd) { bd = d; p.berth = B; } }
+}
+// The last of the way in to a berth: along its line, slowing to a stop alongside, then lying there. Returns where to steer
+// for and how fast, or null while still on the way to the start of the line.
+function berthing(p) {
+  const B = p.berth; if (!B) return null;
+  const ux = Math.sin(B.h), uz = Math.cos(B.h);
+  const along = (p.pos.x - B.x) * ux + (p.pos.z - B.z) * uz, cross = (p.pos.x - B.x) * uz - (p.pos.z - B.z) * ux;
+  const lined = Math.abs(angDiff(p.yaw, B.h)), plane = p.vehicle === 'plane';
+  if (!p.berthing && along > -(B.run || BERTH_RUN) - 16 && along < -3 && Math.abs(cross) < (plane ? 7 : 9) && lined < (plane ? 0.6 : 0.9)) { p.berthing = true; p.leftBerth = false; }
+  if (p.berthing && (Math.abs(cross) > 14 || along > 5)) p.berthing = false;      // (pushed off it: round again)
+  if (!p.berthing) return null;
+  const look = clamp(-along * 0.6, 6, 14);
+  return { aim: { x: B.x + ux * (along + look), z: B.z + uz * (along + look) }, cap: -along < 0.6 ? 0 : clamp(1.5 + -along * 0.7, 0, plane ? 9 : 14), left: -along };
+}
+// where the way in to a berth starts (well back along its line, for the route there to end at), and the line itself
+const berthStart = B => { const d = (B.run || BERTH_RUN) + (B.lead || 30); return { x: B.x - Math.sin(B.h) * d, z: B.z - Math.cos(B.h) * d }; };
+const berthLine = B => [{ x: B.x - Math.sin(B.h) * (B.run || BERTH_RUN), z: B.z - Math.cos(B.h) * (B.run || BERTH_RUN) }, { x: B.x, z: B.z }];
+// lying at its berth, or on the way in, or off again
+function berthState(p) {
+  const B = p.berth; if (!B) { p.berthed = false; return; }
+  // (stopped alongside, give or take a few metres along the pier)
+  const along = (p.pos.x - B.x) * Math.sin(B.h) + (p.pos.z - B.z) * Math.cos(B.h), cross = (p.pos.x - B.x) * Math.cos(B.h) - (p.pos.z - B.z) * Math.sin(B.h);
+  if (Math.abs(along) < 3.5 && Math.abs(cross) < 2.2 && Math.abs(p.fs) < 0.9) p.berthed = true; else if (Math.hypot(along, cross) > 6) p.berthed = false;
+}
+// how far the hull's side is from the home pier's deck (metres; 0 touching)
+function deckGap(p) {
+  const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
+  let gap = 1e9;
+  for (const [lx, lz, r] of HULL_PTS[p.vehicle]) {
+    const x = p.pos.x + lx * c + lz * s, z = p.pos.z - lx * s + lz * c;
+    const dx = Math.max(PIER_X - HOME_PIER.w - x, 0, x - PIER_X - HOME_PIER.w), dz = Math.max(HOME_PIER.a.z - z, 0, z - HOME_PIER.b.z);
+    gap = Math.min(gap, Math.hypot(dx, dz) - r);
+  }
+  return Math.max(0, gap);
+}
+// Hulls keep out of the piers and jetties: each sample point of the hull (local x to port, z forward, and how far it
+// reaches) is pushed clear of the decks, sliding along them, as a hull fends off. Returns whether it touched.
+// (the flying boat's wing is higher than the decks: its hull and the two floats under the wing are what meet them)
+const HULL_PTS = { boat: [[0, 3.8, 1.2], [0, 0, 1.7], [0, -3.6, 1.6]], plane: [[0, 3.6, 0.9], [0, 0, 1.0], [0, -3.4, 0.8], [6.1, 0.5, 0.45], [-6.1, 0.5, 0.45]] };
+function pierFend(p) {
+  const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
+  let hit = false;
+  for (const P of world.piers) {
+    if (Math.abs(p.pos.x - P.a.x) > 60 || Math.abs(p.pos.z - P.a.z) > 60) continue;
+    const L = Math.hypot(P.b.x - P.a.x, P.b.z - P.a.z), ax = (P.b.x - P.a.x) / L, az = (P.b.z - P.a.z) / L;
+    for (const [lx, lz, r] of HULL_PTS[p.vehicle]) {
+      // (local x, to port, is world (cos yaw, -sin yaw); local z, forward, is (sin yaw, cos yaw))
+      const x = p.pos.x + lx * c + lz * s, z = p.pos.z - lx * s + lz * c;
+      // (in the pier's own terms: t along it from the shore end, n across it)
+      const t = (x - P.a.x) * ax + (z - P.a.z) * az, n = -(x - P.a.x) * az + (z - P.a.z) * ax;
+      const dt = t - clamp(t, 0, L), dn = n - clamp(n, -P.w, P.w), d = Math.hypot(dt, dn);
+      let pt = 0, pn = 0;
+      if (d > 1e-6) {
+        // (outside the deck but within reach of it: straight out from its nearest point, so round its corners it slides)
+        if (d >= r) continue;
+        pt = dt / d * (r - d); pn = dn / d * (r - d);
+      } else {
+        // (right over the deck: out the shortest way, off a side or off the end)
+        const side = P.w + r - Math.abs(n), end = L + r - t;
+        if (side <= end) pn = (Math.sign(n) || 1) * side; else pt = end;
+      }
+      p.pos.x += ax * pt - az * pn; p.pos.z += az * pt + ax * pn;
+      hit = true;
+    }
+  }
+  return hit;
+}
 // each hull's waterline, for the foam where it meets the water: half length, half beam, middle ahead of the origin
 const HULL_WATERLINE = { plane: new THREE.Vector3(3.3, 0.85, 2.1), boat: new THREE.Vector3(4.1, 1.6, 0.3) };
 const HOME_SPOT = { x: 0, z: -3 };        // where the easy helicopter heads with friends aboard: over the paddock
 function parkPlayer(p) {
-  const pad = p.vehicle === 'plane' ? MOORING[p.idx] : p.vehicle === 'boat' ? BERTH[p.idx] : PADS[p.idx];
+  if (p.vehicle !== 'heli' && !p.berth) assignBerths();
+  const pad = p.vehicle === 'heli' ? PADS[p.idx] : p.berth;
   if (p.vehicle === 'plane') { p.pos.set(pad.x, PLANE_FLOAT, pad.z); p.fs = 0; p.afloat = true; p.sea = 1; p.hoist = 0; }
   else if (p.vehicle === 'boat') { p.pos.set(pad.x, 0, pad.z); p.fs = 0; p.afloat = true; p.hoist = 0; }
   else p.pos.set(pad.x, PAD_Y + SKID, pad.z);
   p.vel.set(0, 0, 0);
-  p.yaw = 0; p.yawVel = 0; p.pitch = p.roll = 0; p.landed = p.grounded = true; p.spin = 0; p.parked = true; p.shake = p.squash = 0; p.camG = 1; p.altOff = 0; p.idleT = 0; p.incoming = 0; p.tiltF = p.tiltS = 0; p.winch = 0;
+  p.berthing = false; p.berthed = p.vehicle !== 'heli'; p.unloading = 0; p.leftBerth = false;
+  p.yaw = pad.h || 0; p.yawVel = 0; p.pitch = p.roll = 0; p.landed = p.grounded = true; p.spin = 0; p.parked = true; p.shake = p.squash = 0; p.camG = 1; p.altOff = 0; p.idleT = 0; p.incoming = 0; p.tiltF = p.tiltS = 0; p.winch = 0;
   p.surfaceY = p.vehicle === 'heli' ? PAD_Y : 0;
   p.bpos.copy(p.pos).y -= 3; p.bvel.set(0, 0, 0); p.ropeLen = 0.6; p.stow = 1;
-  p.camYaw = 0; p.camPos.set(pad.x, PAD_Y + 12, pad.z - 24); p.camLook.copy(p.pos);
+  p.camYaw = p.yaw; p.camPos.set(pad.x - Math.sin(p.yaw) * 24, PAD_Y + 12, pad.z - Math.cos(p.yaw) * 24); p.camLook.copy(p.pos);
   p.avoidT = p.backT = p.wedgeT = p.manualT = 0; p.wedgeAt = null; p.spray = null;
 }
-players.forEach(parkPlayer);
+assignBerths(); players.forEach(parkPlayer);
 const activePlayers = () => players.filter(p => p.active);
 
 // ================================================================= game state
@@ -170,7 +278,7 @@ const goalFor = m => game.fire ? 1 : Math.min(5 + Math.floor((m - 1) / MISSION_Z
 function stillNeeded() {
   let n = game.goal - game.rescued;
   for (const p of players) n -= p.cargo.length + p.incoming;
-  for (const h of hoppers) if (h.state === 'hop') n--;
+  for (const h of hoppers) if (h.state === 'home' && !h.counted) n--;
   return n;
 }
 const maxWaiting = () => Math.max(0, Math.min((game.fire ? 2 : 4) + (activePlayers().length > 1 ? 1 : 0), stillNeeded()));
@@ -294,12 +402,13 @@ function nearestFor(p) {
 // far there is still to go. Planned again only when the goal moves, the machine strays off it, or now and then; a goal
 // that cannot be reached is not tried again for a few seconds.
 function followWater(p, goal, need, look) { return follow(p, 'water', nav.water, goal, need, look); }
-function follow(p, key, chart, goal, need, look) {
+function follow(p, key, chart, goal, need, look, then) {
   const R = (p.routes ||= {})[key] || (p.routes[key] = { path: null, gx: 1e9, gz: 1e9, t: -9, fail: -9, aim: { x: 0, z: 0, off: 0 } });
   const moved = Math.hypot(goal.x - R.gx, goal.z - R.gz) > 8;
   if (moved || !R.path || R.aim.off > 18 || game.t - R.t > 6) {
     if (moved || game.t - R.fail > 4) {
       R.path = chart.route(p.pos, goal, need, 60); R.gx = goal.x; R.gz = goal.z; R.t = game.t;
+      if (R.path && then) R.path = R.path.concat(then);
       if (!R.path) R.fail = game.t;
     }
   }
@@ -576,29 +685,39 @@ function blockedAt(p, fx_, fz_, dist, pad = 3) {
 // it goes round, and after twice round it picks another spot). Then it taxis the rest. It takes off from where it is,
 // down whichever clear run of water points most nearly the way it is going. In the air it follows routes round anything
 // tall and any high ground (nav.js), climbs straight out after take-off, and climbs over anything coming up.
-const LANE = { back: 190, lead: 100, roll: 50 };      // (the glide down from cruising height runs back - roll metres)
+// The way in: a smooth curve from wherever it is onto a short straight final, then down onto the water. It touches down
+// `roll` metres short of where it stops, flies the last `final` metres before that straight and lined up, and comes
+// down a steady glide (1 in 6) all the way from cruising height, starting in the turn, so it never levels off and dives.
+// Turns are `R` metres round: a gentle bank a small passenger can follow.
+const LANE = { roll: 50 };
+const APP = { R: 60, final: 90, glide: 0.16 };
+// how high it is on the way in, `s` metres before touching down
+const glideAlt = s => Math.min(PL.cruise, APP.glide * Math.max(0, s));
 const AIR = { top: 26, need: 22, tight: 12, look: 45 };      // (round anything standing near cruising height or over it; lower hills it flies over)
-const LAND = { room: 12, reach: 250, near: 6, taxi: 140 };       // (water room either side of a landing; how far from the goal it may come down; how far it will taxi rather than fly)
-// nothing high under the way in, by the ceiling chart: along the glide everything stays well under the glide path, and
-// from the lead-in point to the top of the glide (flown at cruising height) well under that. So the plane never has to
-// climb over anything once it is on its way in. (x, z) is the stopping point, (ux, uz) the way it lands.
+const LAND = { room: 12, reach: 250, near: 6, taxi: 140, hop: 180 };       // (water room either side of a landing; how far from the goal it may come down; how near a spot for a friend; how far it will taxi rather than fly)
+// nothing high under the way in, by the ceiling chart: over the final the glide stays well over everything, and for a
+// stretch before it (where the curve onto it may come from straight behind) so does the glide with a bigger margin.
+// (x, z) is the stopping point, (ux, uz) the way it lands.
 function approachClear(x, z, ux, uz) {
-  for (let d = LANE.roll; d <= LANE.back + LANE.lead + 40; d += 10) {
-    const px = x - ux * d, pz = z - uz * d;
+  for (let d = LANE.roll; d <= LANE.roll + APP.final + 140; d += 10) {
+    const px = x - ux * d, pz = z - uz * d, s = d - LANE.roll;
     if (Math.hypot(px, pz) > WORLD_R - 20) return false;
-    const may = d >= LANE.back ? PL.cruise - 10 : Math.max(1.5, PL.cruise * (d - LANE.roll) / (LANE.back - LANE.roll) - 4);
+    const may = s <= APP.final ? Math.max(1.5, glideAlt(s) - 4) : glideAlt(s) - 9;
     if (nav.ceiling(px, pz) > may) return false;
   }
   return true;
 }
-// Where to come down for goal S, and on what heading: the open water nearest S (out to LAND.reach) with a clear run
-// LANE.back long behind the stopping point (and, for a scoop, a take-off run ahead of it too), a clear approach beyond
-// that, and a clear straight taxi on to S. Of those, the one least out of the plane's way. Returns { x, z, h } (stop by
-// x, z having landed along heading h) or null. `skip` holds spots already tried and given up on.
-function landingFor(S, ahead, from, skip) {
+// Where to come down for goal S, and on what heading: the open water nearest S (out to LAND.reach) with a clear run on
+// the water for the final and the roll-out (and, for a scoop, a take-off run ahead of it too), a clear approach before
+// that, and a clear straight taxi on to S. Of those, the one quickest to fly to from `from` ({ x, z }, and h if it is
+// flying: then by the curve it would really fly), and least taxiing after. Returns { x, z, h } (stop by x, z having
+// landed along heading h) or null. `skip` holds spots already tried and given up on. `fly`, if given, says how far
+// it really is to fly in to a spot (or Infinity): the few best by the quick reckoning are then compared by that.
+function landingFor(S, ahead, from, skip, fly) {
   const wet = nav.water.at(S.x, S.z) >= LAND.near ? S : nav.water.open(S.x, S.z, LAND.near, 30);
   if (!wet) return null;
   let best = null, bs = 1e9;
+  const back = LANE.roll + APP.final, near = [];
   // (for a friend, near enough to taxi the rest comfortably; for a fire's water, anywhere near it)
   const reach = ahead > 0 ? LAND.reach : LAND.taxi - 20;
   for (let r = 0; r <= reach; r += 20) for (let k = 0; k < (r ? 16 : 1); k++) {
@@ -608,17 +727,27 @@ function landingFor(S, ahead, from, skip) {
     if (r && !nav.water.clear(qx, qz, wet.x, wet.z, LAND.near)) continue;
     for (let hk = 0; hk < 16; hk++) {
       const h = hk * Math.PI / 8, ux = Math.sin(h), uz = Math.cos(h);
-      if (!nav.water.clear(qx - ux * LANE.back, qz - uz * LANE.back, qx + ux * (ahead + 15), qz + uz * (ahead + 15), LAND.room)) continue;
+      const ex = qx - ux * back, ez = qz - uz * back;
+      // (the cheap part of the cost first: it cannot beat the best so far if even a straight line there costs more)
+      const crow = Math.hypot(ex - from.x, ez - from.z) + 4 * r;
+      if (crow >= bs && !fly) continue;
+      if (!nav.water.clear(ex, ez, qx + ux * (ahead + 15), qz + uz * (ahead + 15), LAND.room)) continue;
       if (!approachClear(qx, qz, ux, uz)) continue;
       // (and nothing standing over the run on the water beyond: the sea arch spans water a hull could pass under, a wing cannot)
       if (ahead > 0 && nav.ceiling(qx + ux * ahead * 0.5, qz + uz * ahead * 0.5) > 2) continue;
       if (ahead > 0 && !clearClimb({ x: qx + ux * (ahead - RUN_FREE), z: qz + uz * (ahead - RUN_FREE) }, h)) continue;      // (and climbing away after a scoop)
-      // (the way round to the start of the approach, how far it has to turn to come in along h, and the taxi after)
-      const p0x = qx - ux * (LANE.back + LANE.lead), p0z = qz - uz * (LANE.back + LANE.lead);
-      const toward = Math.atan2(qx - from.x, qz - from.z);
-      const cost = Math.hypot(p0x - from.x, p0z - from.z) + 70 * Math.abs(angDiff(toward, h)) + 4 * r;
+      // (flying: the curve round onto the final; still on the water: the way there, and some for turning to it)
+      const far = from.h !== undefined ? dubinsLength(from.x, from.z, from.h, ex, ez, h, APP.R) : Math.hypot(ex - from.x, ez - from.z) + 60 * Math.abs(angDiff(Math.atan2(qx - from.x, qz - from.z), h));
+      // (and facing the way it will taxi on, so it does not land and then have to turn about on the water)
+      const cost = far + 4 * r + (r > 10 ? 25 * Math.abs(angDiff(h, Math.atan2(wet.x - qx, wet.z - qz))) : 0);
+      if (fly) near.push({ x: qx, z: qz, h, r, cost });
       if (cost < bs) { bs = cost; best = { x: qx, z: qz, h }; }
     }
+  }
+  if (fly && near.length) {
+    near.sort((a, b) => a.cost - b.cost);
+    let fb = 1e9;
+    for (const q of near.slice(0, 16)) { const c = fly(q) + 4 * q.r; if (c < fb) { fb = c; best = { x: q.x, z: q.z, h: q.h }; } }
   }
   return best;
 }
@@ -644,7 +773,8 @@ function planePilot(p, t, dt, ready, room) {
   let kind, goal, key;
   if (F) { kind = waterReady(p) ? 'drop' : 'scoop'; goal = waterReady(p) ? p.fireAim : F.scoop; key = kind + F.x; }
   else if (p.target) { kind = 'pickup'; goal = p.target.pos; key = 'f' + p.target.id; }
-  else if (p.cargo.length) { kind = 'dock'; goal = DOCK; key = 'dock'; }
+  // (home: it lands on the berth's own line where it can, so the roll-out runs on into lying alongside)
+  else if ((p.cargo.length || p.unloading) && p.berth) { chooseBerth(p); kind = 'dock'; goal = berthLine(p.berth)[0]; key = 'dock'; }
   else if (p.input.f <= 0 && (A.park || !p.afloat)) {
     // (and it stays a landing through the touchdown and roll-out, bounces and all, until it has slowed on the water)
     // (let go in the air: land on the nearest good lane ahead)
@@ -652,7 +782,21 @@ function planePilot(p, t, dt, ready, room) {
     kind = 'park'; goal = A.park; key = 'park';
   } else { kind = 'free'; goal = null; key = 'free'; }
   if (p.input.f > 0 || (p.afloat && p.fs < 6)) A.park = null;          // (kept through the splash and roll-out)
-  if (key !== A.key) { A.key = key; A.land = null; A.final = false; A.air = null; A.bomb = null; A.arrived = false; A.stallT = null; A.stallAt = null; A.reverseUntil = 0; A.tried = null; A.goes = 0; A.tkSpot = null; }
+  if (key !== A.key) { A.key = key; A.land = null; A.final = false; A.air = null; A.path = null; A.bomb = null; A.arrived = false; A.stallT = null; A.stallAt = null; A.reverseUntil = 0; A.tried = null; A.goes = 0; A.tkSpot = null; A.pre = undefined; }
+  // (setting off from its berth: first round, slowly and nearly on the spot, to face away from the pier, so the wing
+  // and its float swing clear of the deck)
+  if (p.afloat && p.berth && p.berthed && !p.leftBerth && kind !== 'dock' && p.input.f > 0) { A.unberth = true; p.leftBerth = true; }
+  if (A.unberth && p.berth.through) {
+    // (across the end of the pier: straight on until the wing is well clear of it)
+    const B = p.berth, on = (p.pos.x - B.x) * Math.sin(B.h) + (p.pos.z - B.z) * Math.cos(B.h);
+    if (kind === 'dock' || on > 18 || !p.afloat) A.unberth = false;
+    else { out.aim = { x: p.pos.x + Math.sin(B.h) * 40, z: p.pos.z + Math.cos(B.h) * 40 }; out.cap = 6; out.alt = 0; out.near = true; return out; }
+  }
+  if (A.unberth) {
+    const away = p.berth.leave;
+    if (kind === 'dock' || Math.abs(angDiff(p.yaw, away)) < 0.35 || Math.hypot(p.pos.x - p.berth.x, p.pos.z - p.berth.z) > 14 || !p.afloat) A.unberth = false;
+    else { out.aim = { x: p.pos.x + Math.sin(away) * 30, z: p.pos.z + Math.cos(away) * 30 }; out.cap = 1.4; out.alt = 0; out.near = true; out.pivot = true; return out; }      // (round on its two engines, one ahead and one astern)
+  }
   if (!goal) {
     // nothing to fetch: go held, it takes off down a clear lane the way it is pointing and flies on wherever the pilot
     // steers it (the world's edge turns it back); let go on the water, it waits
@@ -664,15 +808,17 @@ function planePilot(p, t, dt, ready, room) {
     return out;
   }
 
-  // A scoop interrupted by a float catching a rock must not leave the crew applying power forever.
-  if (kind === 'scoop' && p.afloat && p.input.f > 0) {
+  // A scoop interrupted by a float catching a rock, or a taxi out stopped short by a rock ahead, must not leave it
+  // sitting there with power on forever: astern for a moment, and choose again (not that take-off spot again).
+  if (p.afloat && p.input.f > 0 && !p.incoming && !p.unloading && !p.berthed && !A.unberth && (kind === 'scoop' || A.tk || A.run !== null)) {
     if (game.t < A.reverseUntil) { out.aim = null; out.cap = -4; out.alt = 0; return out; }
     if (!A.stallAt || Math.hypot(p.pos.x - A.stallAt.x, p.pos.z - A.stallAt.z) > 6) {
       A.stallAt = { x: p.pos.x, z: p.pos.z }; A.stallT = game.t;
     }
     if (game.t - A.stallT > 5) {
       A.reverseUntil = game.t + 2.5; A.stallT = null; A.stallAt = null;
-      A.run = null; A.final = false; A.land = null; A.air = null;
+      if (A.tkSpot) (A.badSpots ||= []).push({ x: A.tkSpot.x, z: A.tkSpot.z });
+      A.run = null; A.final = false; A.land = null; A.air = null; A.tkSpot = null;
       out.aim = null; out.cap = -4; out.alt = 0; return out;
     }
   } else { A.stallT = null; A.stallAt = null; }
@@ -719,14 +865,20 @@ function planePilot(p, t, dt, ready, room) {
       if (p.water >= 1) out.alt = PL.cruise; else { out.final = true; out.look = 20; }      // (still skimming: it stays down on the water)
       return out;
     }
+    // (home: in along its berth's line, slowing to lie alongside the pier with its door to it)
+    const Bk = kind === 'dock' ? berthing(p) : null;
+    if (kind !== 'dock') p.berthing = false;
+    if (Bk) { A.final = false; A.tk = false; A.taxi = true; A.arrived = false; out.aim = Bk.aim; out.cap = Bk.cap; out.near = true; return out; }
     if (A.run === null && kind !== 'scoop' && kind !== 'park') {
-      const R = follow(p, 'taxi', nav.water, goal, 7.5, 16);
-      // (taxi only when it is close: further than this, flying there is quicker and nicer to watch)
-      if (R && R.left < LAND.taxi) {
+      const R = follow(p, 'taxi', nav.water, goal, 7.5, 16, kind === 'dock' ? [berthLine(p.berth)[1]] : undefined);
+      // (taxi only when it is close: further than this, flying there is quicker and nicer to watch. Nearer, a take-off
+      // would only be a loop round and straight back down)
+      if (R && R.left < LAND.hop + (kind === 'dock' ? (p.berth.run || BERTH_RUN) : 0)) {      // (home, the berth's own way in on top)
         A.final = false; A.tk = false; A.taxi = true;
         out.aim = R.aim; out.near = R.left < 40;
-        out.cap = clamp(1.5 + (R.left - (kind === 'dock' ? 6 : 10)) * 0.3, 0, 13);
-        A.arrived = R.left < 6;
+        out.cap = clamp(1.5 + (R.left - (kind === 'dock' ? 6 : 10)) * 0.3, 0, 14);      // (up on the step, spray flying, when there is a way to go)
+        out.cap = Math.min(out.cap, 4 + 10 * clamp(1.2 - Math.abs(angDiff(Math.atan2(R.aim.x - p.pos.x, R.aim.z - p.pos.z), p.yaw)) * 1.3, 0, 1));      // (and easing off round the corners)
+        A.arrived = R.left < 6 || (R.left < 25 && Math.abs(p.fs) < 1);      // (or as near as the water lets it get: they swim the rest)
         return out;
       }
     }
@@ -734,6 +886,10 @@ function planePilot(p, t, dt, ready, room) {
     // (landed for it but it is too far by water after all: that spot is not tried again for this one)
     if (A.land && kind !== 'scoop') { (A.tried ||= []).push({ x: A.land.x, z: A.land.z }); A.land = null; }
     // (the tank fills only on the scoop run chosen by the fire, which holds it down until full: see the skim above)
+    // Where it will come down is chosen before it goes, so it takes off down the run that leads most directly onto
+    // that landing's final, rather than whichever points at the friend and then a loop round in the air.
+    if (A.pre === undefined) A.pre = landingFor(kind === 'scoop' ? F : goal, kind === 'scoop' ? 100 : 0, { x: p.pos.x, z: p.pos.z }, A.tried);
+    if (A.pre) { const back = LANE.roll + APP.final; return takeoff(p, A, out, { x: A.pre.x - Math.sin(A.pre.h) * back, z: A.pre.z - Math.cos(A.pre.h) * back, h: A.pre.h }); }
     return takeoff(p, A, out, goal);
   }
   // (just off the water: straight on along the take-off run until it has some height, and only then turn for where it is
@@ -746,15 +902,19 @@ function planePilot(p, t, dt, ready, room) {
     A.climbH = null;
   }
 
-  // ---- in the air, to land: a lane chosen once and kept (a pilot who keeps changing their mind never lands), chosen
-  // again only if the friend drifts well away from it; then the lead-in, and the run in
+  // ---- in the air, to land: a spot chosen once and kept (a pilot who keeps changing their mind never lands), chosen
+  // again only if the friend drifts well away from it; then the curve onto its final, and the final
   if (A.land && Math.hypot(goal.x - A.land.gx, goal.z - A.land.gz) > 30) A.land = null;
   if (!A.land) {
     const ahead = kind === 'scoop' ? 100 : 0;      // (skim, fill and lift off: about 100 m of water beyond touching down)
-    const L = landingFor(kind === 'scoop' ? F : goal, ahead, p.pos, A.tried);
+    // (by the length of the path it would really fly; the spot it chose before taking off a little favoured, so it does
+    // not change its mind for nothing)
+    const pre = A.pre, fly = q => { const P = planApproach(p, alt, q); return P ? P.sTD * (pre && Math.hypot(pre.x - q.x, pre.z - q.z) < 1 && pre.h === q.h ? 0.85 : 1) : Infinity; };
+    const L = landingFor(kind === 'scoop' ? F : goal, ahead, { x: p.pos.x, z: p.pos.z, h: p.yaw }, A.tried, fly);
+    A.pre = undefined;
     if (L) {
       L.gx = goal.x; L.gz = goal.z;
-      A.land = L; A.t = t; A.air = null; A.wide = null;
+      A.land = L; A.t = t; A.air = null; A.path = null;
     }
   }
   const L = A.land;
@@ -764,37 +924,86 @@ function planePilot(p, t, dt, ready, room) {
     airRoute(p, A, goal, out, AIR.look); return out;
   }
   const fx = Math.sin(L.h), fz = Math.cos(L.h);
-  const along = (p.pos.x - L.x) * fx + (p.pos.z - L.z) * fz;          // negative before the stopping point
-  const cross = Math.abs((p.pos.x - L.x) * fz - (p.pos.z - L.z) * fx);
-  const lined = Math.abs(angDiff(p.yaw, L.h));
-  // (onto final only near the top of the glide: joined any later, it is too high to come down in time)
-  if (!A.final && along > -(LANE.back + LANE.lead + 30) && along < -LANE.back * 0.8 && cross < 22 && lined < 0.5) A.final = true;
-  // (past the top of the glide without having joined it, it is a go-round too)
-  const missed = !A.final && A.wide === false && along > -LANE.back * 0.8 && along < 0 && cross < 60;
-  if (missed || (A.final && (cross > 30 || lined > 0.8 || along > 20))) {
-    // (not lined up after all: go round again; twice round for the same spot and it picks another)
-    A.final = false; A.wide = null;
-    if ((A.goes = (A.goes || 0) + 1) >= 2) { (A.tried ||= []).push({ x: L.x, z: L.z }); A.land = null; A.goes = 0; }
-  }
-  const P0 = { x: L.x - fx * (LANE.back + LANE.lead), z: L.z - fz * (LANE.back + LANE.lead) }, G = { x: L.x - fx * LANE.back, z: L.z - fz * LANE.back };
-  if (A.final) {
-    // on the line: follow it, slow to approach speed and come down the glide path to touch down short of the stop
-    lookAhead([G, L], p.pos.x, p.pos.z, 60, out.aim);
-    const toTouch = -along - LANE.roll;
-    out.alt = PL.cruise * clamp(toTouch / (LANE.back - LANE.roll), 0, 1);      // (down over the open water of the lane only)
-    out.alt -= 1.5 * (1 - clamp(toTouch / 30, 0, 1));          // (and the last bit aimed just under the surface, so it settles rather than floats along)
-    out.cap = 20; out.look = Math.max(0, -along - 8); out.final = true;
+  const TD = { x: L.x - fx * LANE.roll, z: L.z - fz * LANE.roll }, E = { x: TD.x - fx * APP.final, z: TD.z - fz * APP.final };
+  // (the path: planned once from here, and again only if it strays well off it or it was blocked)
+  // (too high to get down off the curve as it is, it tries joining the final's line further back, for more room to
+  // come down; and if nothing works from here, it tries again in a second)
+  if (!A.path && game.t - (A.pathFail || -9) > 1) { A.path = planApproach(p, alt, L); if (!A.path) A.pathFail = game.t; }
+  const Tk = A.trk || (A.trk = {});
+  if (A.path) {
+    const pts = A.path.pts;
+    track(pts, p.pos.x, p.pos.z, A.path.i, clamp(p.fs * 1.1, 22, 40), Tk);
+    A.path.i = Tk.i;
+    const toTouch = A.path.sTD - Tk.s, lined = Math.abs(angDiff(p.yaw, L.h));
+    // (on the final: past its start, near the line and pointing along it)
+    if (!A.final && toTouch < APP.final + 5 && Tk.off < 12 && lined < 0.35) A.final = true;
+    if (A.final && (Tk.off > 30 || lined > 0.8 || toTouch < -LANE.roll + 10 && p.fs > PL.fly)) {
+      // (not lined up after all: round again by a new curve; twice round for the same spot and it picks another)
+      A.final = false; A.path = null;
+      if ((A.goes = (A.goes || 0) + 1) >= 2) { (A.tried ||= []).push({ x: L.x, z: L.z }); A.land = null; A.goes = 0; }
+      return out;
+    }
+    if (!A.final && (Tk.off > 25 || toTouch < APP.final - 25)) { A.path = null; return out; }      // (blown off it, or past the final unlined: a new curve)
+    out.aim.x = Tk.x; out.aim.z = Tk.z;
+    out.rate = pursuitRate(p.pos.x, p.pos.z, p.yaw, Math.max(p.fs, 12), Tk);
+    // (the height for where it is on the path, or higher for what is coming in the next couple of seconds)
+    if (A.final) out.alt = glideAlt(toTouch);
+    else { let a = -1e9; for (let j = Tk.i; j < pts.length && pts[j].s - Tk.s < Math.max(p.fs, 16) * 2; j++) a = Math.max(a, pts[j].alt); out.alt = a; }
+    if (A.final) {
+      out.alt -= 1.5 * (1 - clamp(toTouch / 30, 0, 1));          // (the last bit aimed just under the surface, so it settles rather than floats along)
+      out.cap = 20; out.look = Math.max(0, toTouch + LANE.roll - 8); out.final = true;
+    } else {
+      // (quick while far, and easing to approach speed for the turn in; what stands under the path just ahead, for the
+      // height keeping in updatePlane, instead of looking off along the heading, which on a curve points off the path)
+      out.cap = toTouch > 700 ? PL.max : toTouch > 320 ? 30 : 24;
+      out.look = 30; out.roof = pathRoof(pts, Tk.i, Math.max(p.fs, 16) * 7);
+    }
     return out;
   }
-  // not lined up yet: round by the air route to the lead-in point, then down the line. Coming from the landing side, it
-  // swings out wide of the lead-in first (a teardrop) rather than turning about on the spot and missing the line
-  const sideOf = (p.pos.x - L.x) * fz - (p.pos.z - L.z) * fx >= 0 ? 1 : -1;
-  if (along > -(LANE.back + LANE.lead) + 20 && A.wide == null) A.wide = { x: P0.x - fx * 60 + fz * sideOf * 90, z: P0.z - fz * 60 - fx * sideOf * 90 };
-  if (A.wide && Math.hypot(p.pos.x - A.wide.x, p.pos.z - A.wide.z) < 50) A.wide = false;      // (false: done with it until next time)
-  if (A.wide) airRoute(p, A, A.wide, out, AIR.look);
-  else airRoute(p, A, P0, out, AIR.look, [G, L]);
-  if (Math.hypot(p.pos.x - L.x, p.pos.z - L.z) < 300) out.cap = 30;      // (slower near, so the turns onto the line are tighter)
+  // (no clear curve from here, with a mountain in the way: round it by the air route to a point well back along the
+  // final's line and in along it, trying for a curve again every second as it goes)
+  airRoute(p, A, { x: E.x - fx * 80, z: E.z - fz * 80 }, out, AIR.look, [E, TD, { x: L.x, z: L.z }]);
+  if (Math.hypot(p.pos.x - L.x, p.pos.z - L.z) < 300) out.cap = 30;
   return out;
+}
+// The way in to landing spot L: the curve onto its final; or, too high to get down off that, the curve onto the final's
+// line further back, for more room to come down
+function planApproach(p, alt, L) {
+  const fx = Math.sin(L.h), fz = Math.cos(L.h);
+  const TD = { x: L.x - fx * LANE.roll, z: L.z - fz * LANE.roll }, E = { x: TD.x - fx * APP.final, z: TD.z - fz * APP.final };
+  for (const more of [0, 120, 240]) {
+    const P = approachPath(p, alt, { x: E.x - fx * more, z: E.z - fz * more }, L.h, more ? [{ ...E }, { ...TD }, { x: L.x, z: L.z }] : [{ ...TD }, { x: L.x, z: L.z }]);
+    if (P) return P;
+  }
+  return null;
+}
+// The curve from the plane onto a final that starts at E on heading h, then on through `then`, sampled, with the height
+// to fly at each point of it: down the glide toward touching down, but over anything standing under the curve by 10 m
+// (climbing to it in time, well within its climb, and coming down after it no steeper than 1 in 4). Null when that would leave
+// it too high to land off the final, or need it to climb far over cruising height (a mountain: it goes round those).
+// Returns { pts, i, sTD } (sTD: metres along it to touching down); each point has `alt`.
+function approachPath(p, alt, E, h, then) {
+  // (the shortest curve first; if that runs over high ground, the next, which may go round the other side of it)
+  for (const d of dubins(p.pos.x, p.pos.z, p.yaw, E.x, E.z, h, APP.R, true)) {
+    const th = then.map(q => ({ ...q })), pts = samplePath(d, 6, th), n = pts.length, sTD = th[th.length - 2].s;
+    // (what it must be over: 10 m above anything under the curve before the final, climbing to it in time...)
+    for (const q of pts) q.need = sTD - q.s > APP.final ? nav.ceiling(q.x, q.z) + 12 : 0;      // (10 m clear, and a little for the plane lagging the height it is asked for)
+    for (let j = n - 2; j >= 0; j--) pts[j].need = Math.max(pts[j].need, pts[j + 1].need - 0.18 * (pts[j + 1].s - pts[j].s));      // (it climbs at about 1 in 4 at most)
+    // (...which it must be able to climb to from here, and not too far over cruising height: a mountain it goes round)
+    if (pts.some(q => q.need > PL.cruise + 25 || q.need > alt + 4 + 0.2 * q.s)) continue;
+    // (and the height to fly at: down the glide, but over all that, coming down after it no steeper than 1 in 4)
+    for (const q of pts) q.alt = Math.max(glideAlt(sTD - q.s), q.need);
+    for (let j = 1; j < n; j++) pts[j].alt = Math.max(pts[j].alt, Math.min(pts[j - 1].alt, PL.cruise + 25) - 0.25 * (pts[j].s - pts[j - 1].s));
+    if (pts.some(q => sTD - q.s <= APP.final && q.alt > glideAlt(sTD - q.s) + 3)) continue;      // (too high to land off the final)
+    return { pts, i: 0, sTD };
+  }
+  return null;
+}
+// the highest thing under a path from point i, `ahead` metres on (by the ceiling chart)
+function pathRoof(pts, i, ahead) {
+  let top = -1e9;
+  for (let j = i; j < pts.length && pts[j].s - pts[i].s <= ahead; j += 2) top = Math.max(top, nav.ceiling(pts[j].x, pts[j].z));
+  return top;
 }
 // the air route to `to` (round anything tall), then on along `then`; steer for a point `look` metres along it
 function airRoute(p, A, to, out, look, then) {
@@ -840,7 +1049,7 @@ function clearClimb(P, h) {
 // Where to take off from, heading for `to`: the nearest point on the water (by a straight taxi, out to 300 m) with a
 // clear run of open water and a clear climb beyond it, along whichever heading needs least turning now and afterwards.
 // Returns { x, z, h, r } (r: how far away it is) or null.
-function takeoffSpot(p, to) {
+function takeoffSpot(p, to, skip) {
   const dir = to ? Math.atan2(to.x - p.pos.x, to.z - p.pos.z) : p.yaw;
   let best = null, bs = 1e9, foundAt = -1;
   for (let r = 0; r <= 300; r += 25) {
@@ -848,9 +1057,12 @@ function takeoffSpot(p, to) {
     for (let k = 0; k < (r ? 16 : 1); k++) {
       const a = k * Math.PI / 8, qx = p.pos.x + Math.sin(a) * r, qz = p.pos.z + Math.cos(a) * r;
       if (r && (nav.water.at(qx, qz) < 10 || !nav.water.clear(p.pos.x, p.pos.z, qx, qz, 5))) continue;
+      if (skip && skip.some(q => Math.hypot(q.x - qx, q.z - qz) < 20)) continue;
       for (let hk = 0; hk < 16; hk++) {
         const h = hk * Math.PI / 8;
-        const sc = r + 30 * Math.abs(angDiff(h, dir)) + (r ? 0 : 12 * Math.abs(angDiff(h, p.yaw)));
+        // (with a landing's final to fly onto: taxiing, and the curve from the top of the climb-out round onto it)
+        const sc = to && to.h !== undefined ? 2 * r + dubinsLength(qx + Math.sin(h) * (RUN_FREE + 70), qz + Math.cos(h) * (RUN_FREE + 70), h, to.x, to.z, to.h, APP.R) + (r ? 0 : 12 * Math.abs(angDiff(h, p.yaw)))
+          : r + 30 * Math.abs(angDiff(h, dir)) + (r ? 0 : 12 * Math.abs(angDiff(h, p.yaw)));
         if (sc >= bs) continue;
         if (!nav.water.clear(qx, qz, qx + Math.sin(h) * RUN_FREE, qz + Math.cos(h) * RUN_FREE, 10) || !clearClimb({ x: qx, z: qz }, h)) continue;
         bs = sc; best = { x: qx, z: qz, h, r }; if (foundAt < 0) foundAt = r;
@@ -863,7 +1075,7 @@ function takeoffSpot(p, to) {
 // full power down it
 function takeoff(p, A, out, to) {
   if (A.run === null) {
-    if (!A.tkSpot || game.t - A.tkSpot.t > 20) { A.tkSpot = takeoffSpot(p, to); if (A.tkSpot) A.tkSpot.t = game.t; }
+    if (!A.tkSpot || game.t - A.tkSpot.t > 20) { A.tkSpot = takeoffSpot(p, to, A.badSpots); if (A.tkSpot) A.tkSpot.t = game.t; }
     const S = A.tkSpot;
     if (S && (S.r === 0 || Math.hypot(S.x - p.pos.x, S.z - p.pos.z) < 8)) { A.run = S.h; A.runT = game.t; A.tkSpot = null; }
     else {
@@ -878,7 +1090,9 @@ function takeoff(p, A, out, to) {
   const h = A.run, off = Math.abs(angDiff(p.yaw, h));
   out.aim = { x: p.pos.x + Math.sin(h) * 80, z: p.pos.z + Math.cos(h) * 80 };
   // (turning to face the run, slowly; then the run)
-  out.cap = off > 0.2 && p.fs < 8 ? 3.5 : PL.max; out.run = true;
+  // (still swinging round onto it, it slows and turns first, whatever speed it arrived at: power on mid-turn is how
+  // the run starts off its line and into the shallows)
+  out.cap = off > 0.2 && p.fs < PL.fly - 2 ? 3.5 : PL.max; out.run = true;
   out.alt = out.cap > 4 ? PL.cruise : 0;
   if (game.t - A.runT > 25) A.run = null;          // (and should it ever not get away, choose again)
   return out;
@@ -903,17 +1117,19 @@ function updatePlane(p, dt, t) {
 
   // who to fetch: the nearest friend it can, kept until they are aboard (no changing its mind half way through a landing)
   if (p.target && p.target.state !== 'waiting') { if (p.target.claimed === p) p.target.claimed = null; p.target = null; }
-  if (!p.pro && !p.target && !p.fireJob && room) {
+  if (!p.pro && !p.target && !p.fireJob && room && !p.unloading) {
     const g = nearestFor(p);
-    if (g && !g.an.fire && (!p.cargo.length || (dockD > 200 && (g.d < 180 || g.d < dockD * 0.6)))) { p.target = g.an; g.an.claimed = p; }      // (with friends aboard, one more if they are much nearer than home, and home is not just here)
+    // (not once it is on its way in to land at home)
+    if (g && !g.an.fire && (!p.cargo.length || (dockD > 200 && !(p.ap && p.ap.key === 'dock' && (p.ap.path || p.afloat)) && (g.d < 180 || g.d < dockD * 0.6)))) { p.target = g.an; g.an.claimed = p; }      // (with friends aboard, one more if they are much nearer than home, and home is not just here)
   }
   // ---- the autopilot: where to steer, how fast and how high (see planePilot)
   const ap = p.pro ? null : planePilot(p, t, dt, ready, room);
   const cap = ap ? ap.cap : PL.max;
 
   // ---- turning: one smoothed turn rate; the bank comes from it. The pilot's own steering always wins outright.
-  const maxRate = p.afloat ? 1.15 : p.pro ? 1.5 : p.fireJob && waterReady(p) ? 1.3 : 0.9;
+  const maxRate = p.afloat ? (p.pro ? 1.15 : ap && ap.pivot ? 0.85 : 0.3 + 0.85 * clamp(Math.abs(p.fs) / 6, 0, 1)) : p.pro ? 1.5 : p.fireJob && waterReady(p) ? 1.3 : 0.9;      // (the easy one turns on the water by its rudder and engines, so slowly when barely moving: no spinning on the spot)
   let turnCmd = p.pro ? clamp(inp.t - inp.s, -1, 1) : inp.t !== 0 ? inp.t
+    : ap && ap.rate !== undefined && !p.afloat ? clamp(ap.rate / maxRate, -1, 1)      // (on a planned curve: its own turn rate)
     : ap && ap.aim ? clamp(angDiff(Math.atan2(ap.aim.x - p.pos.x, ap.aim.z - p.pos.z), p.yaw) * 1.7 - p.yawVel * 0.35, -1, 1) : 0;
   // far out to sea: lean back toward the islands
   const rr = Math.hypot(p.pos.x, p.pos.z);
@@ -922,7 +1138,7 @@ function updatePlane(p, dt, t) {
   p.yaw += p.yawVel * dt;
 
   // ---- speed: eased toward what the pilot (and the situation) asks for
-  const atDock = (!p.target && p.cargo.length > 0 && dockD < 18) || (p.afloat && p.incoming > 0);      // (and it waits while someone climbs aboard)
+  const atDock = (!p.pro && p.berthed && (p.cargo.length > 0 || p.unloading > 0)) || (p.afloat && p.incoming > 0);      // (moored, it waits while everyone gets off; and it waits while someone climbs aboard)
   // on the water, ease to a stop before a beach instead of bumping into it
   let shore = 1;
   if (alt < 3) { if (blockedAt(p, fx_, fz_, 7, 6)) shore = 0; else if (blockedAt(p, fx_, fz_, 16, 6)) shore = 0.35; }
@@ -932,7 +1148,7 @@ function updatePlane(p, dt, t) {
     else if (inp.f > 0 || !p.afloat) want = cap;          // (let go in the air: the autopilot finds a lane and lands)
   }
   // (a beach right ahead on the water: ease off; the routes keep it rare. Not on a take-off run, which has a clear lane)
-  if (p.afloat && want > 0 && shore < 1 && p.fs < PL.fly && !(ap && ap.run)) want *= Math.max(shore, ap && ap.near ? 0 : 0.15);
+  if (p.afloat && want > 0 && shore < 1 && p.fs < PL.fly && !(ap && ap.run) && !p.berthing) want *= Math.max(shore, ap && ap.near ? 0 : 0.15);
   // eased near the target speed, and never harder than a gentle push or a firm-but-soft brake
   if (!p.pro) p.fs += clamp((want - p.fs) * 1.6, p.afloat ? -9 : -5, 6.5) * dt;
 
@@ -984,12 +1200,12 @@ function updatePlane(p, dt, t) {
     // and above everything under where it is going over the next few seconds, by the ceiling chart: straight on, and
     // toward where the autopilot is steering (not on a lined-up final, whose glide is over open water checked clear)
     if (!(ap && ap.final) && !(p.afloat && !(ap && ap.run)) && !(p.afloat && ap && ap.alt <= 0)) {
-      const roof = roofAhead(p, ap && ap.aim);
+      const roof = ap && ap.roof !== undefined ? ap.roof : roofAhead(p, ap && ap.aim);
       if (roof + 10 > wantAlt) { wantAlt = roof + 10; if (roof + 10 > alt + 2) steepClimb = true; }
     }
     if (ap && ap.over !== undefined) wantAlt = Math.max(wantAlt, ap.over);     // (over a fire's treetops to drop on it)
   }
-  vyT = p.manualT > 0 ? clamp((wantAlt - alt) * 2.2, -9, 9) : clamp((wantAlt - alt) * 2.2, ap && ap.final ? -8 : -6.5, steepClimb ? 10 : 7);
+  vyT = p.manualT > 0 ? clamp((wantAlt - alt) * 2.2, -9, 9) : clamp((wantAlt - alt) * 2.2, ap && ap.final ? -8 : -6.5, steepClimb ? 12 : 7);
   if (flying && inp.l !== 0) {
     // while a height key is held the plane climbs or dives right away, and levels off where you let go
     vyT = inp.l * 9;
@@ -1011,6 +1227,9 @@ function updatePlane(p, dt, t) {
   const tips = fendOff(p.pos, p.yaw, 0, 7.4, low, false), floats = low < 1.5 && fendOff(p.pos, p.yaw, 3.4, 1.8, low, true, false);
   if (tips || floats) bump(p, 'rock');
   if (tips || floats) p.fs *= 1 - damp(2, dt);
+  // (and off the piers: hull, floats and wingtips, which are lower than the posts)
+  if (low < 1.5 && pierFend(p)) { p.fs *= 1 - damp(2, dt); if (!p.berthing) bump(p, 'pier'); }
+  berthState(p);
   surfaceAt(p.pos.x, p.pos.z, t, SURF);
   if (SURF.land && !flying && p.pos.y - SURF.y < PLANE_FLOAT + 1.2) { p.pos.x = px; p.pos.z = pz; p.fs *= Math.max(0, 1 - dt * 3); surfaceAt(px, pz, t, SURF); }
   const floor = (SURF.land ? SURF.y + 1.6 : 0) + PLANE_FLOAT;
@@ -1062,7 +1281,9 @@ function updatePlane(p, dt, t) {
   }
   // ---- home: friends hop out along the pier
   p.dropCd -= dt;
-  if (p.cargo.length && p.afloat && dockD < (p.pro ? 22 : 34) && Math.abs(p.fs) < (p.pro ? 7 : 12) && p.dropCd <= 0) { if (p.pro) rate(p, dockD < 10 ? 3 : 2, dockD < 10 ? 'Neat mooring' : 'Moored'); deliverOne(p); p.dropCd = 0.45; }
+  // (moored: out of the door, across the wing float and up onto the pier, one by one. A pilot brings it alongside and
+  // stops, the door side to the pier for the shortest hop)
+  if (p.cargo.length && p.afloat && p.dropCd <= 0 && (p.pro ? Math.abs(p.fs) < 3 && deckGap(p) < 3 : p.berthed)) { if (p.pro && !p.unloading) { const g = deckGap(p); rate(p, g < 1.2 ? 3 : 2, g < 1.2 ? 'Neat mooring' : 'Moored'); } deliverOne(p); p.dropCd = 0.45; }
   if (!p.parked && p.afloat && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; }
   p.mode = p.target || p.incoming ? 'pickup' : (p.cargo.length && dockD < 130 ? 'deliver' : 'idle');
 
@@ -1094,6 +1315,13 @@ function updatePlane(p, dt, t) {
   m.group.position.set(p.pos.x + J(), p.pos.y + wave * 0.55 * calm + sq + J() * 0.5, p.pos.z + J());
   m.group.rotation.set(p.pitch + swellP + Math.cos(t * 1.1 + p.idx) * 0.01 * calm + J() * 0.3, p.yaw, p.roll + swellR + rock * 0.5 + J() * 0.4);
 
+  // drips off the hull and the drop doors in the air, after a scoop and after a water drop (the bucket does the same)
+  p.dripT = Math.max(0, (p.dripT || 0) - dt);
+  if (p.dripT > 0 && !p.afloat) {
+    p.dripAcc = (p.dripAcc || 0) + dt * 16 * Math.min(1, p.dripT);
+    if (p.dripAcc >= 1) m.group.updateWorldMatrix(true, false);
+    while (p.dripAcc >= 1) { p.dripAcc--; V.set((Math.random() - 0.5) * 0.9, -1.85, (Math.random() - 0.5) * 3).applyMatrix4(m.group.matrixWorld); fx.emit(V.x, V.y, V.z, p.vel.x * 0.85, -1, p.vel.z * 0.85, 0.8, 0.92, 1, 0.75, 0.16 + Math.random() * 0.1, 0.9, 9.8, 0.3); }
+  }
   // spray off the floats while on the water
   if (p.afloat && Math.abs(p.fs) > 2) {
     p.washAcc += dt * Math.abs(p.fs) * 6;
@@ -1136,7 +1364,7 @@ function updateBoat(p, dt, t) {
   const room = p.cargo.length + p.incoming < MAX_CARGO;
 
   if (p.target && (p.target.state !== 'waiting' || Math.hypot(p.target.pos.x - p.pos.x, p.target.pos.z - p.pos.z) > 160)) { if (p.target.claimed === p) p.target.claimed = null; p.target = null; }
-  if (!p.pro && !p.target && !p.fireJob && ready && room) {
+  if (!p.pro && !p.target && !p.fireJob && ready && room && !p.unloading) {
     let bd = 110;
     for (const an of waiting) {
       if (an.fire || outOfReach(an, p) || (an.claimed && an.claimed !== p)) continue;
@@ -1149,12 +1377,21 @@ function updateBoat(p, dt, t) {
   const guide = !p.pro && !p.target && room ? nearestFor(p) : null;
   // (a fire by the shore: in close to the water's edge below it, for the cannon)
   const fj = !p.pro && p.fireJob;
-  const goal = p.pro ? null : fj ? fj.fire.shore : p.target ? p.target.pos : p.cargo.length && (!room || !guide || guide.d > 160) ? DOCK : guide ? guide.an.pos : null;
+  // (home with friends aboard: round to the start of its berth's line, then in along it to lie alongside the pier, and
+  // there it waits until everyone is off)
+  const home = !p.pro && !fj && !p.target && !!p.berth && ((p.cargo.length > 0 && (!room || !guide || guide.d > 160)) || p.unloading > 0);
+  if (home) chooseBerth(p);
+  const Bk = home ? berthing(p) : null;
+  if (!home) p.berthing = false;
+  const goal = p.pro ? null : fj ? fj.fire.shore : p.target ? p.target.pos : home ? berthStart(p.berth) : guide ? guide.an.pos : null;
   let assist = 0, gd = 1e9, cap = BT.max, routed = false;
-  if (goal && ready) {
+  if (Bk && ready) {
+    const off = angDiff(Math.atan2(Bk.aim.x - p.pos.x, Bk.aim.z - p.pos.z), p.yaw);
+    assist = clamp(off * 1.8, -1, 1); cap = Bk.cap; routed = true; gd = Bk.left;
+  } else if (goal && ready) {
     // the way there by water, planned round every island, rock and shoal and through the reef's channel (nav.js); the
     // boat cuts smoothly onto it and round its corners, and eases off for the sharp ones
-    const R = followWater(p, goal, 5.5, Math.max(14, Math.abs(p.fs) * 1.3));
+    const R = home ? follow(p, 'berth', nav.water, goal, 5.5, Math.max(14, Math.abs(p.fs) * 1.3), berthLine(p.berth)) : followWater(p, goal, 5.5, Math.max(14, Math.abs(p.fs) * 1.3));
     const aim = R ? R.aim : goal;
     routed = !!R;
     gd = R ? R.left : Math.hypot(goal.x - p.pos.x, goal.z - p.pos.z);
@@ -1193,6 +1430,16 @@ function updateBoat(p, dt, t) {
     p.wedgeT = 0; (p.wedgeAt || (p.wedgeAt = new THREE.Vector3())).copy(p.pos);
   }
   if (p.backT > 0) { p.backT -= dt; turnCmd = p.avoidDir || 1; }
+  // (setting off from its berth: across the end of the pier, straight on until its stern is clear of it; alongside, nose
+  // to the shore, astern, straight out along the berth's line until it has room to swing round without its stern
+  // catching the pier)
+  const B0 = p.berth, out0 = B0 ? (p.pos.x - B0.x) * Math.sin(B0.h) + (p.pos.z - B0.z) * Math.cos(B0.h) : 0;
+  if (B0 && p.berthed && !p.pro && !home && ready && inp.f > 0) p.unberth = true;
+  // (and once its stern is past the end of the pier, still going astern, it swings its bow round toward where it is
+  // going: going ahead while it turned would carry it back alongside)
+  const offGoal = goal ? angDiff(Math.atan2(goal.x - p.pos.x, goal.z - p.pos.z), p.yaw) : 0, pastPier = B0 && out0 <= -B0.clear;
+  if (p.unberth && ((B0.through ? out0 >= 10 : out0 <= -(B0.clear + 14) || (pastPier && Math.abs(offGoal) < 0.9)) || home || inp.f <= 0 || p.pro)) p.unberth = false;
+  if (p.unberth) turnCmd = !B0.through && pastPier ? -clamp(offGoal * 1.5, -1, 1) : 0;
   // (while the cannon is going, it swings its bow round to face the fire, so the fire is in the picture)
   if (!p.pro && p.spray && inp.t === 0) { const F = p.spray.fire; turnCmd = clamp(angDiff(Math.atan2(F.x - p.pos.x, F.z - p.pos.z), p.yaw) * 1.6, -1, 1); }
   const bite = clamp(Math.abs(p.fs) / 9, 0.45, 1) * (p.fs < -0.5 && !fireHolding ? -1 : 1) * (p.pro ? 1.15 - clamp((Math.abs(p.fs) - 20) / 40, 0, 0.35) : 1);
@@ -1202,12 +1449,13 @@ function updateBoat(p, dt, t) {
   // ease off before a beach instead of running aground
   const dir = p.fs >= 0 ? 1 : -1;
   let shore = 1;
-  if (p.pro) shore = 1;
+  if (p.pro || Bk) shore = 1;      // (the berth's line is clear water, right up to the berth)
   else if (blockedAt(p, fx_ * dir, fz_ * dir, 7, 1.5)) shore = 0; else if (blockedAt(p, fx_ * dir, fz_ * dir, 15, 1.5) || blockedAt(p, fx_ * dir, fz_ * dir, Math.abs(p.fs) * 1.6, 1.5)) shore = 0.3;      // (further ahead the faster it goes)
-  const atDock = (!p.pro && !p.target && p.cargo.length > 0 && dockD < 15) || p.incoming > 0 || (fj && gd < 12) || !!p.spray;      // (and it lies stopped while someone comes aboard, or while the cannon is going)
+  const atDock = (!p.pro && p.berthed && (p.cargo.length > 0 || p.unloading > 0)) || p.incoming > 0 || (fj && gd < 12) || !!p.spray;      // (and it lies stopped while someone comes aboard, or while the cannon is going)
   let want = 0;
   if (ready && !atDock) want = inp.f > 0 ? cap : inp.f < 0 ? -7 : 0;
   if (p.backT > 0) want = -6;
+  if (p.unberth) want = p.berth.through ? 8 : -5;
   if (shore < 1 && Math.sign(want) === dir && !(p.backT > 0)) want *= Math.max(shore, ownIslet ? 0 : 0.12);   // creep while turning away, so it never just sits there
   if (p.pro) {
     // a throttle and a hull: full power runs it up to 34 m/s, letting go it coasts down on the water's drag, back is astern
@@ -1224,6 +1472,8 @@ function updateBoat(p, dt, t) {
   // is still deep enough rather than stopping dead
   if (aground(p.pos, px, pz, nfx, nfz, p.fs >= 0 ? 4.8 : -4.6)) { p.fs += clamp(3 - p.fs, -14 * dt, 0); bump(p, 'shallows'); }
   if (fendOff(p.pos, p.yaw, 3.2, 1.6, 0)) { p.fs *= 1 - damp(4, dt); bump(p, 'rock'); }
+  if (pierFend(p)) { p.fs *= 1 - damp(3, dt); if (!p.berthing) bump(p, 'pier'); }
+  berthState(p);
   const wave = waveHeight(p.pos.x, p.pos.z, t);
   // the hull rides the swell; going fast enough over a big one it leaves the water for a moment
   const rideY = wave * 0.75;
@@ -1283,7 +1533,9 @@ function updateBoat(p, dt, t) {
   p.boat.crew.rotation.y += angDiff(p.boat.monitor.rotation.y, p.boat.crew.rotation.y) * damp(3, dt);
   p.boat.crew.rotation.x = p.spray ? -.13 + Math.sin(t * 12) * .015 : 0;
   p.dropCd -= dt;
-  if (p.cargo.length && dockD < (p.pro ? 14 : 30) && Math.abs(p.fs) < (p.pro ? 2.5 : 10) && p.dropCd <= 0) { if (p.pro) rate(p, dockD < 8 ? 3 : 2, dockD < 8 ? 'Neat docking' : 'Docked'); deliverOne(p); p.dropCd = 0.45; }
+  // ---- home: lying alongside the pier, the friends hop up onto it one by one and walk home (a pilot brings it in
+  // alongside and stops; the easy boat ties up at its berth)
+  if (p.cargo.length && p.dropCd <= 0 && (p.pro ? Math.abs(p.fs) < 2.5 && deckGap(p) < 2.5 : p.berthed)) { if (p.pro && !p.unloading) { const g = deckGap(p); rate(p, g < 1 ? 3 : 2, g < 1 ? 'Neat docking' : 'Docked'); } deliverOne(p); p.dropCd = 0.45; }
   if (!p.parked && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; }
   p.mode = p.target || p.incoming ? 'pickup' : (p.cargo.length && dockD < 120 ? 'deliver' : 'idle');
 
@@ -1332,12 +1584,7 @@ function updateWinch(p, dt, t) {
   // fighting a fire (and nobody aboard): the bucket is on the cable instead of the basket
   const bucket = !p.cargo.length && !p.incoming && (!!p.fireJob || p.water > 0);
   p.cage.visible = !bucket; p.bucket.visible = bucket;
-  if (bucket) {
-    const w = p.bucket.userData.water; w.visible = p.water > .03;
-    w.position.y = .2 + 1.35 * p.water; w.scale.setScalar(.76 + p.water * .24);
-    w.rotation.set(-Math.PI / 2 + Math.sin(t * 3) * .035, Math.cos(t * 2) * .035, 0);
-    p.bucket.userData.valve.rotation.z += ((p.attack ? -1.3 : 0) - p.bucket.userData.valve.rotation.z) * damp(12, dt);
-  }
+  if (bucket) bucketLooks(p, dt, t);
   // The cabin door opens before the fixed hoist lowers a load.
   const needHoist = !p.grounded && (p.target || bucket || p.incoming > 0 || p.cargo.length > 0 || (p.pro && (p.input.w || p.winch > 0.1)));
   const was = p.hoist;
@@ -1379,8 +1626,13 @@ function updateWinch(p, dt, t) {
   } else if (bucket && ready) {
     // empty and over the sea, going slowly: the bucket goes down into the water; otherwise it hangs a little below
     surfaceAt(p.hook.x, p.hook.z, t, SURF2);
-    if (!p.attack && p.water < 1 && !SURF2.land && Math.hypot(p.vel.x, p.vel.z) < 9) { mode = 'dip'; ty = SURF2.y - 1.0; om = 4.5; }
-    else { ty -= 2.5; om = 6; }
+    // (down into the water, a little deeper as it tips over to scoop)
+    if (!p.attack && p.water < 1 && !SURF2.land && Math.hypot(p.vel.x, p.vel.z) < 9) { mode = 'dip'; ty = SURF2.y - 1.0 - (p.bk ? p.bk.tip : 0) * 0.9; om = 4.5; }
+    else {
+      // (hanging a little below; full and heavy it trails behind as the helicopter goes, swinging on a longer, lazier spring)
+      ty -= 2.5; om = 6 - 1.8 * p.water;
+      tx -= p.vel.x * 0.1 * p.water; tz -= p.vel.z * 0.1 * p.water;
+    }
   } else if (p.target && ready) {
     mode = 'pickup'; om = 5.5;
     tx = p.target.pos.x; ty = p.target.pos.y + 0.1; tz = p.target.pos.z;
@@ -1423,9 +1675,10 @@ function updateWinch(p, dt, t) {
   // the bucket fills while it is under water, and empties itself once it is over a fire
   if (bucket) {
     if (!p.attack && p.water < 1 && !bs.land && b.y < bs.y + 0.1) {
-      p.water = Math.min(1, p.water + dt / 0.9);
-      if (Math.random() < 0.5) fx.splash(b.x, bs.y, b.z, 3, 0.5);
-      if (p.water >= 1) { waterAboard(p); bv.y -= 2.5; fx.splash(b.x, bs.y, b.z, 22, 0.9); }
+      // (water pours in over the lip of the tipped bucket, gurgling, and as it fills it rights itself)
+      p.water = Math.min(1, p.water + dt / 1.6);
+      if (Math.random() < 0.6) fx.splash(b.x + (Math.random() - 0.5) * 2, bs.y, b.z + (Math.random() - 0.5) * 2, 3, 0.45);
+      if (p.water >= 1) { waterAboard(p); bv.y -= 2.5; fx.splash(b.x, bs.y, b.z, 22, 0.9); p.bk.sqV -= 3.5; }
     }
     if (p.water >= 0.99 && !p.attack && p.fireJob) {
       const aim = p.fireAim;
@@ -1446,8 +1699,8 @@ function updateWinch(p, dt, t) {
 
   // set down at the base
   if (p.cargo.length && p.dropCd <= 0) {
-    if (p.grounded && nearBase && (p.parked || p.pro)) { deliverOne(p); p.dropCd = 0.4; }
-    else if ((mode === 'deliver' || (p.pro && nearBase && p.winch > 1)) && b.y < BASE_Y + 1.6) { deliverOne(p); p.dropCd = 0.4; }
+    if (p.grounded && nearBase && (p.parked || p.pro)) { deliverOne(p); p.dropCd = 0.55; }
+    else if ((mode === 'deliver' || (p.pro && nearBase && p.winch > 1)) && b.y < BASE_Y + 1.6) { deliverOne(p); p.dropCd = 0.55; }
   }
   p.mode = mode;
 
@@ -1456,6 +1709,55 @@ function updateWinch(p, dt, t) {
 }
 const SURF2 = { y: 0, land: false };
 const UP = new THREE.Vector3(0, 1, 0);
+// How the fire bucket moves, beyond where it hangs (updateWinch): it tips onto its side as it meets the water and rights
+// itself as it fills, with a wobble; the water in it sloshes as the helicopter speeds up and slows, and stays level
+// whichever way the bucket leans; it squashes and bounces when it fills and when it empties; water sheets off its sides
+// as it comes up out of the sea, and it drips all the way to the fire and for a while after the drop.
+const DROP_AT = new THREE.Vector3();
+function bucketLooks(p, dt, t) {
+  const k = p.bk || (p.bk = { tip: 0, tipV: 0, sq: 0, sqV: 0, wet: false, drip: 0, dripAcc: 0, sx: 0, sz: 0, vx: 0, vz: 0, open: false });
+  const b = p.bpos, bv = p.bvel, B = p.bucket;
+  surfaceAt(b.x, b.z, t, SURF3);
+  const under = !SURF3.land && b.y < SURF3.y + 0.35;
+  if (under && !k.wet) { fx.splash(b.x, SURF3.y, b.z, 26, 1); sfx.splash(0.5); k.tipV += 2.5; }      // (in it goes, with a splash and a lurch)
+  if (!under && k.wet && p.water > 0.5) {
+    // (up it comes, water sheeting off the outside all round)
+    for (let i = 0; i < 34; i++) { const a = Math.random() * 6.283, r = 1.05; fx.emit(b.x + Math.cos(a) * r, b.y + 0.4 + Math.random() * 1.2, b.z + Math.sin(a) * r, Math.cos(a) * 0.8 + bv.x * 0.6, -0.5 - Math.random() * 1.5, Math.sin(a) * 0.8 + bv.z * 0.6, 0.85, 0.94, 1, 0.7, 0.18 + Math.random() * 0.2, 0.5 + Math.random() * 0.4, 9.8, 0.2); }
+    k.drip = 3.5;
+  }
+  k.wet = under;
+  // tipping: over on its side to scoop while it is empty in the water, upright as it fills; a springy wobble either way
+  const tipTo = under && !p.attack && p.water < 1 ? 1.2 * (1 - p.water) : 0;
+  k.tipV += ((tipTo - k.tip) * 38 - k.tipV * 5.5) * dt; k.tip += k.tipV * dt;
+  // squash and stretch: a springy bounce (sq < 0 squashes)
+  if (p.attack && !k.open) { k.sqV += 3; bv.y += 2; }      // (the valve opens: lighter all at once, it bobs up)
+  k.open = !!p.attack;
+  k.sqV += (-k.sq * 70 - k.sqV * 6) * dt; k.sq += k.sqV * dt;
+  // (it hangs from the bails' meeting point, so it tips about that, not about its bottom)
+  const h = BASKET_TOP;
+  B.rotation.set(0, 0, k.tip);
+  B.position.set(h * Math.sin(k.tip), h * (1 - Math.cos(k.tip)), 0);
+  B.scale.set(1 - k.sq * 0.08, 1 + k.sq * 0.16, 1 - k.sq * 0.08);
+  // the water: its level, a slosh against the way the bucket is speeding up, and level with the world as the bucket leans
+  const w = B.userData.water; w.visible = p.water > .03;
+  w.position.y = .2 + 1.35 * p.water; w.scale.setScalar(.76 + p.water * .24);
+  const ax = (bv.x - k.vx) / Math.max(dt, 1e-3), az = (bv.z - k.vz) / Math.max(dt, 1e-3); k.vx = bv.x; k.vz = bv.z;
+  const c = Math.cos(p.yaw), s = Math.sin(p.yaw), fwd = ax * s + az * c, side = ax * c - az * s;
+  k.sx += (clamp(-fwd * 0.02, -0.3, 0.3) - k.sx) * damp(5, dt); k.sz += (clamp(side * 0.02, -0.3, 0.3) - k.sz) * damp(5, dt);
+  w.rotation.set(-Math.PI / 2 + k.sx + Math.sin(t * 3) * .03, k.tip + k.sz + Math.cos(t * 2) * .03, 0);
+  B.userData.valve.rotation.z += ((p.attack ? -1.3 : 0) - B.userData.valve.rotation.z) * damp(12, dt);
+  // drips: from the bottom all the way to the fire while it is full (a leaky old bag), and for a while after it comes up
+  // out of the sea or empties
+  if (p.attack) k.drip = 2.5;
+  k.drip = Math.max(0, k.drip - dt);
+  const rate = (p.water > 0.9 && !under ? 5 : 0) + k.drip * 9;
+  k.dripAcc += rate * dt;
+  if (k.dripAcc >= 1 && B.visible) {
+    B.updateWorldMatrix(true, false);
+    while (k.dripAcc >= 1) { k.dripAcc--; DROP_AT.set((Math.random() - 0.5) * 1.2, 0.05, (Math.random() - 0.5) * 1.2).applyMatrix4(B.matrixWorld); fx.emit(DROP_AT.x, DROP_AT.y, DROP_AT.z, bv.x * 0.8, -1, bv.z * 0.8, 0.8, 0.92, 1, 0.75, 0.14 + Math.random() * 0.1, 0.9, 9.8, 0.1); }
+  }
+}
+const SURF3 = { y: 0, land: false };
 
 // ================================================================= camera
 function updateCamera(p, dt, t) {
@@ -1511,6 +1813,8 @@ function updateCamera(p, dt, t) {
   const sh = reducedMotion.matches ? 0 : p.shake * p.shake * 0.5 + (p.grounded ? p.spin * (1.1 - 0.8 * p.spin) * 0.07 : 0);
   if (sh > 0) { p.cam.position.x += (Math.random() - 0.5) * sh; p.cam.position.y += (Math.random() - 0.5) * sh; p.cam.position.z += (Math.random() - 0.5) * sh; }
   p.cam.lookAt(p.camLook);
+  // (development: debug.watch = [x, y, z, lookX, lookY, lookZ] holds the red pilot's camera still, to watch something)
+  if (debug.watch && !p.idx) { p.cam.position.fromArray(debug.watch, 0); p.cam.lookAt(debug.watch[3], debug.watch[4], debug.watch[5]); }
 }
 
 // ================================================================= animals
@@ -1827,7 +2131,7 @@ function waterReady(p) { return p.water >= 0.99 || !!p.attack; }
 function updateFireJob(p) {
   const j = p.fireJob;
   if (j && (!burning(j) || j.state !== 'waiting' || p.cargo.length || p.incoming || !canFight(p, j.fire))) { if (j.claimed === p) j.claimed = null; p.fireJob = null; p.attack = null; }
-  if (!p.fireJob && !p.cargo.length && !p.incoming && !p.target && !p.pickup) {
+  if (!p.fireJob && !p.cargo.length && !p.incoming && !p.target && !p.pickup && !p.unloading) {
     const g = nearestFor(p);
     if (g && burning(g.an)) p.fireJob = g.an;
   }
@@ -1835,7 +2139,7 @@ function updateFireJob(p) {
     p.fireAim = attackPoint(p.fireJob.fire, p.idx, p.vehicle === 'boat' ? p.pos : null); p.aimUntil = game.t + 0.8;
   }
 }
-function waterAboard(p) { sfx.splash(); p.flash = p.vehicle === 'plane' ? 'Tank full · line up a water run' : 'Bucket full · tackle the fire front'; p.flashT = 2.5; }
+function waterAboard(p) { p.dripT = 3; sfx.splash(); p.flash = p.vehicle === 'plane' ? 'Tank full · line up a water run' : 'Bucket full · tackle the fire front'; p.flashT = 2.5; }
 const pours = [];
 function removeBeam(an) {
   if (!an.beam) return;
@@ -1886,7 +2190,7 @@ function updateWaterRuns(dt) {
       launchWater(p, run.an, source, hit, config.capacity * run.acc / config.duration, 'drop'); run.acc = 0;
       p.waterStream.update(source, hit, run.vehicle === 'heli' ? .45 : .65, run.vehicle === 'heli' ? 1.5 : 2.3, Math.min(1, (config.duration - run.left) / hit.time));
     }
-    if (run.left <= 0) { p.waterStream.hide(); p.attack = null; p.water = 0; p.fireAim = null; }
+    if (run.left <= 0) { p.waterStream.hide(); p.attack = null; p.water = 0; p.fireAim = null; p.dripT = 2.5; }
   }
 }
 function fireOut(an, p) {
@@ -2244,39 +2548,150 @@ function slotPos(i, out) {
   const col = i % 6, row = (i / 6) | 0;
   return out.set(-7.5 + col * 3 + (row % 2) * 1.2, BASE_Y, -9.2 + row * 3.1);
 }
+// ---- home. Friends brought back walk the last bit: off the boat or the flying boat up onto the pier (from the flying
+// boat's door by way of its wing float, like stepping stones), along the pier and up across the lawn in a line, and a
+// happy hop over the low front fence into the pen; out of the helicopter, from its pad or its lowered basket, across the
+// grass the same way. They count as safe the moment they are ashore. (Brought home from far off, as when a pilot
+// changes machine mid-flight, they still fly home in one big hop.)
+const PEN = { x0: -10.4, x1: 10.7, z0: -12.5, z1: -1.0, front: 0.9 };
+const inPen = (x, z) => x > PEN.x0 && x < PEN.x1 && z > PEN.z0 && z < PEN.z1;
+// the ground a friend walks on: the pier's deck or the island
+const onDeck = (x, z) => x > DECK.x0 - 0.6 && x < DECK.x1 + 0.6 && z > HOME_PIER.a.z && z < HOME_PIER.b.z;
+const groundAt = (x, z) => onDeck(x, z) ? Math.max(terrainHeight(x, z), DECK_Y) : terrainHeight(x, z);
+// the nearest point on the deck to (x, z), a little in from its edge
+const deckPoint = (x, z) => ({ x: clamp(x, DECK.x0, DECK.x1), y: DECK_Y, z: clamp(z, DECK.z0, DECK.z1) });
 function deliverOne(p) {
   const an = p.cargo.shift(); if (!an) return;
+  const W = an.model.getWorldPosition(new THREE.Vector3()), sc = an.model.getWorldScale(V2).x;
   scene.attach(an.model);
   seatRiders(p);
-  an.state = 'hop'; an.t = 0; an.from = an.model.position.clone(); an.by = p;
-  { const d = Math.hypot(an.from.x, an.from.z); an.hdur = 0.95 + Math.max(0, d - 30) * 0.02; an.harc = 5 + Math.max(0, d - 30) * 0.22; }
-  an.model.scale.setScalar(1.3); an.model.rotation.set(0, 0, 0);
+  an.by = p; an.t = 0; an.counted = false; an.homeT = game.t;
+  an.model.rotation.set(0, an.model.rotation.y, 0);
+  const j = (Math.random() - 0.5) * 1.4;      // (not all in exactly the same footsteps)
+  const steps = [];
+  const lawn = [{ x: 0.8 + j * 0.5, z: 31 }, { x: j, z: 20 }];
+  if (p.vehicle === 'heli' && Math.hypot(W.x, W.z) < 60) {
+    // out of the basket or the cabin door onto the grass, then over to the pen
+    const c = Math.cos(p.yaw), s = Math.sin(p.yaw), side = p.grounded ? 2.6 : 1.4;
+    const out = p.grounded ? { x: p.pos.x + c * side, z: p.pos.z - s * side } : { x: W.x + (0 - W.x) * 0.1 + j * 0.3, z: W.z + 1.2 };
+    steps.push({ hop: { x: out.x, y: groundAt(out.x, out.z), z: out.z }, safe: true }, { pen: true });
+  } else if (p.vehicle !== 'heli' && deckGap(p) < 4) {
+    // onto the pier (the flying boat's friends by way of the float under its wing, on the door side), then along it
+    if (p.vehicle === 'plane') {
+      p.model.group.updateMatrixWorld();
+      const F = new THREE.Vector3(6.05, -0.6, 0.35 + j * 0.3).applyMatrix4(p.model.group.matrixWorld);
+      steps.push({ hop: { x: F.x, y: F.y, z: F.z }, scale: 1 }, { wait: 0.12 });
+      const D = deckPoint(F.x, F.z); steps.push({ hop: D, safe: true });
+    } else steps.push({ hop: deckPoint(W.x, W.z), safe: true });
+    p.unloading++; an.unload = p;
+    const D = steps[steps.length - 1].hop;
+    steps.push({ walk: [{ x: D.x, z: D.z }, { x: PIER_X + j * 0.6, z: D.z - 1.5 }, { x: PIER_X + j * 0.6, z: 39 }, ...lawn] }, { pen: true });
+  } else {
+    // (far from home: one big hop all the way)
+    steps.push({ fly: true });
+  }
+  an.steps = steps; an.step = null;
+  an.state = 'home'; an.from = an.model.position.clone(); an.fromScale = sc;
+  an.model.scale.setScalar(sc);
   hoppers.push(an);
-  sfx.chime();
+  animalVoice(an.type.id, true);
 }
+// safe at home: counted, and the cheer for it
+function homeSafe(an) {
+  if (an.counted) return;
+  an.counted = true;
+  if (an.unload) { an.unload.unloading = Math.max(0, an.unload.unloading - 1); an.unload = null; }
+  const P = an.model.position;
+  fx.hearts(P.x, P.y + 2.5, P.z, 4); fx.sparkle(P.x, P.y + 1.2, P.z, 12);
+  sfx.chime();
+  an.by.rescued++; game.rescued++; game.total++;
+  game.saved.push(an.type.e);
+  if (game.rescued >= game.goal && game.celebrate <= 0) missionComplete();
+  syncHud();
+}
+const STEP_TO = new THREE.Vector3();
 function updateHoppers(dt, t) {
   for (let i = hoppers.length - 1; i >= 0; i--) {
     const an = hoppers[i];
-    if (an.state !== 'hop') continue;
-    an.t += dt / an.hdur;
-    const to = slotPos(residents.length, V);
-    const k = Math.min(an.t, 1);
-    an.model.position.lerpVectors(an.from, to, k);
-    an.model.position.y += Math.sin(k * Math.PI) * an.harc;
-    an.model.rotation.x = k * Math.PI * 2;
-    feel(an, 1, 1, dt);
-    if (k >= 1) {
+    if (an.state !== 'home') continue;
+    const m = an.model;
+    // the next thing to do
+    if (!an.step) {
+      const st = an.steps.shift();
+      if (!st) continue;
+      if (st.pen) {
+        // to the pen: inside it already (out of a basket lowered into it), straight to their place; or else up to the
+        // fence in front of it and over
+        // (in the order they get there: each has the next free place, the ones ahead of them still on their way)
+        an.queue = hoppers.filter(h => h !== an && h.state === 'home' && h.penBound).length; an.penBound = true;
+        const to = slotPos(residents.length + an.queue, STEP_TO);
+        if (inPen(m.position.x, m.position.z)) an.steps.unshift({ walk: [{ x: to.x, z: to.z }] }, { settle: true });
+        else an.steps.unshift({ walk: [{ x: lerp(m.position.x, to.x, 0.5), z: Math.max(PEN.front + 3, lerp(m.position.z, PEN.front, 0.6)) }, { x: to.x, z: PEN.front }] }, { hop: { x: to.x, y: BASE_Y, z: PEN.z1 - 1.8 }, fence: true }, { walk: [{ x: to.x, z: to.z }] }, { settle: true });
+        continue;
+      }
+      an.step = st; an.t = 0; an.from = m.position.clone(); an.fromScale = m.scale.x;
+      if (st.walk) { st.i = 0; }
+      if (st.fly) { an.hdur = 0.95 + Math.max(0, Math.hypot(an.from.x, an.from.z) - 30) * 0.02; an.harc = 5 + Math.max(0, Math.hypot(an.from.x, an.from.z) - 30) * 0.22; }
+    }
+    const st = an.step;
+    if (st.wait) { an.t += dt; if (an.t >= st.wait) an.step = null; continue; }
+    if (st.settle) {
+      // in their place in the pen
       hoppers.splice(i, 1);
-      an.model.rotation.set(0, 0, 0);
-      an.state = 'safe'; an.x = to.x; an.z = to.z;
+      m.rotation.set(0, m.rotation.y, 0);
+      an.state = 'safe'; an.x = m.position.x; an.z = m.position.z; an.queue = 0; an.penBound = false;
       residents.push(an);
-      fx.confetti(to.x, BASE_Y + 1.5, to.z, 50); fx.hearts(to.x, BASE_Y + 3, to.z, 3);
+      homeSafe(an);
+      fx.confetti(m.position.x, BASE_Y + 1.5, m.position.z, 40);
       animalVoice(an.type.id, true);
-      an.by.rescued++; game.rescued++; game.total++;
-      game.saved.push(an.type.e);
-      if (residents.length > 15) { const old = residents.shift(); old.state = 'leaving'; old.t = 0; hoppers.push(old); }
-      if (game.rescued >= game.goal && game.celebrate <= 0) missionComplete();
-      syncHud();
+      for (const h of hoppers) if (h.state === 'home' && h.queue > 0) h.queue--;
+      if (residents.length > 15) { const k = residents.findIndex(r => r.state === 'safe'), old = residents.splice(k, 1)[0]; old.state = 'leaving'; old.t = 0; hoppers.push(old); }
+      continue;
+    }
+    if (st.hop || st.fly) {
+      // a hop: up and across in an arc, growing to full size on the way (from the seat, where they ride small)
+      const to = st.fly || st.hop.slot ? slotPos(residents.length + (an.queue || 0), STEP_TO) : STEP_TO.set(st.hop.x, st.hop.y, st.hop.z);
+      if (!st.dur) {
+        const d = Math.hypot(to.x - an.from.x, to.z - an.from.z);
+        st.dur = st.fly ? an.hdur : 0.42 + d * 0.035 + Math.max(0, to.y - an.from.y) * 0.05;
+        st.arc = st.fly ? an.harc : (st.fence ? 1.6 : 0.9) + d * 0.12 + Math.max(0, to.y - an.from.y) * 0.6;
+        if (st.hop && !st.hop.slot && d > 0.2) an.model.rotation.y = Math.atan2(to.x - an.from.x, to.z - an.from.z);
+      }
+      an.t += dt / st.dur;
+      const k = Math.min(an.t, 1), e = st.fly ? k : k * k * (3 - 2 * k);
+      m.position.lerpVectors(an.from, to, e);
+      m.position.y += Math.sin(k * Math.PI) * st.arc;
+      m.scale.setScalar(lerp(an.fromScale, st.scale || 1.3, Math.min(1, k * 1.5)));
+      // (a tuck and a little spin over the fence; a whole somersault all the way home from far off)
+      m.rotation.x = st.fly ? k * Math.PI * 2 : st.fence ? Math.sin(k * Math.PI) * -0.5 : 0;
+      feel(an, 1, 0, dt);
+      if (k >= 1) {
+        m.rotation.x = 0; an.step = null;
+        if (st.fly) { an.steps.unshift({ settle: true }); continue; }
+        fx.dust(m.position.x, m.position.y, m.position.z, 6); sfx.touchdown(0.25);
+        if (st.safe) homeSafe(an);
+      }
+      continue;
+    }
+    if (st.walk) {
+      // a trot along the way, bobbing, with a waddle; slowing to keep a friend's length behind whoever is in front
+      const q = st.walk[st.i];
+      const dx = q.x - m.position.x, dz = q.z - m.position.z, d = Math.hypot(dx, dz);
+      let speed = 5;
+      for (const h of hoppers) {
+        if (h === an || h.state !== 'home' || !h.step || !h.step.walk) continue;
+        const ox = h.model.position.x - m.position.x, oz = h.model.position.z - m.position.z, od = Math.hypot(ox, oz);
+        if (od < 2.2 && ox * dx + oz * dz > 0) speed = Math.min(speed, 5 * clamp((od - 1.2) / 1, 0, 1));
+      }
+      const step = Math.min(d, speed * dt);
+      if (d > 0.01) { m.position.x += dx / d * step; m.position.z += dz / d * step; m.rotation.y += angDiff(Math.atan2(dx, dz), m.rotation.y) * damp(10, dt); }
+      an.stride = (an.stride || 0) + step * 2.6;
+      m.position.y = groundAt(m.position.x, m.position.z) + Math.abs(Math.sin(an.stride)) * 0.35;
+      m.rotation.z = Math.sin(an.stride) * 0.13;
+      m.scale.setScalar(lerp(m.scale.x, 1.3, damp(4, dt)));
+      feel(an, 1, 0.2, dt);
+      if (d < 0.3) { st.i++; if (st.i >= st.walk.length) { an.step = null; m.rotation.z = 0; } }
+      continue;
     }
   }
 }
@@ -3083,8 +3498,10 @@ function bump(p, kind) {
 }
 const debug = {
   retire: animal => releaseWaiting(an => an === animal),
+  // (the seaplane's planning, to trace why it chose what it did)
+  plan: { landingFor: (...a) => landingFor(...a), approachPath: (...a) => approachPath(...a), glideAlt, APP, LANE },
   canFight: (i, F) => canFight(players[i], F),
-  view: null,
+  view: null, watch: null,
   bumps: [{ last: {} }, { last: {} }],
   // on to the next mission, exactly as finishing one does
   next: () => nextMission(),
@@ -3326,4 +3743,4 @@ warmUp.catch(() => {}).then(() => {
 }
 
 // tiny debug handle (also handy for automated checks)
-window.__game = { TEST, PLANE_FLOAT, DOCK, nav, navMs, life, traffic, terrainHeight, waveHeight, sea, ISLETS, HUTS, PADS, WORLD_R, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, setRenderScale, metrics, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };
+window.__game = { TEST, PLANE_FLOAT, DOCK, HOME_PIER, hoppers, nav, navMs, life, traffic, terrainHeight, waveHeight, sea, ISLETS, HUTS, PADS, WORLD_R, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, setRenderScale, metrics, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };
