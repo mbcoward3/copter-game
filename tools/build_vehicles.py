@@ -212,15 +212,9 @@ def boat():
         stations.append((x, hw, 0.58 + rise * 0.6, 0.18 + rise, 2.2 + 1.2 * (1 - t)))
 
     def hull_paint(x, side, up):
-        # dark bottom, white topsides, and the Coast Guard racing stripe: a broad orange band and a thin blue one
-        # leaning back from the bow
+        # dark bottom, white topsides (the collar, in the pilot's colour, is the stripe)
         if up < -0.35:
             return 'Dark'
-        k = x - 2.3 + up * 0.6
-        if abs(side) > 0.3 and 0.0 < k < 0.55:
-            return 'Raft'
-        if abs(side) > 0.3 and 0.62 < k < 0.78:
-            return 'Navy'
         return 'Paint'
     bits = [loft('Hull', stations, hull_paint, ring=28, subdivide=1)]
     # foam collar round the gunwale, from transom corner to transom corner by way of the bow
@@ -230,23 +224,31 @@ def boat():
         path.append((x, half_width(x) + 0.14, 0.72 + 0.25 * max(0.0, (x - 1.5) / 3.0) ** 2))
     path = list(reversed([(x, -y, z) for x, y, z in path])) + [(4.66, 0, 0.98)] + path
     bits.append(tube('Collar', path, 0.3, 'Accent', 14))
+    # (the collar's two ends at the transom, rounded off)
+    for x, y, z in (path[0], path[-1]):
+        bits.append(ball('CollarEnd', (x, y, z), (0.3, 0.3, 0.3), 'Accent'))
     bits += [slab('Deck', (0.0, 0, 0.62), (7.6, 2.0, 0.08), 'Concrete', 0.01), slab('Transom', (-3.98, 0, 0.45), (0.1, 2.1, 0.7), 'Paint', 0.02)]
     # cabin: white walls with a band of dark glass, a lip of roof, a door aft
-    bits += [slab('Cabin', (0.35, 0, 1.45), (2.6, 1.8, 1.6), 'Paint', 0.08), slab('CabinGlass', (0.45, 0, 1.75), (2.5, 1.84, 0.62), 'Glass', 0.03),
+    # (the glass sits a little in from the walls, between pillars, with a rubber seal along its top and bottom)
+    bits += [slab('Cabin', (0.35, 0, 1.045), (2.6, 1.8, 0.79), 'Paint', 0.06), slab('CabinHead', (0.35, 0, 2.155), (2.6, 1.8, 0.19), 'Paint', 0.04),
+             slab('CabinGlass', (0.45, 0, 1.75), (2.5, 1.74, 0.64), 'Glass', 0.0),
              box('Windscreen', [(1.62, -0.88, 1.42), (1.62, 0.88, 1.42), (1.4, 0.88, 2.08), (1.4, -0.88, 2.08)],
                  [(1.68, -0.88, 1.42), (1.68, 0.88, 1.42), (1.46, 0.88, 2.08), (1.46, -0.88, 2.08)], 'Glass', 0.0),
              slab('Roof', (0.3, 0, 2.3), (2.9, 2.0, 0.1), 'Paint', 0.03), slab('Door', (-0.96, 0.3, 1.3), (0.05, 0.7, 1.3), 'Seam', 0.01)]
     bits.append(lettering('Rescue', 'RESCUE', (0.3, 0.915, 1.12), 0.28, True))
     bits.append(lettering('Rescue', 'RESCUE', (0.3, -0.915, 1.12), 0.28, False))
     # Glazing has structural mullions, rubber seals and a readable cabin door.
-    for side in (-1,1):
-        for x in (-.65,.45,1.35):
-            bits.append(slab('WindowPillar',(x,side*.94,1.76),(.055,.045,.64),'Paint',.01))
-        bits.append(rod('Cleat',(-2.7,side*.8,.72),(-2.45,side*.8,.72),.045,'Metal',8))
+    for x in (-0.94, -0.3, 0.6, 1.5):
+        bits.append(slab('WindowPillar', (x, 0, 1.75), (0.1, 1.8, 0.66), 'Paint', 0.02))
+    for side in (-1, 1):
+        for z in (1.44, 2.06):
+            bits.append(rod('WindowSeal', (-0.95, side * 0.885, z), (1.62, side * 0.885, z), 0.018, 'Rubber', 6))
+        bits.append(rod('Cleat', (-2.7, side * 0.8, 0.72), (-2.45, side * 0.8, 0.72), 0.045, 'Metal', 8))
     bits.append(rod('WindshieldPillar',(1.66,0,1.43),(1.44,0,2.08),.035,'Paint',8))
     bits.append(slab('DoorHandle',(-1.01,.52,1.36),(.04,.13,.035),'Metal',.01))
     for side in (1, -1):
-        bits.append(lettering('Guard', 'U.S. COAST GUARD', (2.6, side * (half_width(2.6) + 0.02), 0.42), 0.17, side > 0))
+        # (low on the topsides, under the collar's overhang but in plain view from the side)
+        bits.append(lettering('Guard', 'U.S. COAST GUARD', (1.2, side * (half_width(1.2) + 0.02), 0.12), 0.15, side > 0))
     # radar arch over the cabin roof, with the light bar on top and a radar dome
     for side in (1, -1):
         bits += [rod('ArchLeg', (-0.6, side * 0.9, 2.3), (-0.45, side * 0.85, 3.0), 0.06, 'Metal'), rod('ArchLeg', (0.2, side * 0.9, 2.3), (-0.2, side * 0.85, 3.0), 0.06, 'Metal')]
@@ -274,8 +276,10 @@ def boat():
 
 def outboard():
     # one outboard engine, built round the point where it hangs on the transom (it swings about Z to steer)
-    bits = [loft('Cowl', [(0.32, 0.18, 0.2, 0.42, 2.4), (0.0, 0.3, 0.42, 0.45, 3), (-0.5, 0.28, 0.38, 0.5, 3), (-0.62, 0.2, 0.28, 0.55, 2.4)],
-                 lambda x, s, u: 'Dark' if u < -0.6 else 'Paint', ring=20, subdivide=1),
+    # the cowl: rounded, taller than it is wide, white over a dark lower pan, split level all round
+    bits = [loft('Cowl', [(0.3, 0.12, 0.16, 0.5, 2.2), (0.22, 0.24, 0.36, 0.48, 2.6), (0.0, 0.28, 0.42, 0.47, 2.8), (-0.45, 0.27, 0.4, 0.5, 2.8), (-0.6, 0.18, 0.3, 0.53, 2.4), (-0.64, 0.06, 0.12, 0.55, 2.0)],
+                 lambda x, s, u: 'Paint', ring=24, subdivide=1),
+            slab('LowerPan', (-0.17, 0, 0.13), (0.8, 0.5, 0.17), 'Dark', 0.05),
             slab('Leg', (-0.15, 0, -0.35), (0.3, 0.14, 1.0), 'Dark', 0.04), slab('Cavitation', (-0.05, 0, -0.72), (0.6, 0.3, 0.04), 'Dark', 0.01),
             cone('Gearcase', (0.15, 0, -0.95), (-0.35, 0, -0.95), 0.1, 0.08, 'Dark'), slab('Skeg', (-0.25, 0, -1.1), (0.22, 0.04, 0.26), 'Dark', 0.01),
             slab('Clamp', (0.05, 0, 0.05), (0.2, 0.24, 0.3), 'Metal', 0.02)]
@@ -286,50 +290,211 @@ def outboard():
     return join('Vehicle_BoatMotor', bits)
 
 
-# ================================================================= the seaplane
-# A Coast Guard Beaver on floats: radial engine, high wing on struts, white with the orange band (the pilot's colour)
-# and the stripe. The rear cabin roof is open so the friends riding home can be seen. The floats' keels are at
-# z = -1.85; the propeller hub is at x = 4.72 (a separate model, Vehicle_PlaneProp).
-def plane():
-    # A Coast Guard rescue flying boat, after the Grumman HU-16 Albatross: a deep boat hull that sits in the water
-    # itself, a high wing carrying two radial engines, little floats under the wingtips, a tall tail, and a big door in
-    # the port side of the hull, open, with a step at its sill for whoever is coming aboard. White, with the pilot's
-    # colour (Accent) on the nose, wingtips and tail and the orange rescue band (Raft) round the hull.
-    # Front +X, port +Y, up +Z. The keel is at z = -1.85 (the game's PLANE_FLOAT); the waterline about z = -1.4.
-    def skin(x, side, up):
-        if 3.95 < x < 4.75 and up > 0.2 and (up > 0.62 or abs(side) > 0.55):
-            return 'Glass'                                    # the cockpit's windscreen and side windows, in the hull's own curve
-        if x > 4.6:
-            return 'Accent'                                   # nose
-        if up < -0.62:
-            return 'Navy'                                     # the wet bottom
-        if 1.2 < x < 1.75 and up > -0.6:
-            return 'Raft'                                     # the rescue band
+# ================================================================= the rescue seaplane
+# A Coast Guard rescue flying boat, after the Grumman HU-16 Albatross: a deep boat hull that sits in the water itself,
+# a high wing carrying two radial engines, little floats under the wingtips, a tall tail, and a big door in the port
+# side of the hull, open, with a small cabin behind it and a step at its sill for whoever is coming aboard. White, with
+# the pilot's colour (Accent) on the nose, wingtips and tail and the orange rescue band (Raft) round the hull.
+# Front +X, port +Y, up +Z. The keel is at z = -1.83 (the game's PLANE_FLOAT); the waterline about z = -1.4.
+# The rudder and elevators are separate models (Vehicle_PlaneRudder, Vehicle_PlaneElevator) built round their hinges.
+PLANE_RING = 48
+# (x, half beam, half depth, centre z, squareness, deadrise): the forebody runs back to the step at x = 0, where the
+# planing bottom ends in a crisp drop; the afterbody's bottom rises from there to the tail
+FOREBODY = [(5.9, 0.04, 0.08, -0.3, 2.0, 1.5), (5.72, 0.3, 0.42, -0.38, 2.2, 1.35), (5.4, 0.55, 0.72, -0.5, 2.4, 1.1), (4.95, 0.73, 0.95, -0.6, 2.6, 0.9),
+            (4.3, 0.86, 1.1, -0.68, 2.8, 0.7), (3.0, 0.92, 1.16, -0.68, 3.0, 0.5), (1.5, 0.92, 1.16, -0.67, 3.0, 0.42),
+            (0.0, 0.9, 1.15, -0.68, 3.0, 0.4)]
+AFTERBODY = [(-0.03, 0.88, 0.98, -0.58, 3.0, 0.38), (-1.25, 0.8, 0.92, -0.42, 2.9, 0.36), (-2.2, 0.72, 0.85, -0.3, 2.8, 0.36),
+             (-4.2, 0.42, 0.6, 0.05, 2.4, 0.4), (-5.6, 0.15, 0.36, 0.35, 2.0, 0.5)]
+DOOR = (-1.25, 0.15, -0.98, 0.22)       # the rescue door's opening in the port side: x from, x to, sill z, head z
+
+
+def trim(name, path, radius, mat, sides=8, closed=False):
+    # a round tube along a path, its cross-sections carried round the bends without twisting (window frames, rims)
+    pts = [Vector(p) for p in path]
+    n = len(pts)
+    tangents = []
+    for i in range(n):
+        a = pts[(i - 1) % n] if (closed or i > 0) else pts[i]
+        b = pts[(i + 1) % n] if (closed or i < n - 1) else pts[i]
+        tangents.append((b - a).normalized())
+    t0 = tangents[0]
+    normal = t0.cross(Vector((0, 0, 1)) if abs(t0.z) < 0.9 else Vector((1, 0, 0))).normalized()
+    bm = bmesh.new()
+    rings = []
+    for i, p in enumerate(pts):
+        if i:
+            normal = tangents[i - 1].rotation_difference(tangents[i]) @ normal
+        other = tangents[i].cross(normal).normalized()
+        rings.append([bm.verts.new(p + (normal * math.cos(k / sides * 2 * math.pi) + other * math.sin(k / sides * 2 * math.pi)) * radius) for k in range(sides)])
+    for i in range(n if closed else n - 1):
+        r0, r1 = rings[i], rings[(i + 1) % n]
+        for k in range(sides):
+            bm.faces.new((r0[k], r0[(k + 1) % sides], r1[(k + 1) % sides], r1[k]))
+    if not closed:
+        bm.faces.new(rings[0])
+        bm.faces.new(list(reversed(rings[-1])))
+    for f in bm.faces:
+        f.material_index = ORDER.index(mat)
+    return finish(bm, name, True)
+
+
+def ring_path(centre, radius, axis, count=24):
+    # a circle of points round centre, in the plane across axis ('x' or 'y')
+    u, v = ((0, 1, 0), (0, 0, 1)) if axis == 'x' else ((1, 0, 0), (0, 0, 1))
+    return [tuple(c + radius * (math.cos(k / count * 2 * math.pi) * a + math.sin(k / count * 2 * math.pi) * b) for c, a, b in zip(centre, u, v)) for k in range(count)]
+
+
+def hull_point(st, a):
+    # one point of a cross-section: a squared-off oval whose bottom is a vee (the deadrise), meeting the sides at a chine
+    x, hw, hh, zc, sq, dr = st
+    c, n = math.cos(a), math.sin(a)
+    y = hw * math.copysign(abs(c) ** (2 / sq), c)
+    z = zc + hh * math.copysign(abs(n) ** (2 / sq), n)
+    if n < 0:
+        z = max(z, zc - hh + abs(y) * dr)
+    return Vector((x, y, z))
+
+
+def smooth_stations(stations, step, extra=()):
+    # Catmull-Rom between the stations, about every `step` metres, plus any x asked for (edges that must line up)
+    out = []
+    for j in range(len(stations) - 1):
+        p0, p1, p2, p3 = stations[max(j - 1, 0)], stations[j], stations[j + 1], stations[min(j + 2, len(stations) - 1)]
+        span = p1[0] - p2[0]
+        ts = [k / max(1, round(span / step)) for k in range(max(1, round(span / step)))]
+        ts += [(p1[0] - x) / span for x in extra if p2[0] < x < p1[0]]
+        for t in sorted(set(ts)):
+            q = [0.5 * ((2 * b) + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (-a + 3 * b - 3 * c + d) * t ** 3) for a, b, c, d in zip(p0, p1, p2, p3)]
+            q[0] = p1[0] - span * t                                 # (x itself runs evenly, so edges land where asked)
+            out.append(tuple(q))
+    out.append(stations[-1])
+    return out
+
+
+def plane_hull():
+    stations = smooth_stations(FOREBODY, 0.22, (DOOR[1],)) + smooth_stations(AFTERBODY, 0.22, (DOOR[0],))
+    bm = bmesh.new()
+    angles = [(i + 0.5) / PLANE_RING * 2 * math.pi for i in range(PLANE_RING)]
+    rings = [[bm.verts.new(hull_point(st, a)) for a in angles] for st in stations]
+
+    def paint(x, c, n, z):
+        if 4.3 < x < 4.95 and n > 0.5:
+            return 'Glass'                                        # the windscreen, two panes either side of a post
+        if 3.75 < x < 4.45 and 0.15 < n < 0.43:
+            return 'Glass'                                        # the cockpit's side windows
+        if x > 5.2 + 0.25 * max(0.0, n):
+            return 'Accent'                                       # the nose cap, its edge swept back
+        if z < -1.36:
+            return 'Navy'                                         # the bottom, below a straight waterline
+        if 1.2 < x < 1.75:
+            return 'Raft'                                         # the rescue band
         return 'Paint'
-    # (x, half beam, half depth, centre z, squareness): deep and boat-like forward, the bottom rising aft of the step
-    hull = [(5.75, 0.08, 0.15, -0.35, 2.0), (5.5, 0.48, 0.62, -0.5, 2.2), (4.9, 0.78, 0.98, -0.66, 2.5), (3.8, 0.9, 1.15, -0.7, 2.8),
-            (1.5, 0.92, 1.18, -0.67, 3.0), (.15,.9,1.15,-.68,3.0), (0.0, 0.9, 1.15, -0.68, 3.0), (-0.1, 0.88, 1.0, -0.53, 3.0), (-1.25,.8,.94,-.4,2.9), (-2.2, 0.72, 0.85, -0.3, 2.8),
-            (-4.2, 0.42, 0.6, 0.05, 2.4), (-5.6, 0.15, 0.36, 0.35, 2.0)]
-    bits = [loft('Hull', hull, skin, ring=40, subdivide=1,
-                 keep=lambda x,side,up: not (-1.25<x<.15 and side>.65 and -.7<up<.65))]
-    for side in (-1,1):
-        bits.append(rod('CockpitFrame',(4.7,side*.56,.12),(4.1,side*.7,.32),.025,'Paint',8))
-        bits.append(rod('CockpitFrame',(4.65,side*.58,.1),(4.65,side*.35,.39),.025,'Paint',8))
-    bits.append(rod('CockpitBrow',(4.65,-.35,.39),(4.65,.35,.39),.025,'Paint',8))
-    # cockpit glazing on top of the nose, and windows down both sides
+    for j in range(len(rings) - 1):
+        for i in range(PLANE_RING):
+            q = (rings[j][i], rings[j][(i + 1) % PLANE_RING], rings[j + 1][(i + 1) % PLANE_RING], rings[j + 1][i])
+            mid = sum((v.co for v in q), Vector()) / 4
+            zs = [v.co.z for v in q]
+            if DOOR[0] < mid.x < DOOR[1] and mid.y > 0.3 and max(zs) > DOOR[2] + 0.02 and min(zs) < DOOR[3] - 0.02:
+                continue                                          # (the open door)
+            a = (i + 1) / PLANE_RING * 2 * math.pi
+            bm.faces.new(q).material_index = ORDER.index(paint(mid.x, math.cos(a), math.sin(a), mid.z))
+    bm.faces.new(rings[0]).material_index = ORDER.index('Accent')
+    bm.faces.new(list(reversed(rings[-1]))).material_index = ORDER.index('Paint')
+    return finish(bm, 'Hull', True), stations
+
+
+def section_at(stations, x):
+    for j in range(len(stations) - 1):
+        a, b = stations[j], stations[j + 1]
+        if b[0] <= x <= a[0] and a[0] > b[0]:
+            t = (a[0] - x) / (a[0] - b[0])
+            return tuple(p + (q - p) * t for p, q in zip(a, b))
+    return stations[0] if x > stations[0][0] else stations[-1]
+
+
+def on_hull(stations, x, a, lift=0.012):
+    # a point on the hull skin at x and section angle a, lifted a little off it (for trim that sits on the surface)
+    st = section_at(stations, x)
+    p = hull_point(st, a)
+    out = Vector((0, p.y, p.z - st[3])).normalized()
+    return p + out * lift
+
+
+def side_at(stations, x, z, port):
+    # the hull's half beam at height z (for things fixed to its side)
+    st = section_at(stations, x)
+    best = min((abs(hull_point(st, a).z - z), a) for a in [k / 400 * math.pi - math.pi / 2 for k in range(401)])
+    return abs(hull_point(st, best[1]).y) * (1 if port else -1)
+
+
+def porthole(st, x, z, side, r=0.18):
+    # a round window that follows the skin: flush glass, and a rim lying on the hull all the way round
+    on = lambda dx, dz, lift: Vector((x + dx, side_at(st, x + dx, z + dz, side > 0) + side * lift, z + dz))
+    bm = bmesh.new()
+    rim = [on(r * math.cos(k / 20 * 2 * math.pi), r * math.sin(k / 20 * 2 * math.pi), 0.002) for k in range(20)]
+    centre = bm.verts.new(on(0, 0, 0.003))
+    edge = [bm.verts.new(p) for p in rim]
+    for k in range(20):
+        bm.faces.new((centre, edge[k], edge[(k + 1) % 20])).material_index = ORDER.index('Glass')
+    glass = finish(bm, 'Port', True)
+    ring = [on((r + 0.02) * math.cos(k / 24 * 2 * math.pi), (r + 0.02) * math.sin(k / 24 * 2 * math.pi), 0.012) for k in range(24)]
+    return [glass, trim('PortRim', ring, 0.022, 'Metal', 6, closed=True)]
+
+
+def plane():
+    hull, st = plane_hull()
+    bits = [hull]
+    A = math.asin
+    # the windscreen's frame: its top and bottom edges, the centre post, and the posts at its sides, all lying on the skin
+    frame = lambda path, r=0.028: trim('CockpitFrame', path, r, 'Paint')
+    top = [on_hull(st, 4.3, a) for a in [A(0.5) + k * (math.pi - 2 * A(0.5)) / 16 for k in range(17)]]
+    bits.append(frame(top))
+    bits.append(frame([on_hull(st, 4.95, a) for a in [A(0.5) + k * (math.pi - 2 * A(0.5)) / 16 for k in range(17)]]))
+    bits.append(frame([on_hull(st, x, math.pi / 2) for x in [4.3 + k * 0.65 / 8 for k in range(9)]]))
+    for side in (1, -1):
+        edge = lambda x, n: math.atan2(n, side * math.sqrt(1 - n * n))
+        bits.append(frame([on_hull(st, x, edge(x, 0.5)) for x in [4.3 + k * 0.65 / 8 for k in range(9)]]))
+        # the side window's frame, round its four edges
+        lo, hi = edge(0, 0.15), edge(0, 0.43)
+        ring = [on_hull(st, 3.75 + k * 0.7 / 8, lo) for k in range(9)] + [on_hull(st, 4.45, lo + (hi - lo) * k / 6) for k in range(1, 7)]
+        ring += [on_hull(st, 4.45 - k * 0.7 / 8, hi) for k in range(1, 9)] + [on_hull(st, 3.75, hi - (hi - lo) * k / 6) for k in range(1, 6)]
+        bits.append(trim('CockpitFrame', ring, 0.024, 'Paint', closed=True))
+        # wipers resting at the foot of each pane
+        bits.append(rod('Wiper', on_hull(st, 4.9, edge(4.9, 0.62), 0.03), on_hull(st, 4.62, edge(4.62, 0.82), 0.03), 0.012, 'Dark', 6))
+    # portholes: flush glass in a raised metal rim, not bubbles on the skin
     for side in (1, -1):
         for x in (2.8, 2.0, 0.6, -0.9, -1.7):
-            if side > 0 and -1.4 < x < 0.3:
+            if side > 0 and DOOR[0] - 0.3 < x < DOOR[1] + 0.3:
                 continue
-            bits.append(ball('Port', (x, side * 0.91, 0.05), (0.2, 0.03, 0.2), 'Glass'))
-        bits.append(lettering('Guard', 'COAST GUARD', (2.6 if side > 0 else 0.0, side * 0.93, -0.55), 0.3, side > 0))
-    # the rescue door, open in the port side, with its sill step and grab rails
-    bits += [slab('CabinBack', (-0.55, 0.28, -0.35), (1.3, 0.06, 1.35), 'Dark', 0.0),
-             slab('CabinFloor',(-.55,.6,-1.02),(1.3,.7,.07),'Concrete',.01),
-             slab('DoorFrame', (-0.55, 0.93, 0.36), (1.45, 0.05, 0.1), 'Raft', 0.0), slab('DoorFrame', (-0.55, 0.93, -1.06), (1.45, 0.05, 0.1), 'Raft', 0.0),
-             slab('DoorFrame', (0.15, 0.93, -0.35), (0.1, 0.05, 1.45), 'Raft', 0.0), slab('DoorFrame', (-1.25, 0.93, -0.35), (0.1, 0.05, 1.45), 'Raft', 0.0),
-             slab('Step', (-0.55, 1.15, -1.05), (1.2, 0.5, 0.07), 'Metal', 0.01),
-             rod('Rail', (0.25, 0.95, -0.9), (0.25, 0.95, 0.2), 0.03, 'Metal', 6), rod('Rail', (-1.35, 0.95, -0.9), (-1.35, 0.95, 0.2), 0.03, 'Metal', 6)]
+            bits += porthole(st, x, 0.05, side)
+        bits.append(lettering('Guard', 'COAST GUARD', (2.6 if side > 0 else 0.0, side_at(st, 2.6 if side > 0 else 0.0, -0.55, side > 0) + side * 0.01, -0.55), 0.3, side > 0))
+
+    # the cabin behind the door: walls, floor and ceiling, a bench along the far wall, and things a rescue crew carries
+    x0, x1, z0, z1 = DOOR
+    xm, ys = (x0 + x1) / 2, 0.86
+    # (the far wall stands inside the starboard skin all the way up: the hull is narrower at the floor and ceiling)
+    yb = -(min(abs(side_at(st, x, z, False)) for x in (x0, xm, x1) for z in (z0 - 0.08, (z0 + z1) / 2, z1 + 0.08)) - 0.06)
+    bits += [slab('CabinFloor', (xm, (yb + ys) / 2, z0 - 0.005), (x1 - x0, ys - yb, 0.07), 'Rubber', 0.01),
+             slab('CabinCeiling', (xm, (yb + ys) / 2, z1 + 0.03), (x1 - x0, ys - yb, 0.06), 'Seam', 0.0),
+             slab('CabinBack', (xm, yb - 0.03, (z0 + z1) / 2), (x1 - x0, 0.06, z1 - z0 + 0.1), 'Seam', 0.0)]
+    for x in (x0, x1):
+        bits.append(slab('CabinEnd', (x, (yb + ys) / 2, (z0 + z1) / 2), (0.06, ys - yb, z1 - z0 + 0.1), 'Seam', 0.0))
+    bits += [slab('Bench', (xm, yb + 0.2, z0 + 0.42), (x1 - x0 - 0.16, 0.4, 0.08), 'Navy', 0.02),
+             slab('BenchBack', (xm, yb + 0.05, z0 + 0.75), (x1 - x0 - 0.16, 0.08, 0.5), 'Navy', 0.03),
+             slab('BenchLeg', (xm, yb + 0.25, z0 + 0.2), (x1 - x0 - 0.3, 0.05, 0.38), 'Metal', 0.01),
+             rod('Extinguisher', (x1 - 0.12, yb + 0.12, z0 + 0.05), (x1 - 0.12, yb + 0.12, z0 + 0.42), 0.06, 'Raft', 10),
+             slab('LifeVests', (x0 + 0.25, yb + 0.06, z1 - 0.3), (0.3, 0.08, 0.32), 'Raft', 0.02),
+             rod('GrabBar', (x0 + 0.1, ys - 0.1, z1 - 0.12), (x1 - 0.1, ys - 0.1, z1 - 0.12), 0.02, 'Metal', 6)]
+    # the door's frame, sill step and grab rails (the frame covers the edge of the opening in the skin)
+    yf = side_at(st, xm, (z0 + z1) / 2, True) + 0.01
+    bits += [slab('DoorFrame', (xm, yf, z1 + 0.04), (x1 - x0 + 0.14, 0.06, 0.18), 'Raft', 0.01), slab('DoorFrame', (xm, yf, z0 - 0.05), (x1 - x0 + 0.14, 0.06, 0.2), 'Raft', 0.01),
+             slab('DoorFrame', (x1, yf, (z0 + z1) / 2), (0.1, 0.06, z1 - z0 + 0.1), 'Raft', 0.01), slab('DoorFrame', (x0, yf, (z0 + z1) / 2), (0.1, 0.06, z1 - z0 + 0.1), 'Raft', 0.01),
+             slab('Step', (xm, yf + 0.22, z0 - 0.06), (x1 - x0 - 0.1, 0.42, 0.05), 'Metal', 0.01),
+             rod('StepHanger', (x0 + 0.1, yf + 0.4, z0 - 0.06), (x0 + 0.1, yf + 0.02, z0 + 0.25), 0.015, 'Metal', 6),
+             rod('StepHanger', (x1 - 0.1, yf + 0.4, z0 - 0.06), (x1 - 0.1, yf + 0.02, z0 + 0.25), 0.015, 'Metal', 6),
+             rod('Rail', (x1 + 0.12, yf + 0.04, z0 + 0.1), (x1 + 0.12, yf + 0.04, z1 - 0.05), 0.025, 'Metal', 6),
+             rod('Rail', (x0 - 0.12, yf + 0.04, z0 + 0.1), (x0 - 0.12, yf + 0.04, z1 - 0.05), 0.025, 'Metal', 6)]
+
     # the wing, high on the hull, with the engines on it and floats under the tips
     # (a fairing blends the wing into the top of the hull)
     bits.append(loft('Fairing', [(2.3, 0.05, 0.05, 0.5, 2), (1.9, 0.5, 0.25, 0.52, 2.6), (0.0, 0.55, 0.28, 0.55, 2.8), (-1.2, 0.3, 0.15, 0.45, 2.4), (-1.6, 0.05, 0.03, 0.4, 2)],
@@ -338,23 +503,49 @@ def plane():
         bits.append(wing('Wing', (2.0, -0.4, side * 0.3, 0.72, 0.26), (1.55, 0.35, side * 6.6, 0.95, 0.14), 'Paint'))
         bits.append(wing('WingTip', (1.55, 0.35, side * 6.6, 0.95, 0.14), (1.45, 0.55, side * 7.4, 0.98, 0.1), 'Accent'))
         y = side * 2.5
-        bits += [loft('Nacelle', [(3.15, 0.3, 0.3, 0.75, 2), (2.9, 0.44, 0.44, 0.75, 2.2), (1.6, 0.42, 0.44, 0.72, 2.4), (-0.4, 0.25, 0.3, 0.8, 2.2), (-1.0, 0.08, 0.1, 0.85, 2)],
-                      lambda x, sd, up: 'Accent' if x > 2.7 else 'Paint', ring=20, subdivide=1),
-                 cone('Intake', (3.15, y, 0.75), (3.2, y, 0.75), 0.3, 0.26, 'Dark', 16)]
-        bits[-2].location.y = y
-        # the wingtip float, hung on a strut
+        # the engine: a cowling with a lip round its mouth, the cylinders' dark face behind it, exhaust stubs, and
+        # the nacelle swept back over the wing
+        bits += [loft('Nacelle', [(3.2, 0.36, 0.36, 0.75, 2), (3.1, 0.44, 0.44, 0.75, 2.1), (2.6, 0.45, 0.46, 0.75, 2.3), (1.6, 0.42, 0.44, 0.72, 2.4), (-0.4, 0.25, 0.3, 0.8, 2.2), (-1.0, 0.08, 0.1, 0.85, 2)],
+                      lambda x, sd, up: 'Accent' if x > 2.75 else 'Paint', ring=24, subdivide=1),
+                 cone('Intake', (3.1, y, 0.75), (3.2, y, 0.75), 0.33, 0.33, 'Dark', 20),
+                 trim('CowlLip', ring_path((3.2, y, 0.75), 0.36, 'x'), 0.035, 'Accent', closed=True)]
+        bits[-3].location.y = y
+        for k in (-1, 1):
+            bits.append(rod('Exhaust', (2.45, y + k * 0.4, 0.55), (2.1, y + k * 0.46, 0.5), 0.045, 'Metal', 8))
+        # the wingtip float, hung on a pair of struts
         fl = loft('TipFloat', [(1.9, 0.05, 0.08, -0.85, 2), (1.5, 0.22, 0.24, -0.9, 2.4), (0.3, 0.26, 0.28, -0.92, 2.6), (-0.6, 0.14, 0.16, -0.88, 2.2), (-0.9, 0.04, 0.05, -0.85, 2)],
                   lambda x, sd, up: 'Accent' if up > 0.3 else 'Paint', ring=16, subdivide=1)
         fl.location.y = side * 6.1
         bits += [fl, rod('FloatStrut', (0.9, side * 6.1, -0.65), (0.9, side * 6.0, 0.9), 0.05, 'Metal', 8), rod('FloatStrut', (0.1, side * 6.1, -0.65), (0.5, side * 6.0, 0.9), 0.04, 'Metal', 8)]
-    # the tail: a tall fin with the pilot's colour on it, and the tailplane
-    bits.append(box('Fin', [(-3.6, -0.08, 0.35), (-5.55, -0.08, 0.45), (-5.9, -0.05, 2.9), (-5.0, -0.05, 2.9)],
-                    [(-3.6, 0.08, 0.35), (-5.55, 0.08, 0.45), (-5.9, 0.05, 2.9), (-5.0, 0.05, 2.9)], 'Accent', 0.03))
+    # the tail: the fin and tailplane, aerofoils like the wing, ending at the hinges of the rudder and elevators
+    bits.append(fin('Fin', (-3.55, -5.0, 0.38, 0.22), (-5.0, -5.45, 2.9, 0.1), 'Accent'))
     for side in (1, -1):
-        bits.append(wing('Tailplane', (-4.6, -5.5, 0.0, 1.55, 0.12), (-5.1, -5.75, side * 2.8, 1.6, 0.07), 'Paint'))
-        bits.append(wing('Elevator', (-5.5, -5.8, side * 0.1, 1.55, 0.07), (-5.75, -5.95, side * 2.8, 1.6, 0.05), 'Accent'))
-    bits += [ball('Radome', (5.7, 0, -0.3), (0.2, 0.22, 0.22), 'Dark'), rod('Aerial', (1.2, 0, 0.95), (0.3, 0, 1.6), 0.02, 'Metal', 4)]
+        bits.append(wing('Tailplane', (-4.6, -5.5, 0.0, 1.55, 0.12), (-5.1, -5.5, side * 2.8, 1.6, 0.07), 'Paint'))
+    bits += [rod('Aerial', (1.2, 0, 0.95), (0.3, 0, 1.6), 0.02, 'Metal', 4)]
     return join('Vehicle_Plane', bits)
+
+
+def fin(name, root, tip, mat):
+    # an upright aerofoil: root and tip are (x front, x back, z, thickness); built as a wing, then stood up
+    ob = wing(name, (root[0], root[1], root[2], 0.0, root[3]), (tip[0], tip[1], tip[2], 0.0, tip[3]), mat)
+    ob.matrix_world = Matrix.Rotation(math.pi / 2, 4, 'X')
+    return ob
+
+
+# the moving tail surfaces, each built round its own hinge so the game can turn it (see PLANE in model-contracts.json)
+RUDDER_HINGE = (-5.0, 0.0, 0.38)
+ELEVATOR_HINGE = (-5.5, 0.0, 1.55)
+
+
+def rudder():
+    ob = fin('Rudder', (0.0, -0.5, 0.0, 0.1), (-0.45, -0.85, 2.52, 0.05), 'Accent')
+    ob.name = ob.data.name = 'Vehicle_PlaneRudder'
+    return ob
+
+
+def elevator():
+    parts = [wing('Elevator', (0.0, -0.34, side * 0.1, 0.0, 0.07), (0.0, -0.3, side * 2.8, 0.05, 0.05), 'Accent') for side in (1, -1)]
+    return join('Vehicle_PlaneElevator', parts)
 
 
 def propeller():
@@ -477,7 +668,7 @@ def bake(ob, size=1024):
     print('BUILD baked %s' % ob.name)
 
 
-made = [boat(), outboard(), plane(), propeller(), arch(), hut(), kayak()]
+made = [boat(), outboard(), plane(), propeller(), arch(), hut(), kayak(), rudder(), elevator()]
 for ob in made:
     bpy.ops.object.select_all(action='DESELECT')
     ob.select_set(True)
@@ -494,7 +685,7 @@ for ob in made:
 
 # a look for whoever ran this
 for i, ob in enumerate(made):
-    ob.location = ((0, 0, 0), (-4.4, 0.55, 0.9), (0, 9, 1.9), (4.72, 9, 1.9), (0, -40, 0), (16, 9, 0), (10, -4, 0))[i]
+    ob.location = ((0, 0, 0), (-4.4, 0.55, 0.9), (0, 9, 1.9), (4.72, 9, 1.9), (0, -40, 0), (16, 9, 0), (10, -4, 0), (-5.0, 9, 2.28), (-5.5, 9, 3.45))[i]
 cam = bpy.data.objects.new('Cam', bpy.data.cameras.new('Cam'))
 scene.collection.objects.link(cam)
 cam.location = (16, -18, 9)

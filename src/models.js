@@ -251,6 +251,9 @@ export function buildPlane(accent) {
     const disc = new THREE.Mesh(new THREE.CircleGeometry(1.4, 32), discMat); disc.position.set(x, y, z + 0.1); g.add(disc);
     return prop;
   });
+  // the rudder and elevators, each turning on its hinge (updatePlane moves them with the turns and climbs)
+  const surface = (name, socket) => { const h = new THREE.Group(); h.position.fromArray(contracts.Vehicle_Plane.sockets[socket]); h.add(model(name, { tints: { Accent: new THREE.Color(accent) } })); g.add(h); return h; };
+  const rudder = surface('Vehicle_PlaneRudder', 'rudder'), elevator = surface('Vehicle_PlaneElevator', 'elevator');
   // the friends sit in the open door, looking out, with room for three along the sill
   // (friend-sized for the door: three abreast on the sill, a little smaller than life, all facing out)
   const seat = new THREE.Group(); seat.position.fromArray(contracts.Vehicle_Plane.sockets.passengers); seat.rotation.y = Math.PI / 2; seat.scale.setScalar(0.5); seat.userData.facingOut = true; g.add(seat);
@@ -274,9 +277,12 @@ export function buildPlane(accent) {
     mesh(new THREE.BoxGeometry(0.3, 0.12, 0.4), std(0xe9b93b), 0, -0.45, 0.1, scoop); scoops.push(scoop);
   }
   // (the gauge: a window in the starboard side with the water rising in it)
-  mesh(new THREE.BoxGeometry(0.06, 1.1, 1.5), std(0x263b48), -0.93, -0.3, 1.2, fireTank);
-  const level = mesh(new THREE.BoxGeometry(0.08, 1, 1.3), std(0x43c9ea, { emissive: 0x126078, emissiveIntensity: 0.3 }), -0.95, -0.3, 1.2, fireTank);
-  return { group: g, props, discMat, bladeMat, tipMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
+  // (flush with the skin, a slim metal frame round a dark window; the bar of water inside rises as the tank fills)
+  mesh(new THREE.BoxGeometry(0.02, 0.8, 1.0), std(0x1d2b33, { roughness: 0.25 }), -0.918, -0.35, 1.2, fireTank);
+  const rim = std(0x9aa3a8, { metalness: 1, roughness: 0.35 });
+  for (const [h, l, y, z] of [[0.05, 1.08, 0.07, 1.2], [0.05, 1.08, -0.77, 1.2], [0.86, 0.05, -0.35, 1.72], [0.86, 0.05, -0.35, 0.68]]) mesh(new THREE.BoxGeometry(0.04, h, l), rim, -0.925, y, z, fireTank);
+  const level = mesh(new THREE.BoxGeometry(0.03, 0.7, 0.9), std(0x43c9ea, { emissive: 0x126078, emissiveIntensity: 0.35, roughness: 0.15 }), -0.925, -0.35, 1.2, fireTank);
+  return { group: g, props, rudder, elevator, discMat, bladeMat, tipMat, strobe, beacon, lampMat, seat, fireTank, gates, scoops, level };
 }
 
 

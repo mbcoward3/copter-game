@@ -7,7 +7,7 @@
   "Vehicle_Plane": {
     "version": 1, "units": "game-metres", "forward": "+Z", "up": "+Y",
     "floatOffset": 1.45, "lodDistance": 105,
-    "sockets": { "engineLeft": [2.5, 0.75, 3.22], "engineRight": [-2.5, 0.75, 3.22], "passengers": [0.62, -1.02, -0.55] }
+    "sockets": { "engineLeft": [2.5, 0.75, 3.22], "engineRight": [-2.5, 0.75, 3.22], "passengers": [0.62, -1.02, -0.55], "rudder": [0, 0.38, -5.0], "elevator": [0, 1.55, -5.5] }
   },
   "Vehicle_Boat": {
     "version": 1, "units": "game-metres", "forward": "+Z", "up": "+Y",

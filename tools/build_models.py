@@ -16,7 +16,7 @@ import bmesh
 import bpy
 from mathutils import Matrix, Vector, noise
 
-OUT = sys.argv[sys.argv.index('--') + 1]
+OUT = os.path.abspath(sys.argv[sys.argv.index('--') + 1])      # (absolute: Blender saves images relative to itself, not here)
 os.makedirs(OUT, exist_ok=True)
 K = 11.2 / 16.36
 MAST_S = 5.2            # the rotor mast, metres back from the nose
@@ -325,7 +325,7 @@ for y in (-1.78, 1.78):
     parts.append(slab('TankPylon', at(7.1, y * 0.82, 1.5), (0.7, 0.75, 0.08), 'Paint'))
 parts.append(ball('Radar', at(1.45, 0, 0.5), (0.5, 0.5, 0.2), 'Dark'))
 parts.append(ball('Camera', at(0.62, 0, 0.5), (0.19, 0.19, 0.19), 'Dark'))
-parts.append(lettering('Rescue', 'RESCUE', 5.2, 1.2, 0.95, 0.5, True))
+parts.append(lettering('Rescue', 'RESCUE', 4.75, 1.2, 0.8, 0.42, True))      # (ahead of the tank, which hid its last letters)
 parts.append(lettering('Service', 'U.S. COAST GUARD', 6.6, 1.2, 2.36, 0.17, True))
 parts.append(lettering('Service', 'U.S. COAST GUARD', 6.9, -1.2, 2.36, 0.17, False))
 for y in (-0.37, 0.37):
