@@ -1782,12 +1782,23 @@ function spawnFire(Z) {
   const wantShore = act.some(p => p.vehicle === 'boat');
   for (const s of SITES) if (s.zone === Z.id && !s.busy && !s.block) makers.push(() => siteFire(s, wantShore));
   if (Z.id === 'harbour') for (let i = 0; i < 4; i++) makers.push(roofFire);
-  for (let i = 0; i < 3; i++) makers.push(() => coastalFire(Z));
-  for (let tries = 0; tries < 6 && makers.length; tries++) {
-    const r = makers.splice((play() * makers.length) | 0, 1)[0]();
-    if (!r) continue;
-    if (!act.some(p => canFight(p, r.extra.fire))) { disposeFire(r.extra.fire); continue; }
-    if (waiting.some(a => Math.hypot(a.pos.x - r.x, a.pos.z - r.z) < 30)) { disposeFire(r.extra.fire); continue; }
+  // (a crew of two gets more shoreline places to choose from, since the fire must suit both machines)
+  for (let i = 0; i < (act.length > 1 ? 8 : 3); i++) makers.push(() => coastalFire(Z));
+  // A fire the whole crew can fight comes first: a seaplane with no open water to scoop near a boat's shore fire would
+  // spend the mission flying about with nothing to do. One only some of them can fight is the fallback.
+  let r = null, partial = null;
+  // (with only a partial match in hand, a crew keeps looking through the rest of the places)
+  for (let tries = 0; (tries < 6 || partial) && makers.length; tries++) {
+    const c = makers.splice((play() * makers.length) | 0, 1)[0]();
+    if (!c) continue;
+    const fighters = act.filter(p => canFight(p, c.extra.fire)).length;
+    if (!fighters || waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 30)) { disposeFire(c.extra.fire); continue; }
+    if (fighters === act.length) { r = c; break; }
+    if (partial) disposeFire(c.extra.fire); else partial = c;
+  }
+  if (r && partial) disposeFire(partial.extra.fire);
+  r ||= partial;
+  if (r) {
     const an = addWaiting(r.kind, r.x, r.z, r.extra);
     if (r.extra.site) r.extra.site.busy = true;
     r.extra.fire.asset = { x: r.x, z: r.z };
@@ -3048,6 +3059,7 @@ function bump(p, kind) {
 }
 const debug = {
   retire: animal => releaseWaiting(an => an === animal),
+  canFight: (i, F) => canFight(players[i], F),
   view: null,
   bumps: [{ last: {} }, { last: {} }],
   // on to the next mission, exactly as finishing one does

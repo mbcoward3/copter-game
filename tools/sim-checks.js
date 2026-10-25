@@ -140,5 +140,27 @@
     for (const B of (G.traffic && G.traffic.boats) || []) for (const q of B.path) deep(q, -2, 'sailing route point');
     return issues;
   };
+  // With a seaplane and a boat flying together, each new fire should be one they can both fight: otherwise one of them
+  // spends the mission flying about with nothing to do (October 2026: the seaplane idled through a boat's shore fire).
+  // Run on its own page: it starts a two-player outing.
+  window.crewLint = (crew = ['plane', 'boat'], fires = 12) => {
+    const issues = [];
+    crew.forEach((v, i) => D.vehicle(v, i));
+    document.querySelector('#start2').click();
+    for (const Z of G.ZONES) {
+      D.zone(Z.id, true);
+      let idle = 0, made = 0;
+      for (let k = 0; k < fires; k++) {
+        for (const an of G.waiting.filter(a => a.fire)) D.retire(an);
+        if (!D.fire(Z.id)) continue;
+        const an = G.waiting.filter(a => a.fire).pop();
+        made++;
+        if (crew.some((v, i) => !D.canFight(i, an.fire))) idle++;
+      }
+      if (made && idle / made > 0.2) issues.push(`${Z.id}: ${idle} of ${made} fires leave the ${crew.join(' or ')} with nothing to do`);
+      else if (idle) issues.push(`note: ${Z.id}: ${idle} of ${made} fires only some of the ${crew.join(' and ')} can fight`);
+    }
+    return issues;
+  };
   return 'checks ready';
 })();
