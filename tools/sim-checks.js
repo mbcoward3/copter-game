@@ -56,6 +56,11 @@
         if (p.cargo.length + p.incoming > (P.aboard ?? 0) || (p.ap && p.ap.taxi)) P.boardT = t;
         P.aboard = p.cargo.length + p.incoming;
         if (P.airT === null && t - (P.boardT || 0) > 15) broke('slowTakeoff', p.pos.toArray());
+        // (and it is a flying boat: holding go it gets into the air, not round and round the bay on the water. Waiting
+        // while friends climb in or get off is not counted)
+        if (!p.afloat || G.game.celebrate > 0) P.wetT = 0;
+        else if (!p.incoming && !p.unloading && !(p.berthed && p.cargo.length)) P.wetT = (P.wetT || 0) + 0.1;
+        if (P.wetT > 40) { broke('neverFlies', p.pos.toArray()); P.wetT = 0; }
         if (p.afloat) P.liftT = t;
         // clear of the ground, the trees and anything standing, whenever it is up and not coming in to land or just off
         if (!p.afloat && alt > 2 && !A.final && t - P.liftT > 5) {

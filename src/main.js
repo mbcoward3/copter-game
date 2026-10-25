@@ -5,7 +5,7 @@ import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER, WAKE_N, wakeUniform, hullUniform, hullSizeUniform, snowAt } from './world.js';
+import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER, WAKE_TRAILS, WAKE_PER, wakeUniform, wakeBoxUniform, hullUniform, hullSizeUniform, snowAt } from './world.js';
 import { buildHeli, buildBasket, buildBucket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, tickFriends, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
 import { model } from './assets.js';
 import { createFx } from './fx.js';
@@ -154,10 +154,10 @@ const BERTHS = {
   boat: [
     { id: 'boatT', x: PIER_X, z: HOME_PIER.b.z + 2.2, h: -Math.PI / 2, through: true, lead: 18 },
     { id: 'boatT', x: PIER_X, z: HOME_PIER.b.z + 2.2, h: Math.PI / 2, through: true, run: 20, lead: 14 },      // (from the west, short of the sea arch)
-    { id: 'boatW', x: PIER_X - 4.8, z: 58, h: Math.PI, clear: HOME_PIER.b.z - 58 + 4 },      // (clear: how far it backs out, its stern past the end of the pier, before it swings round)
+    { id: 'boatW', x: PIER_X - 4.8, z: 58, h: Math.PI, clear: HOME_PIER.b.z - 58 + 4, park: { x: PIER_X - 7, z: 84, h: 0 } },      // (clear: how far it backs out, its stern past the end of the pier, before it swings round)
   ],
   plane: [
-    { id: 'planeE', x: PIER_X + 10.7, z: 58, h: Math.PI, leave: Math.PI / 2 },      // (leave: the way it swings round to set off, away from the pier)
+    { id: 'planeE', x: PIER_X + 10.7, z: 58, h: Math.PI, leave: Math.PI / 2, park: { x: PIER_X + 12, z: 92, h: 0 } },      // (leave: the way it swings round to set off, away from the pier; park: where it waits at the start, nose out to sea)
     { id: 'planeT', x: PIER_X + 0.55, z: HOME_PIER.b.z + 8, h: Math.PI / 2, through: true, run: 20, lead: 14 },
   ],
 };
@@ -253,12 +253,12 @@ const HULL_WATERLINE = { plane: new THREE.Vector3(3.3, 0.85, 2.1), boat: new THR
 const HOME_SPOT = { x: 0, z: -3 };        // where the easy helicopter heads with friends aboard: over the paddock
 function parkPlayer(p) {
   if (p.vehicle !== 'heli' && !p.berth) assignBerths();
-  const pad = p.vehicle === 'heli' ? PADS[p.idx] : p.berth;
+  const pad = p.vehicle === 'heli' ? PADS[p.idx] : p.berth.park || p.berth;
   if (p.vehicle === 'plane') { p.pos.set(pad.x, PLANE_FLOAT, pad.z); p.fs = 0; p.afloat = true; p.sea = 1; p.hoist = 0; }
   else if (p.vehicle === 'boat') { p.pos.set(pad.x, 0, pad.z); p.fs = 0; p.afloat = true; p.hoist = 0; }
   else p.pos.set(pad.x, PAD_Y + SKID, pad.z);
   p.vel.set(0, 0, 0);
-  p.berthing = false; p.berthed = p.vehicle !== 'heli'; p.unloading = 0; p.leftBerth = false;
+  p.berthing = false; p.berthed = p.vehicle !== 'heli' && !p.berth.park; p.unloading = 0; p.leftBerth = false;
   p.yaw = pad.h || 0; p.yawVel = 0; p.pitch = p.roll = 0; p.landed = p.grounded = true; p.spin = 0; p.parked = true; p.shake = p.squash = 0; p.camG = 1; p.altOff = 0; p.idleT = 0; p.incoming = 0; p.tiltF = p.tiltS = 0; p.winch = 0;
   p.surfaceY = p.vehicle === 'heli' ? PAD_Y : 0;
   p.bpos.copy(p.pos).y -= 3; p.bvel.set(0, 0, 0); p.ropeLen = 0.6; p.stow = 1;
@@ -694,7 +694,7 @@ const APP = { R: 60, final: 90, glide: 0.16 };
 // how high it is on the way in, `s` metres before touching down
 const glideAlt = s => Math.min(PL.cruise, APP.glide * Math.max(0, s));
 const AIR = { top: 26, need: 22, tight: 12, look: 45 };      // (round anything standing near cruising height or over it; lower hills it flies over)
-const LAND = { room: 12, reach: 250, near: 6, taxi: 140, hop: 180 };       // (water room either side of a landing; how far from the goal it may come down; how near a spot for a friend; how far it will taxi rather than fly)
+const LAND = { room: 12, reach: 250, near: 6, taxi: 140, hop: 140 };       // (water room either side of a landing; how far from the goal it may come down; how near a spot for a friend; how far it will taxi rather than fly)
 // nothing high under the way in, by the ceiling chart: over the final the glide stays well over everything, and for a
 // stretch before it (where the curve onto it may come from straight behind) so does the glide with a bigger margin.
 // (x, z) is the stopping point, (ux, uz) the way it lands.
@@ -871,9 +871,15 @@ function planePilot(p, t, dt, ready, room) {
     if (Bk) { A.final = false; A.tk = false; A.taxi = true; A.arrived = false; out.aim = Bk.aim; out.cap = Bk.cap; out.near = true; return out; }
     if (A.run === null && kind !== 'scoop' && kind !== 'park') {
       const R = follow(p, 'taxi', nav.water, goal, 7.5, 16, kind === 'dock' ? [berthLine(p.berth)[1]] : undefined);
-      // (taxi only when it is close: further than this, flying there is quicker and nicer to watch. Nearer, a take-off
-      // would only be a loop round and straight back down)
-      if (R && R.left < LAND.hop + (kind === 'dock' ? (p.berth.run || BERTH_RUN) : 0)) {      // (home, the berth's own way in on top)
+      // (taxi only when it is close: further than this, flying there is quicker and nicer to watch, and it is a flying boat)
+      // (home, the berth's own way in on top; and a friend just across a point, where a take-off would be a loop round
+      // and straight back down, by water too)
+      // (but once it has been on the water a while since it last flew, it flies: it is a flying boat, and a small pilot
+      // holding go wants to see it in the air)
+      // (a friend so close (under 140 m) that a flight would only be a loop round and back down it always taxis to)
+      const crow = Math.hypot(goal.x - p.pos.x, goal.z - p.pos.z);
+      const near = R && ((crow < 140 && R.left < 220) || (kind === 'pickup' && p.wetT < 8 && crow < 200 && R.left < 320));
+      if (R && (near || R.left < (p.wetT < 15 ? LAND.hop : 60) + (kind === 'dock' ? (p.berth.run || BERTH_RUN) : 0))) {
         A.final = false; A.tk = false; A.taxi = true;
         out.aim = R.aim; out.near = R.left < 40;
         out.cap = clamp(1.5 + (R.left - (kind === 'dock' ? 6 : 10)) * 0.3, 0, 14);      // (up on the step, spray flying, when there is a way to go)
@@ -1245,6 +1251,7 @@ function updatePlane(p, dt, t) {
     p.pos.y = floor; p.vel.y = Math.max(p.vel.y, 0);
   }
   p.afloat = !SURF.land && p.pos.y - floor < 0.25;
+  if (!p.afloat) p.wetT = 0; else if (!p.incoming && !p.unloading && !p.berthed) p.wetT = (p.wetT || 0) + dt;
   if (wasAfloat && !p.afloat && p.fs > PL.fly - 2) { fx.splash(p.pos.x, wave, p.pos.z, 26, 1.1); }
   p.surfaceY = SURF.y; p.overLand = SURF.land; p.clearance = p.pos.y - floor;
   p.grounded = p.afloat && Math.abs(p.fs) < 8;
@@ -3666,30 +3673,64 @@ function simulate(dt) {
       const work = p.vehicle === 'boat' ? clamp(Math.abs(p.fs) / 30, 0, 1) : p.vehicle === 'plane' ? clamp(p.fs / 36, 0, 1) : load;
       audio.setEngine(i, p.vehicle, p.spin, work, air, two ? (i ? 0.55 : -0.55) : 0, playing);
     });
-    // the wakes: every fifth of a second a boat (or the seaplane on the water) going along drops a point of churned water
+    // the wakes (see feedWake): the pilots' boat or seaplane, then the nearest other boats under way
     players.forEach((p, i) => {
+      const sp = Math.abs(p.fs || 0), wet = !p.active ? 0 : p.vehicle === 'boat' ? 1 : p.vehicle === 'plane' ? clamp(p.sea * 1.4 - 0.15, 0, 1) : 0;
+      const back = p.vehicle === 'boat' ? 3.6 : 2.5;
       const trail = p.trail || (p.trail = []);
-      p.trailT = (p.trailT || 0) - dt;
-      const sp = Math.abs(p.fs || 0), onWater = p.active && (p.vehicle === 'boat' || (p.vehicle === 'plane' && p.afloat));
-      if (onWater && sp > 3 && p.trailT <= 0) {
-        p.trailT = 0.2;
-        const back = p.vehicle === 'boat' ? 3.6 : 2.5;
-        trail.push({ x: p.pos.x - Math.sin(p.yaw) * back, z: p.pos.z - Math.cos(p.yaw) * back, t: t, s: clamp(sp / 22, 0.25, 1) });
-      }
-      while (trail.length && (trail.length > WAKE_N / 2 || t - trail[0].t > 7)) trail.shift();
-      // (and the hull's own contact with the water: the boat always, the seaplane while it sits or runs on the water)
-      const H = hullUniform.value[i], afloat = p.active && (p.vehicle === 'boat' || (p.vehicle === 'plane' && p.sea > 0.5));
-      if (afloat) { H.set(p.pos.x, p.pos.z, p.yaw, sp); hullSizeUniform.value[i].copy(HULL_WATERLINE[p.vehicle]); } else H.w = -1;
-      for (let k = 0; k < WAKE_N / 2; k++) {
-        const pt = trail[k], u = wakeUniform.value[i * WAKE_N / 2 + k];
-        if (pt) u.set(pt.x, pt.z, t - pt.t, pt.s); else u.w = 0;
-      }
+      feedWake(trail, p.pos.x - Math.sin(p.yaw) * back, p.pos.z - Math.cos(p.yaw) * back, wet * clamp(sp / 22, 0.25, 1) * clamp((sp - 1.5) / 2, 0, 1), t);
+      writeWake(i, trail, t);
+      // (the hull's own contact with the water: the boat always, the seaplane as much as it is in the water)
+      const H = hullUniform.value[i], hullIn = p.active && p.vehicle !== 'heli' ? (p.vehicle === 'boat' ? 1 : clamp(p.sea * 1.6 - 0.3, 0, 1)) : 0;
+      if (hullIn > 0) { H.set(p.pos.x, p.pos.z, p.yaw, sp); const W = HULL_WATERLINE[p.vehicle]; hullSizeUniform.value[i].set(W.x, W.y, W.z, hullIn); } else H.w = -1;
     });
+    const others = [];
+    for (const B of traffic.boats || []) others.push(B.m);
+    if (life.boat) others.push(life.boat);
+    if (game.boat && game.boat.mesh) others.push(game.boat.mesh);
+    const live = [];
+    for (const o of others) {
+      const w = o.userData.wake || (o.userData.wake = { trail: [], x: o.position.x, z: o.position.z, sp: 0 });
+      const dx = o.position.x - w.x, dz = o.position.z - w.z, d = Math.hypot(dx, dz);
+      w.x = o.position.x; w.z = o.position.z;
+      if (d > 30) { w.trail.length = 0; continue; }      // (placed somewhere new: no wake back to where it was)
+      w.sp += (d / Math.max(dt, 1e-3) - w.sp) * damp(3, dt);
+      if (d > 0.01) w.h = Math.atan2(dx, dz);
+      const go = o.visible !== false && w.sp > 1;
+      feedWake(w.trail, o.position.x - Math.sin(w.h || 0) * 4.5, o.position.z - Math.cos(w.h || 0) * 4.5, go ? clamp(w.sp / 9, 0.45, 0.85) : 0, t);
+      if (w.trail.length > 1) { let nd = 1e9; for (const p of activePlayers()) nd = Math.min(nd, Math.hypot(p.camPos.x - o.position.x, p.camPos.z - o.position.z)); if (nd < 600) live.push({ w, nd }); }
+    }
+    live.sort((a, b) => a.nd - b.nd);
+    for (let k = 2; k < WAKE_TRAILS; k++) writeWake(k, live[k - 2] ? live[k - 2].w.trail : null, t);
     // the sea, louder the lower the pilots are; wind and rain with the weather; the fire's crackle close to one
     let low = 1e9;
     for (const p of activePlayers()) low = Math.min(low, p.vehicle === 'boat' ? 0 : Math.max(0, p.pos.y - 2));
     audio.setAmbient(playing ? clamp(1.1 - low / 60, 0.3, 1) : 0.5, weather.now, clamp((weather.now - 0.6) / 0.35, 0, 1), playing ? clamp(1 - fireNear / 110, 0, 1) : 0);
   }
+}
+// A wake: every 0.4 s something going along on the water drops a point of churned water at its stern, kept 6 s; the
+// last point is wherever the stern is now (strength 0 once it has left the water), so the trail joins the hull with no
+// gap. The seaplane's fades out as it lifts off and back in as it touches down, rather than stopping dead.
+function feedWake(trail, sx, sz, str, t) {
+  const last = trail[trail.length - 1];
+  if (last && last.live) trail.pop();
+  const prev = trail[trail.length - 1];
+  if (str > 0.02 && (!prev || t - prev.t >= 0.4)) trail.push({ x: sx, z: sz, t, s: str });
+  while (trail.length && (trail.length > WAKE_PER - 1 || t - trail[0].t > 6)) trail.shift();
+  if (trail.length) trail.push({ x: sx, z: sz, t, s: str, live: true });
+}
+// into the water shader's slots for trail k, with the box round it that lets the water far from it skip it
+function writeWake(k, trail, t) {
+  let cx = 0, cz = 0, n = trail ? trail.length : 0;
+  for (let j = 0; j < WAKE_PER; j++) {
+    const u = wakeUniform.value[k * WAKE_PER + j], q = trail && trail[j];
+    if (q) { u.set(q.x, q.z, t - q.t, q.s); cx += q.x; cz += q.z; } else u.w = 0;
+  }
+  const box = wakeBoxUniform.value[k];
+  if (n < 2) { box.z = -1; return; }
+  cx /= n; cz /= n;
+  let r = 0; for (let j = 0; j < n; j++) r = Math.max(r, Math.hypot(trail[j].x - cx, trail[j].z - cz));
+  box.set(cx, cz, r + 32);      // (and the arms spreading out to the sides)
 }
 function present(dt) {
   if (!debug.noDraw) {

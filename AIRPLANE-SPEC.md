@@ -17,6 +17,7 @@ play-check screenshots have been looked at.
 | It lands near the friend, not somewhere far off | touches down within 250 m of the friend (or the fire's water) | `landsFarAway` |
 | It never lands on a beach, a reef or a rock | every touchdown on water at least 3 m deep | `planeOnLand` |
 | On a fire mission it fetches water from near the fire | scoops within 400 m of the fire | `scoopsFarAway` |
+| Holding go, it gets into the air: it does not just drive round the bay on the water | at most 40 s on the water at a time (waits while friends get on or off not counted). Added 2026-10-25 after the first dock version started the plane nose-in to the island and taxied it everywhere in the home bay; the rule flagged that build | `neverFlies` |
 | It never gives up or circles | a pickup or a drop at least every 60 s of play (or lining up at the home pier with friends aboard) | `noProgress` |
 | It flies a smooth curve to where it lands, not a loop out and back | each hop between stretches of water flies at most 1.5× the shortest way round anything at cruising height, plus a turn about: 400 m, one circle at its turn radius; 650 m when the only water to land on faces back the way it came (out past the spot by the length of its final, round and back). The October 2026 teardrop flew 650–1150 m for 80–300 m hops and broke this in 6 of 8 missions | `roundabout` |
 | Its hull never goes through a pier or a jetty | the hull's middle never over a deck | `hullInPier` |
