@@ -29,6 +29,11 @@ try {
       v.push([Z.id + '-shore', sx + Math.sin(a - 1) * 18, sz + Math.cos(a - 1) * 18, 3, sx - Math.sin(a - 1) * 25, sz - Math.cos(a - 1) * 25, 2]);
     }
     v.push(['base-hangar', 30, 40, 6, 20, -10, 6], ['base-pier', -14, 82, 3, 0, 40, 1], ['base-pads', -30, -40, 12, 0, 0, 2]);
+    // the made things, up close: the harbour's street and quay, the fire tower, the stilt huts, the wreck
+    v.push(['prop-street', 472, -142, 2.5, 448, -170, 3], ['prop-quay', 405, -132, 4, 435, -160, 2]);
+    const T = G.world.towerDeck; if (T) v.push(['prop-tower', T.x + 14, T.z + 12, 3, T.x, T.z, 8]);
+    const H = G.HUTS[0]; if (H) v.push(['prop-huts', H.x + 16, H.z + 14, 3, H.x, H.z, 3]);
+    const W = G.world.wreck; if (W) v.push(['prop-wreck', W.x + 16, W.z + 14, 4, W.x, W.z, 2]);
     return v; })()`);
   for (const light of lights) {
     await page.evaluate(`(() => { const G = __game; G.setPreset(${light === 'dusk' ? 1 : light === 'night' ? 2 : 0}); G.setWeather(${light === 'storm' ? 2 : 0}); G.weather.now = ${light === 'storm' ? 1 : 0.1}; })()`);
