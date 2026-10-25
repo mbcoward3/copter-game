@@ -471,13 +471,19 @@ void main(){
 // ---------------------------------------------------------------- water
 // where each pilot's rotor is blowing (xyz, strength): ripples the water, and bends the trees and palms under it
 export const washUniform = { value: [new THREE.Vector4(), new THREE.Vector4()] };
-// points along the wakes the boats and the seaplane leave on the water: x, z, age in seconds, strength (main.js fills them)
-export const WAKE_N = 32;
+// points along the wakes left on the water: x, z, age in seconds, strength. WAKE_TRAILS trails of WAKE_PER points
+// each: the two pilots' boat or seaplane, then the nearest other boats under way (main.js fills them, each oldest
+// first, its last point where the stern is now; strength 0 ends a trail). The shader joins them up, so a wake is one
+// ribbon that follows the path through every turn. wakeBoxUniform holds each trail's middle and reach (xz, radius; a
+// radius below zero: no trail), so the water far from a wake skips it.
+export const WAKE_TRAILS = 6, WAKE_PER = 16, WAKE_N = WAKE_TRAILS * WAKE_PER;
 export const wakeUniform = { value: Array.from({ length: WAKE_N }, () => new THREE.Vector4()) };
+export const wakeBoxUniform = { value: Array.from({ length: WAKE_TRAILS }, () => new THREE.Vector3(0, 0, -1)) };
 // Each player's hull where it meets the water: x, z, heading, speed (speed below zero: not on the water), and its
-// waterline as an ellipse: half length, half beam, how far its middle sits ahead of the origin.
+// waterline as an ellipse: half length, half beam, how far its middle sits ahead of the origin, and how much of it is
+// in the water (1 sitting or running on it, fading to 0 as the flying boat lifts off, and back as it touches down).
 export const hullUniform = { value: [new THREE.Vector4(0, 0, 0, -1), new THREE.Vector4(0, 0, 0, -1)] };
-export const hullSizeUniform = { value: [new THREE.Vector3(1, 1, 0), new THREE.Vector3(1, 1, 0)] };
+export const hullSizeUniform = { value: [new THREE.Vector4(1, 1, 0, 1), new THREE.Vector4(1, 1, 0, 1)] };
 const NW = WAVES.length;
 const WATER_VERT = /* glsl */`
 uniform float uTime, uSwell;
@@ -517,9 +523,10 @@ uniform vec3 uReef;        // the coral reef: x, z, radius
 uniform vec3 uLake;        // the forest's lake: x, z, radius
 uniform vec4 uHeli[2];     // xyz world position, w strength
 uniform vec4 uLamp[2];     // searchlight spot on water: xz, radius, strength
+uniform vec3 uWakeBox[${WAKE_TRAILS}];
 uniform vec4 uWake[${WAKE_N}];  // wake points: xz, age, strength
 uniform vec4 uHull[2];     // a hull in the water: xz, heading, speed (< 0: none)
-uniform vec3 uHullSize[2]; // its waterline: half length, half beam, centre ahead of the origin
+uniform vec4 uHullSize[2]; // its waterline: half length, half beam, centre ahead of the origin; how much is in the water
 uniform sampler2D uReflTex;
 uniform mat4 uReflMat;
 uniform float uReflOn;
@@ -595,31 +602,47 @@ void main(){
   float shore = smoothstep(1.9, 0.0, depth) * smoothstep(0.3, 0.62, lace + surf * 0.28 - depth * 0.1);
   shore = max(shore, smoothstep(0.35, 0.0, depth));
   float crest = smoothstep(0.55, 1.1, vCrest / max(uSwell, 0.4)) * smoothstep(0.55, 0.75, lace) * 0.4 * max(uSwell - 0.4, 0.0) / (1.0 + dist * 0.006);
-  // the wakes: a trail of churned white water behind a boat or a seaplane on the water, spreading and breaking up as
-  // it ages, gone in a few seconds
+  // the wakes: behind a boat or a seaplane on the water, a ribbon of churned white water along the way it really went,
+  // spreading and breaking up as it ages, with the two arms of its V running out from it on either side, so the whole
+  // wake bends round the turns it made rather than swinging with the hull. Each piece between two points of the trail
+  // counts once (the strongest, so the joins do not double up)
   float wake = 0.0;
-  for (int i = 0; i < ${WAKE_N}; i++) {
-    vec4 wk = uWake[i];
-    if (wk.w <= 0.0) continue;
-    vec2 dw = p - wk.xy; float w = 0.8 + wk.z * 0.9;
-    wake += 0.7 * wk.w * exp(-dot(dw, dw) / (w * w)) * (1.0 - smoothstep(1.0, 6.5, wk.z));
+  for (int pl = 0; pl < ${WAKE_TRAILS}; pl++) {
+    vec3 box = uWakeBox[pl];
+    if (box.z < 0.0 || length(p - box.xy) > box.z) continue;
+    float ribbon = 0.0, arms = 0.0;
+    for (int k = 0; k < ${WAKE_PER} - 1; k++) {
+      vec4 a = uWake[pl * ${WAKE_PER} + k], b = uWake[pl * ${WAKE_PER} + k + 1];
+      if (a.w <= 0.0 || b.w <= 0.0) continue;
+      vec2 ab = b.xy - a.xy; float l2 = max(dot(ab, ab), 1e-4);
+      float t = clamp(dot(p - a.xy, ab) / l2, 0.0, 1.0);
+      vec2 q = a.xy + ab * t; float age = mix(a.z, b.z, t), st = mix(a.w, b.w, t);
+      vec2 dq = p - q; float w = 0.8 + age * 0.9, fade = 1.0 - smoothstep(1.0, 6.5, age);
+      ribbon = max(ribbon, 0.7 * st * exp(-dot(dq, dq) / (w * w)) * fade);
+      // (the arms: out to either side, further the older the water and the faster it was going, fading sooner)
+      float across = abs(dq.x * ab.y - dq.y * ab.x) / sqrt(l2), spread = 1.2 + age * st * 7.0;
+      float arm = across - spread, beyond = abs(dot(dq, ab)) / sqrt(l2);      // (beyond: how far past this piece's ends)
+      arms = max(arms, st * 0.6 * exp(-arm * arm * 1.2) * (1.0 - smoothstep(0.6, 3.5, age)) * smoothstep(0.05, 0.4, age) * exp(-beyond * beyond * 0.15));
+    }
+    wake += ribbon + arms;
   }
   // where a hull meets the water: a lapping line of foam round its waterline, livelier with speed, and once it is
   // moving a bow wave rolling back from the stem in a V
   for (int i = 0; i < 2; i++) {
     vec4 h = uHull[i];
     if (h.w < 0.0) continue;
-    vec3 hs = uHullSize[i];
+    vec4 hs = uHullSize[i];
     vec2 fw = vec2(sin(h.z), cos(h.z)), d = p - h.xy;
     float along = dot(d, fw) - hs.z, across = dot(d, vec2(fw.y, -fw.x));
     float spd = clamp(h.w / 14.0, 0.0, 1.0);
     float e = length(vec2(along / hs.x, across / hs.y));
     float edge = (e - 1.0) * min(hs.x, hs.y * 3.0);
-    wake += exp(-edge * edge * 6.0) * (0.45 + 0.55 * spd) * smoothstep(-0.2, 0.15, edge + 0.2);
+    wake += exp(-edge * edge * 6.0) * (0.45 + 0.55 * spd) * smoothstep(-0.2, 0.15, edge + 0.2) * hs.w;
+    // (the bow wave's V only along the hull itself: behind it, the trail's own arms carry it on round the turns)
     float bx = hs.x * 0.92 - along;
     if (spd > 0.03 && bx > 0.0) {
       float arm = abs(across) - hs.y * 0.7 - bx * 0.36;
-      wake += spd * exp(-arm * arm * (1.6 - spd * 0.8)) * exp(-bx * 0.06) * smoothstep(0.0, 1.5, bx);
+      wake += spd * hs.w * exp(-arm * arm * (1.6 - spd * 0.8)) * smoothstep(0.0, 1.5, bx) * (1.0 - smoothstep(hs.x * 1.2, hs.x * 2.6, bx));
     }
   }
   wake = clamp(wake, 0.0, 1.0);
@@ -930,7 +953,7 @@ export function createWorld(scene, renderer) {
     uDeep: { value: new THREE.Color() }, uShallow: { value: new THREE.Color() },
     uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0.001 }, uSpec: { value: 20 }, uNight: { value: 0 },
     uHeightTex: { value: heightTex }, uRipple: { value: rippleTexture() }, uNoise: { value: noiseTex }, uReef: { value: new THREE.Vector3(-290, 355, 120) }, uLake: { value: new THREE.Vector3(LAKE.x, LAKE.z, LAKE.r) },
-    uHeli: washUniform, uWake: wakeUniform, uHull: hullUniform, uHullSize: hullSizeUniform,
+    uHeli: washUniform, uWake: wakeUniform, uWakeBox: wakeBoxUniform, uHull: hullUniform, uHullSize: hullSizeUniform,
     uLamp: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uReflTex: { value: null }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 },
   };

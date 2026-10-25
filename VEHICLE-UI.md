@@ -51,3 +51,9 @@ The fire bucket (helicopter) tips onto its side to scoop and rights itself as it
 fills and bobs up as it empties, sheds water as it comes out of the sea and drips on the way to the fire and after.
 The seaplane drips from its hull after a scoop and after a drop to match. The boat has no equivalent: its cannon
 draws seawater continuously.
+
+Wakes: every boat under way (the pilots' boat and seaplane, the sailing boats, the patrol trawler, the stricken
+fishing boat as she leaves) leaves one continuous ribbon of white water along the way it really went, with the two arms
+of its V spreading from it, so the wake bends round turns instead of swinging rigidly with the hull. The seaplane's
+wake and hull foam fade out as it lifts off and back in as it touches down. The water shader has six trails (the two
+pilots and the four nearest other boats), each skipped by water far from it.

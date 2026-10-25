@@ -107,6 +107,7 @@ export function createLife(scene, world, fx) {
   whale.g.add(model('World_Whale')); whale.g.scale.setScalar(1.15); whale.g.visible = false; whale.g.rotation.order = 'YXZ';
   scene.add(whale.g);
   life.whale = whale;
+  life.boat = boat;      // (main.js draws her wake)
 
   // a flock or two go wherever the mission is
   life.setZone = function (Z) {
