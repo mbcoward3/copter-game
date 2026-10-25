@@ -65,6 +65,16 @@ async function worker() {
   } finally { browser.close(); }
 }
 await Promise.all(Array.from({ length: Math.min(WORKERS, jobs.length) }, worker));
+// (the two-player crew check starts a two-player outing, so it gets a page of its own)
+{
+  const browser = launch();
+  try {
+    const page = await openTestPage(browser);
+    await page.load(`${GAME}?test&seed=1`);
+    for (const crew of [['plane', 'boat'], ['heli', 'boat'], ['heli', 'plane']]) lint = [...(lint || []), ...await page.evaluate(`crewLint(${JSON.stringify(crew)})`)];
+    if (page.errors.length) lint.push('crew check page error: ' + page.errors[0]);
+  } finally { browser.close(); }
+}
 console.log(`\nDone in ${Math.round((Date.now() - t0) / 1000)} s.\n`);
 
 // ---------------------------------------------------------------- report

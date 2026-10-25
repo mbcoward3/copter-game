@@ -18,6 +18,7 @@ play-check screenshots have been looked at.
 | It never lands on a beach, a reef or a rock | every touchdown on water at least 3 m deep | `planeOnLand` |
 | On a fire mission it fetches water from near the fire | scoops within 400 m of the fire | `scoopsFarAway` |
 | It never gives up or circles | a pickup or a drop at least every 60 s of play | `noProgress` |
+| Flying with the boat on a fire mission, it has a fire to fight too | in each zone, at most 20% of new fires are ones only the boat can fight (the boat needs a shore, the seaplane open water to scoop); before October 2026 it was 33–92%, and the seaplane flew about with nothing to do | `crewLint` |
 | No errors, no frozen screen | nothing thrown, nothing recorded in `__gameProblems` | `pageError` |
 
 

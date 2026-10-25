@@ -36,7 +36,8 @@ const SAMPLE = `(() => {
     if (!p.active) continue;
     const bad = [];
     for (const k in p) { const v = p[k]; if (typeof v === 'number' && !Number.isFinite(v)) bad.push(k); else if (v && v.isVector3 && !Number.isFinite(v.x + v.y + v.z)) bad.push(k); }
-    const q = { v: p.vehicle, pos: p.pos.toArray().map(n => Math.round(n * 10) / 10), rescued: p.rescued, cargo: p.cargo.length, water: +(p.water || 0).toFixed(2), bad };
+    const q = { v: p.vehicle, pos: p.pos.toArray().map(n => Math.round(n * 10) / 10), rescued: p.rescued, cargo: p.cargo.length, water: +(p.water || 0).toFixed(2), bad,
+      idle: G.game.fire && !p.fireJob && !p.attack && !p.spray && !p.cargo.length && G.waiting.some(a => a.fire && !a.fire.out) };
     // Check the rendered feedback for every machine, including the boat's continuous seawater pump.
     const panel = p.pane.querySelector('.water');
     q.hud = { visible: getComputedStyle(panel).display !== 'none', hint: p.pane.querySelector('.hint').textContent,
@@ -83,7 +84,7 @@ async function play(job, page) {
   for (const q of first.pilots) { const d = Math.hypot(q.pos[0], q.pos[2]); if (d > 120) notes.push(`${q.v} started ${Math.round(d)} m from the home base (at ${q.pos[0]},${q.pos[2]})`); }
   // hold go: W for the first pilot, up arrow for the second
   await page.key('KeyW', true); if (job.pilots.length > 1) await page.key('ArrowUp', true);
-  const start = first.pilots.map(q => ({ rescued: q.rescued, water: q.water })), seen = { cargo: [0, 0], water: [0, 0], drop: [0, 0], mission: first.mission };
+  const start = first.pilots.map(q => ({ rescued: q.rescued, water: q.water })), seen = { cargo: [0, 0], water: [0, 0], drop: [0, 0], idle: [0, 0], mission: first.mission };
   const breaks = {};
   const broke = (k, detail) => { if (!breaks[k]) breaks[k] = { n: 0, first: detail }; breaks[k].n++; };
   for (let s = 0; s < SECONDS * 2; s++) {
@@ -99,6 +100,8 @@ async function play(job, page) {
         if (!Number.isFinite(q.hud.level) || q.hud.level < 0 || q.hud.level > 100) broke('fireHudLevel', q.v + ': meter outside 0–100');
         if (q.hud.height > 64) broke('fireHudTooTall', q.v + ': compact water gauge exceeds 64 px');
       }
+      // (with a fire burning, every pilot has it to fight: a seaplane once idled through a boat's shore fire)
+      if (q.idle && ++seen.idle[i] > 20) broke('idleInFire', `${q.v} has had no fire to fight for ${seen.idle[i] / 2} s while one burns`);
       if (q.cable && (q.cable.toHook > 0.6 || q.cable.toLoad > 0.6)) broke('cableNotJoined', `${q.v} hook ${q.cable.toHook} m, load ${q.cable.toLoad} m`);
       if (q.basketOut !== null && q.basketOut > 25) broke('basketAdrift', q.basketOut + ' m from the helicopter');
       if (q.both) broke('basketAndBucket', 'both shown');
@@ -135,7 +138,8 @@ async function play(job, page) {
   if (rate >= 0.8) job.pilots.forEach((v, i) => {
     const fire = first.fire;
     if (!fire && !seen.cargo[i] && !seen.missionDone) notes.push(`NO PROGRESS: ${v} picked up nobody in ${SECONDS} s`);
-    if (fire && !seen.water[i] && v !== 'boat') notes.push(`NO PROGRESS: ${v} never took on water in ${SECONDS} s`);
+    // (a crewmate may put the fire out first; idleInFire catches a pilot left with nothing to do)
+    if (fire && !seen.water[i] && v !== 'boat' && !seen.missionDone) notes.push(`NO PROGRESS: ${v} never took on water in ${SECONDS} s`);
     if (fire && seen.water[i] >= 0.8 && !seen.drop[i] && v !== 'boat') notes.push(`NO PROGRESS: ${v} filled up but never dropped in ${SECONDS} s`);
   });
   return { ...job, ok: !notes.length, notes, shots, fire: first.fire, rate: +rate.toFixed(2) };
