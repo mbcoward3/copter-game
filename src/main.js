@@ -5,7 +5,7 @@ import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER, WAKE_N, wakeUniform, snowAt } from './world.js';
+import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER, WAKE_N, wakeUniform, hullUniform, hullSizeUniform, snowAt } from './world.js';
 import { buildHeli, buildBasket, buildBucket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, tickFriends, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
 import { model } from './assets.js';
 import { createFx } from './fx.js';
@@ -142,6 +142,8 @@ function setVehicle(p, kind) {
 const BERTH = [{ x: -4.6, z: 52 }, { x: 6.4, z: 52 }];       // the boats tie up alongside the pier
 const MOORING = [{ x: -8, z: 60 }, { x: 8, z: 60 }];   // either side of the pier
 const DOCK = new THREE.Vector3(0, 0, 66);
+// each hull's waterline, for the foam where it meets the water: half length, half beam, middle ahead of the origin
+const HULL_WATERLINE = { plane: new THREE.Vector3(3.3, 0.85, 2.1), boat: new THREE.Vector3(4.1, 1.6, 0.3) };
 const HOME_SPOT = { x: 0, z: -3 };        // where the easy helicopter heads with friends aboard: over the paddock
 function parkPlayer(p) {
   const pad = p.vehicle === 'plane' ? MOORING[p.idx] : p.vehicle === 'boat' ? BERTH[p.idx] : PADS[p.idx];
@@ -310,6 +312,14 @@ function follow(p, key, chart, goal, need, look) {
 const DRAFT = 0.4;
 const shallow = (x, z) => terrainHeight(x, z) > -DRAFT;
 // is there rock standing in the water within pad of here? (sea stacks, the arch's feet, the huts' stilts, boulders that break the surface)
+// within pad metres of a pier or jetty (their footprints, as the water charts see them)
+function pierNear(x, z, pad) {
+  for (const P of world.piers) {
+    const ux = P.b.x - P.a.x, uz = P.b.z - P.a.z, k = clamp(((x - P.a.x) * ux + (z - P.a.z) * uz) / (ux * ux + uz * uz || 1), 0, 1);
+    if (Math.hypot(x - P.a.x - ux * k, z - P.a.z - uz * k) < P.w + pad) return true;
+  }
+  return false;
+}
 function rockNear(x, z, pad) {
   for (const o of OBSTACLES) if (!o.easy && (x - o.x) ** 2 + (z - o.z) ** 2 < ((o.wr || o.r) + pad) ** 2) return true;
   for (const o of SHOALS) if ((x - o.x) ** 2 + (z - o.z) ** 2 < (o.r + pad) ** 2) return true;
@@ -1065,6 +1075,9 @@ function updatePlane(p, dt, t) {
   const pt = -Math.atan2(p.vel.y, Math.max(p.fs, 10)) * 0.85 - p.sea * planing * 0.075;
   const rt = clamp(-Math.atan(p.yawVel * Math.max(p.fs, 0) / 9.8) * lerp(0.9, 0.12, p.sea), p.pro ? -1.05 : -0.6, p.pro ? 1.05 : 0.6);
   p.pitch += (pt - p.pitch) * damp(2.2, dt); p.roll += (rt - p.roll) * damp(2.0, dt);
+  // (the tail surfaces show what the pilot asks: rudder into the turn, elevators up for a climb; small and smooth)
+  m.rudder.rotation.y += (clamp(-p.yawVel * 0.45, -0.32, 0.32) - m.rudder.rotation.y) * damp(6, dt);
+  m.elevator.rotation.x += (clamp(-pt * 1.1 + (p.pitch - pt) * 1.5, -0.3, 0.3) - m.elevator.rotation.x) * damp(5, dt);
   p.shake = Math.max(0, p.shake - dt * 2.4); p.squash = Math.max(0, p.squash - dt * 1.7);
   const rumble = p.sea * p.spin * (1.15 - 0.75 * p.spin) * 0.05;
   const J = () => (Math.random() - 0.5) * rumble;
@@ -1649,7 +1662,7 @@ function spawnBoat(maxD, list) {
   let spot = null;
   for (let tries = 0; tries < 30 && !spot && list.length; tries++) {
     const c = list[(play() * list.length) | 0];
-    if (Math.hypot(c.x, c.z) > maxD || Math.hypot(c.x, c.z) < 90 || rockNear(c.x, c.z, 24)) continue;
+    if (Math.hypot(c.x, c.z) > maxD || Math.hypot(c.x, c.z) < 90 || rockNear(c.x, c.z, 24) || pierNear(c.x, c.z, 16)) continue;
     if (waiting.some(a => Math.hypot(a.pos.x - c.x, a.pos.z - c.z) < 55) || !teamReaches(c.x, c.z)) continue;
     spot = c;
   }
@@ -1672,7 +1685,7 @@ function updateBoatRescue(dt, t) {
     B.leaving += dt;
     const sp = Math.min(B.leaving * 2.2, 9);
     // (she swings toward open water before she gathers way, and round any island or rock in her path)
-    const clear = a => { const x = B.x + Math.sin(a) * 26, z = B.z + Math.cos(a) * 26; return terrainHeight(x, z) < -3 && !rockNear(x, z, 12); };
+    const clear = a => { for (const r of [9, 17, 26]) { const x = B.x + Math.sin(a) * r, z = B.z + Math.cos(a) * r; if (pierNear(x, z, 6)) return false; } const x = B.x + Math.sin(a) * 26, z = B.z + Math.cos(a) * 26; return terrainHeight(x, z) < -3 && !rockNear(x, z, 12); };
     if (clear(B.yaw)) { B.yaw += angDiff(Math.atan2(B.x, B.z), B.yaw) * damp(0.5, dt); B.dodge = 0; }
     else { B.dodge = B.dodge || (clear(B.yaw + 0.8) || !clear(B.yaw - 0.8) ? 1 : -1); B.yaw += B.dodge * 0.5 * dt; }
     const px = B.x, pz = B.z, go = B.dodge ? sp * 0.4 : sp;
@@ -1686,7 +1699,7 @@ function updateBoatRescue(dt, t) {
     windAt(B.x, B.z, t, WIND);
     // (nor onto a rock: she stops while there is still a hull's length of water between)
     const nx = B.x + WIND.x * 0.1 * dt, nz = B.z + WIND.z * 0.1 * dt, wl = Math.hypot(WIND.x, WIND.z) || 1, ax = nx + WIND.x / wl * 22, az = nz + WIND.z / wl * 22;
-    if (terrainHeight(ax, az) < -6 && !rockNear(ax, az, 12) && !rockNear(nx, nz, 14) && Math.hypot(nx, nz) < WORLD_R - 40) { B.x = nx; B.z = nz; }
+    if (terrainHeight(ax, az) < -6 && !rockNear(ax, az, 12) && !rockNear(nx, nz, 14) && !pierNear(ax, az, 4) && !pierNear(nx, nz, 10) && Math.hypot(nx, nz) < WORLD_R - 40) { B.x = nx; B.z = nz; }
     // smoke from the engine hatch, so she can be found from far off
     B.puff -= dt;
     if (B.puff <= 0) {
@@ -1860,7 +1873,7 @@ function updateWaterRuns(dt) {
     p.scoopOpen = (p.scoopOpen || 0) + ((scooping ? 1 : 0) - (p.scoopOpen || 0)) * damp(5, dt);
     p.plane.scoops.forEach(g => { g.rotation.x = (1 - p.scoopOpen) * -Math.PI / 2; });
     p.plane.level.scale.y = Math.max(.02, p.water);
-    p.plane.level.position.y = -0.8 + p.water * 0.5;
+    p.plane.level.position.y = -0.7 + p.water * 0.35;
     if (!run) { if (p.vehicle !== 'boat' || !p.spray) p.waterStream.hide(); continue; }
     if (!p.active || p.vehicle !== run.vehicle || !burning(run.an)) { p.attack = null; p.waterStream.hide(); continue; }
     if (run.opening > 0) { run.opening -= dt; continue; }
@@ -1940,11 +1953,22 @@ function updateFires(dt, t) {
 }
 const HIDDEN = sharedResource(new THREE.MeshBasicMaterial({ visible: false }));
 // an ice floe: a thick slab of old ice, ragged round its edge
-const FLOE_MAT = sharedResource(new THREE.MeshStandardMaterial({ color: 0xe8f2fa, roughness: 0.4 }));
+const FLOE_MAT = sharedResource(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.32, vertexColors: true }));
 function buildFloe() {
-  const g = new THREE.CylinderGeometry(2.7, 3.1, 0.8, 11, 1), p = g.attributes.position;
-  for (let i = 0; i < p.count; i++) { const a = Math.atan2(p.getZ(i), p.getX(i)), k = 0.82 + 0.3 * Math.abs(Math.sin(a * 2.3 + 1.1) * Math.cos(a * 3.7)); p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); }
+  // (snow lying on top, blue ice in its sides, darker toward the water, and a lumpy crust)
+  const g = new THREE.CylinderGeometry(2.7, 3.1, 0.8, 22, 2), p = g.attributes.position, ph = Math.random() * 6;
+  for (let i = 0; i < p.count; i++) {
+    const a = Math.atan2(p.getZ(i), p.getX(i)), k = 0.82 + 0.3 * Math.abs(Math.sin(a * 2.3 + 1.1 + ph) * Math.cos(a * 3.7 + ph));
+    p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k);
+    if (p.getY(i) > 0.39) p.setY(i, p.getY(i) + 0.06 * Math.sin(p.getX(i) * 2.1 + ph) * Math.cos(p.getZ(i) * 1.7));
+  }
   g.translate(0, -0.12, 0); g.computeVertexNormals();
+  const n = g.attributes.normal, col = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    const up = n.getY(i) > 0.5, d = clamp((0.28 - p.getY(i)) / 0.8, 0, 1);
+    (up ? new THREE.Color(0.95, 0.97, 1) : new THREE.Color(0.66, 0.85, 0.95).lerp(new THREE.Color(0.32, 0.56, 0.74), d)).toArray(col, i * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   const m = new THREE.Mesh(g, FLOE_MAT); m.castShadow = m.receiveShadow = true;
   const o = new THREE.Group(); o.add(m);
   return o;
@@ -3096,6 +3120,15 @@ const debug = {
     for (let i = 0; i < frames; i++) { debug.run(0.034); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); }
     return (performance.now() - t0) / frames;
   },
+  // what is drawn at a pixel of the menu camera's view (art review: which object and material is that?)
+  pick(px, py) {
+    const r = new THREE.Raycaster(); r.layers.enableAll();
+    r.setFromCamera(new THREE.Vector2(px / innerWidth * 2 - 1, 1 - py / innerHeight * 2), menuCam);
+    return r.intersectObjects(scene.children, true).filter(h => h.object.visible).slice(0, 3).map(h => {
+      const mats = [].concat(h.object.material), local = h.object.worldToLocal(h.point.clone());
+      return { name: h.object.name || h.object.geometry?.type, parent: h.object.parent?.name, mat: (mats[h.face?.materialIndex ?? 0] || mats[0])?.name, d: +h.distance.toFixed(2), local: local.toArray().map(v => +v.toFixed(2)) };
+    });
+  },
   shot(name) {
     debug.run(0.07);
     return new Promise(done => canvas.toBlob(b => fetch('/__shot/' + name + '.jpg', { method: 'POST', body: b }).then(() => done(name)), 'image/jpeg', 0.92));
@@ -3227,6 +3260,9 @@ function simulate(dt) {
         trail.push({ x: p.pos.x - Math.sin(p.yaw) * back, z: p.pos.z - Math.cos(p.yaw) * back, t: t, s: clamp(sp / 22, 0.25, 1) });
       }
       while (trail.length && (trail.length > WAKE_N / 2 || t - trail[0].t > 7)) trail.shift();
+      // (and the hull's own contact with the water: the boat always, the seaplane while it sits or runs on the water)
+      const H = hullUniform.value[i], afloat = p.active && (p.vehicle === 'boat' || (p.vehicle === 'plane' && p.sea > 0.5));
+      if (afloat) { H.set(p.pos.x, p.pos.z, p.yaw, sp); hullSizeUniform.value[i].copy(HULL_WATERLINE[p.vehicle]); } else H.w = -1;
       for (let k = 0; k < WAKE_N / 2; k++) {
         const pt = trail[k], u = wakeUniform.value[i * WAKE_N / 2 + k];
         if (pt) u.set(pt.x, pt.z, t - pt.t, pt.s); else u.w = 0;

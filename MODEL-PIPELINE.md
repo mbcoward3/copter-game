@@ -44,3 +44,29 @@ For a memory investigation, warm all animal types first, record the plateau, the
 The first pass is not final art approval. Review all three vehicles at gameplay distance and in split screen, particularly the seaplane doorway/wing highlights, glazing in dusk/storm lighting, and the boat's window pillars. Full interior art, custom surface textures, authored multi-stage LODs and smooth vegetation transitions remain separate polish work. A glTF migration should prove a complete vehicle round trip and offline delivery before replacing the pack.
 
 Integrated-GPU, mobile thermal behavior, cross-browser timing support, multi-hour sessions and subjective control/camera feel require additional device/player testing. The tools make those reviews repeatable; this machine cannot establish their results.
+
+## Art review
+
+```powershell
+node tools/vehicle-shots.mjs --vehicle plane --light day,dusk,storm   # also boat, heli; --views door,cockpit
+node tools/scene-shots.mjs --light day,dusk                            # each zone from above, mid range and the shore
+```
+
+Both use the real renderer at Best quality with the menu hidden, and write to `build/shots/`. In the browser console,
+`__game.debug.pick(x, y)` names the object and material at a pixel of the menu camera's view, which is the quickest way
+to find what a stray shape on screen belongs to.
+
+October 2026 pass (all three vehicles and the scenery, reviewed close up, at play distance and in split screen):
+
+- Seaplane: the hull is a flying boat's (vee bottom, chines, a crisp step, a tapered bow). The windscreen and side
+  windows are panes with frames on the skin. The portholes are flush with metal rims, and the open door has a real
+  cabin behind it. The fin is an aerofoil, and the rudder and elevators are separate models
+  (`Vehicle_PlaneRudder`, `Vehicle_PlaneElevator`) on contract sockets that move with turns and climbs.
+- Boat: recessed cabin glazing with pillars and seals, rounded collar ends, readable hull lettering, and cleaner outboards.
+- Helicopter: its port-side lettering clears the fuel tank.
+- Water contact: each hull in the water gets a foam line round its waterline and, when moving, a bow wave
+  (`hullUniform` in world.js; waterlines are in main.js `HULL_WATERLINE`).
+- Foliage: see-through texels keep the foliage colour (`bleedTex`), so distant pines and trees no longer go black.
+  Pines are a little warmer and brighter, and beach sand ripples are shallower.
+- `tools/build_models.py` now writes its baked shading to the absolute output folder. Before this, Blender saved those
+  images somewhere else, so the helicopter, animals and base buildings kept 13 October shading after later shape changes.

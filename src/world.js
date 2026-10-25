@@ -474,6 +474,10 @@ export const washUniform = { value: [new THREE.Vector4(), new THREE.Vector4()] }
 // points along the wakes the boats and the seaplane leave on the water: x, z, age in seconds, strength (main.js fills them)
 export const WAKE_N = 32;
 export const wakeUniform = { value: Array.from({ length: WAKE_N }, () => new THREE.Vector4()) };
+// Each player's hull where it meets the water: x, z, heading, speed (speed below zero: not on the water), and its
+// waterline as an ellipse: half length, half beam, how far its middle sits ahead of the origin.
+export const hullUniform = { value: [new THREE.Vector4(0, 0, 0, -1), new THREE.Vector4(0, 0, 0, -1)] };
+export const hullSizeUniform = { value: [new THREE.Vector3(1, 1, 0), new THREE.Vector3(1, 1, 0)] };
 const NW = WAVES.length;
 const WATER_VERT = /* glsl */`
 uniform float uTime, uSwell;
@@ -514,6 +518,8 @@ uniform vec3 uLake;        // the forest's lake: x, z, radius
 uniform vec4 uHeli[2];     // xyz world position, w strength
 uniform vec4 uLamp[2];     // searchlight spot on water: xz, radius, strength
 uniform vec4 uWake[${WAKE_N}];  // wake points: xz, age, strength
+uniform vec4 uHull[2];     // a hull in the water: xz, heading, speed (< 0: none)
+uniform vec3 uHullSize[2]; // its waterline: half length, half beam, centre ahead of the origin
 uniform sampler2D uReflTex;
 uniform mat4 uReflMat;
 uniform float uReflOn;
@@ -597,6 +603,24 @@ void main(){
     if (wk.w <= 0.0) continue;
     vec2 dw = p - wk.xy; float w = 0.8 + wk.z * 0.9;
     wake += 0.7 * wk.w * exp(-dot(dw, dw) / (w * w)) * (1.0 - smoothstep(1.0, 6.5, wk.z));
+  }
+  // where a hull meets the water: a lapping line of foam round its waterline, livelier with speed, and once it is
+  // moving a bow wave rolling back from the stem in a V
+  for (int i = 0; i < 2; i++) {
+    vec4 h = uHull[i];
+    if (h.w < 0.0) continue;
+    vec3 hs = uHullSize[i];
+    vec2 fw = vec2(sin(h.z), cos(h.z)), d = p - h.xy;
+    float along = dot(d, fw) - hs.z, across = dot(d, vec2(fw.y, -fw.x));
+    float spd = clamp(h.w / 14.0, 0.0, 1.0);
+    float e = length(vec2(along / hs.x, across / hs.y));
+    float edge = (e - 1.0) * min(hs.x, hs.y * 3.0);
+    wake += exp(-edge * edge * 6.0) * (0.45 + 0.55 * spd) * smoothstep(-0.2, 0.15, edge + 0.2);
+    float bx = hs.x * 0.92 - along;
+    if (spd > 0.03 && bx > 0.0) {
+      float arm = abs(across) - hs.y * 0.7 - bx * 0.36;
+      wake += spd * exp(-arm * arm * (1.6 - spd * 0.8)) * exp(-bx * 0.06) * smoothstep(0.0, 1.5, bx);
+    }
   }
   wake = clamp(wake, 0.0, 1.0);
   float wakeFoam = wake * smoothstep(0.5, 0.78, lace + 0.3 * wake);
@@ -693,7 +717,7 @@ function groundMaterial(noiseTex, rocky) {
         vec3 litter = mix(grass * vec3(0.5, 0.42, 0.3) + vec3(0.03, 0.02, 0.0), vec3(0.2, 0.13, 0.07) * (0.8 + 0.4 * n3), wPine * 0.75);
         grass = mix(grass, litter, under * (0.55 + 0.35 * n3));
         grass = mix(grass, basalt, flow * 0.85);
-        vec3 nm;
+        vec3 nm; float nmK = 0.9;
         #ifdef ROCKY
           float wMoss = smoothstep(0.72, 0.96, gn.y) * smoothstep(0.35, 0.6, n2) * smoothstep(2.0, 4.0, vTP.y);
           vec3 col = mix(rockC * 1.25, grass, wMoss * 0.8);
@@ -709,6 +733,7 @@ function groundMaterial(noiseTex, rocky) {
           float wScree = smoothstep(0.1, 0.45, cav + (n2 - 0.5) * 0.2) * smoothstep(0.7, 0.4, steep) * wRock;
           vec3 col = mix(mix(grass, sandC, wSand), mix(rockC * 1.25, gravel, wScree), wRock);
           nm = mix(mix(texture2D(tMossN, gp / 12.0).xyz, texture2D(tSandN, gp / 22.0).xyz, wSand), texture2D(tRockN, gp / 13.0).xyz, wRock) * 2.0 - 1.0;
+          nmK = mix(0.9, 0.45, wSand * (1.0 - wRock));      // (sand ripples are shallow: at full depth the beach glittered in rows)
         #endif
         // snow lies above the snow line wherever it is not too steep to hold it (on boulders too)
         // (it drifts deep into the hollows and gullies and is blown off the crests, which stand out dark)
@@ -721,7 +746,7 @@ function groundMaterial(noiseTex, rocky) {
         float wet = 1.0 - smoothstep(-0.15, 0.75, vTP.y + (n3 - 0.5) * 0.3);
         col *= mix(1.0, 0.5, wet) * (0.82 + 0.36 * n1);
         diffuseColor.rgb = col;
-        vec3 groundN = normalize(gn + vec3(nm.x, 0.0, nm.y) * 0.9 * gn.y);`)
+        vec3 groundN = normalize(gn + vec3(nm.x, 0.0, nm.y) * nmK * gn.y);`)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(0.93, 0.35, wet);')
       .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(groundN, 0.0)).xyz);');
   };
@@ -755,6 +780,17 @@ function tiled(geo, segs, tiles, material, pad, setup) {
   return group;
 }
 
+// A cut-out card's see-through texels keep the colour of what is drawn on it rather than black: otherwise, as the
+// card shrinks with distance, its smaller mipmaps average the black in, and a pine wood across the bay turns black.
+function bleedTex(t, rgb) {
+  const c = t.image, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  for (let i = 0; i < d.length; i += 4) if (d[i + 3] < 8) { d[i] = rgb[0]; d[i + 1] = rgb[1]; d[i + 2] = rgb[2]; }
+  const out = new THREE.DataTexture(new Uint8Array(d.buffer), c.width, c.height);
+  out.colorSpace = THREE.SRGBColorSpace; out.anisotropy = 8; out.generateMipmaps = true;
+  out.minFilter = THREE.LinearMipmapLinearFilter; out.magFilter = THREE.LinearFilter; out.needsUpdate = true;
+  t.dispose();
+  return out;
+}
 function canvasTex(w, h, draw) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   draw(c.getContext('2d'), w, h);
@@ -894,7 +930,7 @@ export function createWorld(scene, renderer) {
     uDeep: { value: new THREE.Color() }, uShallow: { value: new THREE.Color() },
     uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0.001 }, uSpec: { value: 20 }, uNight: { value: 0 },
     uHeightTex: { value: heightTex }, uRipple: { value: rippleTexture() }, uNoise: { value: noiseTex }, uReef: { value: new THREE.Vector3(-290, 355, 120) }, uLake: { value: new THREE.Vector3(LAKE.x, LAKE.z, LAKE.r) },
-    uHeli: washUniform, uWake: wakeUniform,
+    uHeli: washUniform, uWake: wakeUniform, uHull: hullUniform, uHullSize: hullSizeUniform,
     uLamp: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uReflTex: { value: null }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 },
   };
@@ -1363,7 +1399,7 @@ export function createWorld(scene, renderer) {
     });
     const size = modelInfo(name).size;
     for (const it of list) { it.r = Math.max(size[0], size[1], size[2]) * it.s * 0.6; it.cy = it.y + size[1] * it.s * 0.5; }
-    lodded.push({ list, tiers, leaf: look(leaf ? leaf.mat : /Snag/.test(name) ? 'Bleached' : 'Leaf').color, size, bushy: /Bush/.test(name), palm: /Palm/.test(name) });
+    lodded.push({ list, tiers, leaf: look(leaf ? leaf.mat : /Snag/.test(name) ? 'Bleached' : 'Leaf').color, size, bushy: /Bush/.test(name), palm: /Palm/.test(name), pine: /Pine/.test(name) });
     plantCount += list.length;
   }
   // the far hills' trees: one soft lump each, coloured like the tree it stands for
@@ -1378,7 +1414,7 @@ export function createWorld(scene, renderer) {
     // (each plant's lump is worked out once; world.cull() only picks which ones to draw)
     dm.position.set(it.x, it.y + L.size[1] * it.s * 0.62, it.z); dm.rotation.set(0, it.x, 0);
     dm.scale.set(L.size[0] * it.s * 0.46, L.size[1] * it.s * 0.36, L.size[2] * it.s * 0.46); dm.updateMatrix();
-    it.lump = dm.matrix.clone(); it.col = L.leaf.clone().multiplyScalar(1.15); it.burn = 0; it.fireTint = new THREE.Color(0xffffff); it.charCol = it.col.clone();
+    it.lump = dm.matrix.clone(); it.col = L.pine ? L.leaf.clone().multiplyScalar(1.9).multiply(new THREE.Color(0.86, 1.0, 0.9)) : L.leaf.clone().multiplyScalar(1.15); it.burn = 0; it.fireTint = new THREE.Color(0xffffff); it.charCol = it.col.clone();
   }
   const charColor = new THREE.Color(0x3c2a20);
   world.trackFire = fire => {
@@ -1626,7 +1662,7 @@ function leafSpray() {
       leaf(x0 + Math.cos(a0) * reach, y0 + Math.sin(a0) * reach, a0 + (rnd() - 0.5) * 0.4, 40 + rnd() * 14, 190 + rnd() * 60);
     }
   });
-  sprayTex.flipY = false;
+  sprayTex = bleedTex(sprayTex, [189, 220, 136]);
   return sprayTex;
 }
 // a fir bough: a twig with short needles bristling down both sides of it, worn by every card of the pines
@@ -1653,7 +1689,7 @@ function needleSpray() {
       twig(w / 2, y, w / 2 + side * w * (0.42 - s * 0.03), y + w * 0.16, 18, 42);
     }
   });
-  needleTex.flipY = false;
+  needleTex = bleedTex(needleTex, [108, 175, 115]);
   return needleTex;
 }
 function foliage(name, cards) {
@@ -1663,15 +1699,17 @@ function foliage(name, cards) {
   if (!/^Leaf/.test(name)) { foliageCache.set(key, base); return base; }
   const mat = new THREE.MeshStandardMaterial({ color: base.color.clone().multiplyScalar(cards && cards !== 'core' ? 2.1 : 0.85), roughness: 0.8, side: THREE.DoubleSide, envMapIntensity: 0.35 });
   // (spruce needles are a deep blue-green, not the spring green of the broad-leaved trees)
-  if (cards === 'needles') mat.color.multiplyScalar(0.72).multiply(new THREE.Color(0.8, 0.95, 1.05));
+  // (a little brighter and warmer than a real spruce, so a pine wood sits in the same sunny palette as the palms)
+  if (cards === 'needles') mat.color.multiplyScalar(0.92).multiply(new THREE.Color(0.86, 1.0, 0.9));
   if (cards === 'core') {
     // (the shadowed heart of a pine between its boughs: the same needles, in shade)
-    mat.color.multiplyScalar(0.42).multiply(new THREE.Color(0.8, 0.95, 1.05)); mat.map = needleSpray();
+    mat.color.multiplyScalar(0.62).multiply(new THREE.Color(0.86, 1.0, 0.9)); mat.map = needleSpray();
     // (solid, not cut out: from across the bay the boughs thin away to nothing and this is what gives a pine its mass)
   } else if (cards) { mat.map = cards === 'needles' ? needleSpray() : leafSpray(); mat.alphaTest = 0.42; mat.alphaToCoverage = true; }
   // (a pine's crown is lit as one rounded mass, by normals pointing out from its trunk, not card by card)
   const volume = cards === 'needles' || cards === 'core';
-  if (volume) mat.defines = { VOLUME: 1 };
+  // (and its shaded side still catches a little of the sky)
+  if (volume) { mat.defines = { VOLUME: 1 }; mat.envMapIntensity = 0.6; }
   mat.onBeforeCompile = sh => {
     sh.uniforms.uWind = windUniform; sh.uniforms.uGust = gustUniform; sh.uniforms.uSnowZ = zoneUniforms.uSnowZ; sh.uniforms.uHeli = washUniform;
     sh.vertexShader = sh.vertexShader
@@ -1712,7 +1750,11 @@ function foliage(name, cards) {
       .replace('#include <common>', '#include <common>\nuniform vec3 uSnowZ; varying float vHigh; varying vec3 vFW; varying float vUp;')
       .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize(vNormal);')
       // dark in the heart of the crown, bright at the top; and in the snowy peaks, snow lying on the boughs' tops
-      .replace('#include <color_fragment>', `diffuseColor.rgb *= 0.5 + 0.7 * vHigh;
+      .replace('#include <color_fragment>', `#ifdef VOLUME
+          diffuseColor.rgb *= 0.6 + 0.6 * vHigh;
+        #else
+          diffuseColor.rgb *= 0.5 + 0.7 * vHigh;
+        #endif
         float snowy = (1.0 - smoothstep(uSnowZ.z, uSnowZ.z + 40.0, length(vFW.xz - uSnowZ.xy))) * smoothstep(0.35, 0.8, vUp) * smoothstep(1.5, 4.0, vFW.y);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.75, 0.8, 0.86), snowy * 0.85);
         #ifdef USE_INSTANCING_COLOR
