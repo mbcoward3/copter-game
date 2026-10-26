@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { geo, look, model, modelInfo, groundTex, heroLods } from './assets.js';
 import { buildReef } from './reef.js';
 import { placeIcebergs } from './icy.js';
+import { buildVolcano } from './volcano.js';
 import { sharedResource, uploadInstances, writeInstance } from './render-resources.js';
 
 // ---------------------------------------------------------------- helpers
@@ -1519,6 +1520,18 @@ export function createWorld(scene, renderer) {
   for (const [name, list] of species) species.set(name, list.filter(it => !nearLedge(it)));
   for (const name in rocks) rocks[name] = rocks[name].filter(it => it.cy < 2 || !nearLedge(it));
   // the trees round a landing site stand back from it, so their tops must not roof it over either
+  // Author this zone after random scenery generation: adding a hut must not reshuffle
+  // the seeded world's other islands or mission spawn pools.
+  const volcanoClearings = [];
+  const volcano = buildVolcano({ group: (zoneGroups.volcano ||= new THREE.Group()), crater: CRATER,
+    terrainHeight, sites: SITES.filter(s => Math.hypot(s.x - CRATER.x, s.z - CRATER.z) < 100),
+    obstacles: OBSTACLES, keepOut: volcanoClearings, nightMats: world.nightMats });
+  world.volcano = volcano;
+  const inVolcanoScenery = p => volcanoClearings.some(c => Math.hypot(p.x-c.x,p.z-c.z) < c.r + 2);
+  for (const [name, list] of species) species.set(name, list.filter(p => !inVolcanoScenery(p)));
+  for (const name in rocks) rocks[name] = rocks[name].filter(p => !inVolcanoScenery(p));
+  world.spawn.ledges = world.spawn.ledges.filter(p => !inVolcanoScenery(p));
+  for (const c of volcanoClearings) clearCanopy(c.x,c.z,c.r+2);
   for (const s of SITES) clearCanopy(s.x, s.z, s.r + 3);
   // the woods' floor, for the ground shader: how much of the ground round each point of the land lies under trees
   for (const g of landGeos) {
@@ -1715,16 +1728,8 @@ export function createWorld(scene, renderer) {
 
   rndNow = rndShared;
 
-  // ---------- the volcano's crater, glowing
-  {
-    const floor = terrainHeight(CRATER.x, CRATER.z);
-    const lavaMat = new THREE.MeshStandardMaterial({ color: 0x1a0602, emissive: 0xff4a10, emissiveIntensity: 2.2, roughness: 0.6 });
-    world.nightMats.push({ mat: lavaMat, max: 6, min: 2.2 });
-    const lava = new THREE.Mesh(new THREE.CircleGeometry(CRATER.r * 0.72, 28), lavaMat);
-    lava.rotation.x = -Math.PI / 2; lava.position.set(CRATER.x, floor + 0.6, CRATER.z);
-    scene.add(lava);
-    world.crater = { x: CRATER.x, y: floor, z: CRATER.z };
-  }
+  // The summit plume and authored coast share the same crater definition.
+  world.crater = { x: CRATER.x, y: terrainHeight(CRATER.x, CRATER.z), z: CRATER.z };
 
   // ---------- presets
 
@@ -1771,6 +1776,7 @@ export function createWorld(scene, renderer) {
     waterUniforms.uTime.value = t; waterUniforms.uSwell.value = sea.swell; skyUniforms.uTime.value = t;
     windUniform.value = t;
     reef.update(t);
+    volcano.update(t);
     beamPivot.rotation.y = t * 0.5;
     beaconMat.emissiveIntensity = (t % 1.4) < 0.25 ? 6 : 0;
   };

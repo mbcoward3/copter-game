@@ -2807,7 +2807,8 @@ const FIRE_ICON = '\u{1F692}';
 function zoneBanner() {
   const Z = game.zone, pro = activePlayers().some(p => p.pro);
   const what = game.fire ? 'Protect our friends · contain the front · cool the embers' : 'Help ' + game.goal + ' friends and bring them home';
-  banner(game.fire ? FIRE_ICON + ' ' + Z.name + ' fire!' : Z.icon + ' ' + Z.name, (pro ? world.preset.icon + WEATHERS[weather.idx].icon + ' ' + WEATHERS[weather.idx].name + ' — ' : '') + what);
+  const story = Z.id === 'volcano' ? (game.fire ? 'Protect the island field stations · cool the shore fires' : 'Volcano Watch needs a hand · ' + what) : what;
+  banner(game.fire ? FIRE_ICON + ' ' + Z.name + ' fire!' : Z.icon + ' ' + Z.name, (pro ? world.preset.icon + WEATHERS[weather.idx].icon + ' ' + WEATHERS[weather.idx].name + ' — ' : '') + story);
   sfx.levelStart();
 }
 // (the screen fades out, the next mission is set up behind it, and it fades back in: on game time, so pausing waits)

@@ -4,6 +4,7 @@
 //
 //   npm run check                      everything (3 machines x 8 missions x 3 seeds)
 //   npm run check -- --only plane      one machine (or --only plane:home for one mission)
+//   npm run check -- --zone volcano    every vehicle, rescue and fire, in one zone
 //   npm run check -- --seeds 5         more seeds
 //   npm run check -- --frame 0.1       as a slow laptop plays it (seconds per frame; default 1/30)
 //   npm run check -- --accept          save this run as the new baseline (after checking it is really better)
@@ -38,6 +39,7 @@ async function openTestPage(browser) {
 // ---------------------------------------------------------------- the run
 const jobs = [];
 for (const vehicle of ['heli', 'plane', 'boat']) for (const [zone, fire] of MISSIONS) for (let seed = 1; seed <= SEEDS; seed++) {
+  if (opt('zone', '') && zone !== opt('zone', '')) continue;
   const key = `${vehicle}:${zone}${fire ? '-fire' : ''}`;
   if (ONLY && !key.startsWith(ONLY) && !`${vehicle}:${zone}`.startsWith(ONLY)) continue;
   jobs.push({ key, vehicle, zone, fire, seed });

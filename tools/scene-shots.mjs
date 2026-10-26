@@ -13,6 +13,7 @@ const browser = launch(['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-block
 try {
   const page = await openPage(browser, { width: 1280, height: 720 });
   if (!await page.goto(pathToFileURL(resolve('rescue-squad-3d.html')).href + '?seed=1', "!!document.querySelector('canvas.ready')")) throw Error('Game did not load');
+  if (args.includes('--active')) { await page.click('#start1'); await page.evaluate("__game.debug.zone('volcano'); __game.game.spawnT = 1e9; __game.debug.run(3); __game.game.state = 'menu'"); }
   await page.evaluate(`(() => { const G = __game; G.quality.mode = 'best'; G.setQuality(0);
     for (const e of document.querySelectorAll('#menu, .pane, #hud, .hud')) e.style.visibility = 'hidden'; })()`);
   const frames = n => page.evaluate(`new Promise(r => { let k = ${n}; const f = () => --k ? requestAnimationFrame(f) : r(); requestAnimationFrame(f); })`);
@@ -39,6 +40,12 @@ try {
     v.push(['prop-glacier', 120, -400, 14, 96, -450, 3]);
     const B = (G.world.bergs || []).find(b => !b.small); if (B) v.push(['prop-berg', B.x + 30, B.z + 25, 6, B.x, B.z, 4]);
     const P = G.icy && G.icy.penguins[0]; if (P) v.push(['prop-penguins', P.x + 5, P.z + 6, 2.5, P.x, P.z, 0.4]);
+    if (G.world.volcano) {
+      const V = G.world.volcano, C = G.world.crater;
+      v.push(['volcano-crater', C.x+17,C.z+22,35,C.x,C.z,2], ['volcano-west', C.x-145,C.z-100,65,C.x,C.z,14]);
+      for (const S of V.sites) { const p=S.props[0]; v.push(['volcano-'+(S.name.startsWith('Lava')?'lookout':'camp'),p.x+10,p.z+16,5,p.x,p.z,2]); }
+      const p=V.columnData[0]; if(p) v.push(['volcano-basalt',p.x+14,p.z+18,4,p.x,p.z,1]);
+    }
     return v; })()`);
   for (const light of lights) {
     await page.evaluate(`(() => { const G = __game; G.setPreset(${light === 'dusk' ? 1 : light === 'night' ? 2 : 0}); G.setWeather(${light === 'storm' ? 2 : 0}); G.weather.now = ${light === 'storm' ? 1 : 0.1}; })()`);

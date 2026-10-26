@@ -164,8 +164,26 @@
     };
   };
 
+  window.volcanoLint = () => {
+    const G = __game, V = G.world.volcano, bad = [];
+    const check = (ok, doing) => { if (!ok) bad.push(doing); };
+    check(!!V, 'doing: inspecting the volcano field station; missing authored zone');
+    if (!V) return bad;
+    check(V.columns >= 36, 'doing: approaching the coast; fewer than 36 basalt columns');
+    check(V.seams.length === 3, 'doing: circling the cone; expected three glowing upper-slope seams');
+    for (const s of V.seams) for (const p of s) check(Math.abs(p.y - G.terrainHeight(p.x, p.z) - 0.16) < 0.02, 'doing: inspecting a lava seam; it floats above or clips into terrain');
+    check(V.sites.length === 2, 'doing: visiting named rescue sites; one has no field equipment');
+    for (const site of V.sites) {
+      const pad = G.SITES.find(s => s.name === site.name);
+      for (const o of site.props) check(Math.hypot(o.x-pad.x,o.z-pad.z) - o.r >= pad.r, 'doing: landing at '+pad.name+'; equipment obstructs the rescue clearing');
+    }
+    check(V.group.children.length < 32, 'doing: drawing the volcano; authored detail exceeds 31 draw objects');
+    check(G.world.crater.y > 20, 'doing: approaching the summit; plume emitter is below the crater');
+    return bad;
+  };
+
   window.worldLint = () => {
-    const issues = [];
+    const issues = window.volcanoLint();
     const deep = (pt, d, what) => { const h = T(pt.x, pt.z); if (h > d) issues.push(`${what} at ${Math.round(pt.x)},${Math.round(pt.z)} is only ${(-h).toFixed(1)} m deep`); };
     for (const s of G.world.spawn.sea) deep(s, -3, 'open-sea spawn');
     for (const id in G.world.spawn.zoneSea) for (const s of G.world.spawn.zoneSea[id]) deep(s, -2, id + ' sea spawn');
