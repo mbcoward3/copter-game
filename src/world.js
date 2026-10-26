@@ -74,8 +74,6 @@ export const PAD_Y = BASE_Y + 0.3;
 export const PADS = [{ x: -15, z: 12 }, { x: 15, z: 12 }];
 export const STATION = { x: 0, z: -30 };
 export const LIGHTHOUSE = { x: -98, z: 74 };
-// a sea arch between the base and the lighthouse: tall enough to fly through, and the boat fits under it too
-export const ARCH = { x: -59, z: 54, yaw: 3.97 };
 // a level patch of sand below the base, east of the jetty, for the sunshades and towels (the bank above is too steep)
 const BEACH = { x: 20, z: 38, r: 6, y: 1.5 };
 // the fishermen's huts on stilts round the atoll's lagoon
@@ -177,9 +175,6 @@ for (const I of ISLANDS) {
 export const OBSTACLES = [
   { x: LIGHTHOUSE.x, z: LIGHTHOUSE.z, r: 6.5, top: 42 },
   { x: STATION.x, z: STATION.z, r: 15, top: 24 },
-  // the arch's two feet; and, for the easy helicopter only, the whole arch, which it flies round rather than through
-  ...[-1, 1].map(k => ({ x: ARCH.x + k * 12.5 * Math.cos(ARCH.yaw), z: ARCH.z + k * 12.5 * Math.sin(ARCH.yaw), r: 6, top: 24, wr: 7.5 })),
-  { x: ARCH.x, z: ARCH.z, r: 19, top: 25, easy: true },
   ...HUTS.map(h => ({ x: h.x, z: h.z, r: 6, top: 13 })),
 ];
 // (wr, where there is one, is how far it reaches out at the waterline: what a hull keeps clear of)
@@ -1046,8 +1041,7 @@ export function createWorld(scene, renderer) {
   scene.add(lh);
   keepOut.push({ x: LIGHTHOUSE.x, z: LIGHTHOUSE.z, r: 8 });
 
-  // the sea arch, and the huts in the lagoon
-  { const a = model('World_Arch', { shadow: true }); a.material = rockMat; a.position.set(ARCH.x, -1.5, ARCH.z); a.rotation.y = -ARCH.yaw; scene.add(a); }
+  // the huts in the lagoon
   for (const h of HUTS) { place('World_Hut', h.x, h.z, { y: 0, yaw: h.yaw, scale: 2 }); keepOut.push({ x: h.x, z: h.z, r: 9 }); }
 
   // a camp in the forest meadow, for whoever waits there to be fetched
@@ -1330,11 +1324,11 @@ export function createWorld(scene, renderer) {
       else if (r > 0.975) rock(pick(ROCKS), x, -0.3, z, 0.5 + rnd() * 1.4);
     }
   }
-  // sea stacks: tall rocks standing in the water off the sea cliffs (on the side a cliff faces), clear of the arch, the
+  // sea stacks: tall rocks standing in the water off the sea cliffs (on the side a cliff faces), clear of the
   // huts, the other islands and sandbars, the patrol boat's beat round the base, the edge of the world and each other
   const stacks = [];
   const stackOk = (I, x, z, y) => y < -1.5 && y > -9 && (zoneOf(x, z).id === 'home' ? Math.hypot(x, z) > 205 && Math.hypot(x, z) < HOME_R - 25 : Math.hypot(x, z) < WORLD_R - 30)
-    && Math.hypot(x - ARCH.x, z - ARCH.z) > 40 && HUTS.every(h => Math.hypot(x - h.x, z - h.z) > 40)
+    && HUTS.every(h => Math.hypot(x - h.x, z - h.z) > 40)
     && ISLANDS.every(J => J === I || Math.hypot(x - J.x, z - J.z) > J.reach + (J.islet ? 15 : 6))
     && stacks.every(q => Math.hypot(x - q.x, z - q.z) > 24);
   for (const I of ISLANDS) if (I.cliff) for (let k = 0, n = 3 + ((rnd() * 3) | 0), placed = 0; k < 40 && placed < n; k++) {
@@ -1544,7 +1538,7 @@ export function createWorld(scene, renderer) {
     const x = Math.cos(a) * d, z = Math.sin(a) * d;
     let ok = terrainHeight(x, z) < -5;       // (a sandbar is small enough to sit inside the ring below)
     for (let k = 0; k < 8 && ok; k++) if (terrainHeight(x + Math.cos(k * 0.785) * 14, z + Math.sin(k * 0.785) * 14) > -5) ok = false;
-    if (ok && OBSTACLES.some(o => Math.hypot(x - o.x, z - o.z) < (o.wr || o.r) + 14)) ok = false;       // (nor hard by a stack, the arch or a hut)
+    if (ok && OBSTACLES.some(o => Math.hypot(x - o.x, z - o.z) < (o.wr || o.r) + 14)) ok = false;       // (nor hard by a stack or a hut)
     if (ok) world.spawn.sea.push({ x, z });
   }
 

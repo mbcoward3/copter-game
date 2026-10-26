@@ -26,7 +26,7 @@ the unit and simulation checks required by `HOW-WE-CHECK.md`.
 ## Home pier and walking home
 
 Friends brought home finish the trip on foot, for every machine. The boat comes alongside the end of the pier (from
-whichever side is nearer; from the west on a short run that keeps clear of the sea arch) and carries straight on once
+whichever side is nearer) and carries straight on once
 they are off; a second boat ties up along the west side and backs out after. The flying boat moors along the east side
 with its door to the pier, its wing float just clear of the deck, and swings round on its two engines to leave; a
 second one lies across the end. Friends hop up onto the deck (the flying boat's by way of its wing float, like

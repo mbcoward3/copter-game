@@ -61,7 +61,7 @@ export function createLife(scene, world, fx) {
 
   // ------------------------------------------------ seagulls
   const gulls = [];
-  // the highest thing under a flock's circle: hills, treetops, and the lighthouse, station, stacks and arch
+  // the highest thing under a flock's circle: hills, treetops, and the lighthouse, station and stacks
   const skyline = (x, z, r) => {
     let top = 0;
     for (let k = 0; k < 32; k++) for (const q of [r - 6, r + 6]) { const px = x + Math.cos(k * 0.196) * q, pz = z + Math.sin(k * 0.196) * q; top = Math.max(top, terrainHeight(px, pz) + canopyAt(px, pz)); }

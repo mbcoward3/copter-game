@@ -1,7 +1,7 @@
 // Navigation for the autopilots. Two charts of the world on a 5 m grid, each holding how far it is from every point to
 // the nearest thing in the way:
 //   water: to land, shallows, rock or the pier (for the boat, and the seaplane on the water)
-//   air:   to anything standing up taller than a given height: towers, stacks, the arch and the like, and hills and
+//   air:   to anything standing up taller than a given height: towers, stacks and the like, and hills and
 //          treetops (for the seaplane in the air, which goes round high ground rather than hopping over it)
 // and routes over them that keep to the middle of the open water, smoothed into a few straight legs.
 import { terrainHeight, canopyAt, OBSTACLES, SHOALS, PIERS, WORLD_R } from './world.js';
@@ -59,7 +59,7 @@ export function createNav() {
     const x = cx(i), z = cx(j);
     if (Math.hypot(x, z) > WORLD_R - 30 || terrainHeight(x, z) > -1.4) wet[j * N + i] = 1;
   }
-  for (const o of OBSTACLES) if (!o.easy) stamp(wet, o.x, o.z, (o.wr || o.r) + 1);
+  for (const o of OBSTACLES) stamp(wet, o.x, o.z, (o.wr || o.r) + 1);
   for (const o of SHOALS) stamp(wet, o.x, o.z, o.r + 1);
   // the piers and jetties, along their whole length
   for (const P of PIERS) { const l = Math.hypot(P.b.x - P.a.x, P.b.z - P.a.z); for (let s = 0; s <= l; s += 2) stamp(wet, P.a.x + (P.b.x - P.a.x) * s / l, P.a.z + (P.b.z - P.a.z) * s / l, P.w); }
@@ -79,7 +79,7 @@ export function createNav() {
     return airs.get(top);
   };
 
-  // ---- the ceiling chart: the top of the highest thing (ground, treetops, towers, stacks, the arch) within a wingspan
+  // ---- the ceiling chart: the top of the highest thing (ground, treetops, towers, stacks) within a wingspan
   // and some of every point, so the seaplane can simply fly higher than it wherever it is going (made when first asked)
   let ceil = null;
   const ceiling = () => {
