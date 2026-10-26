@@ -141,11 +141,10 @@ function setVehicle(p, kind) {
   assignBerths();
   parkPlayer(p); showVehicle(p, p.active);
 }
-// ---- the home pier. The boat comes in across the end of it (from whichever side is nearer: from the west on a short
-// run, clear of the sea arch's foot) and lies there, and once its friends are off carries straight on; a second boat ties up alongside the west side, and backs out after. The flying
+// ---- the home pier. The boat comes in across the end of it (from whichever side is nearer) and lies there, and once its friends are off carries straight on; a second boat ties up alongside the west side, and backs out after. The flying
 // boat moors along the east side with its door (in its port side) to the pier, its wing float just clear of the deck,
-// and swings round on the spot to leave; a second one lies across the end of the pier, coming in from the west on a short
-// run that keeps its wing clear of the sea arch, and carries straight on. Each berth is where the hull stops and the
+// and swings round on the spot to leave; a second one lies across the end of the pier, coming in from the west, and
+// carries straight on. Each berth is where the hull stops and the
 // heading it lies at; the way in is straight along that heading for the last `run` metres (BERTH_RUN unless it says), from
 // `lead` metres further back. (The deck is 1.62 m above the calm sea and 2.7 m either side of its line.)
 const HOME_PIER = world.piers.find(P => Math.abs(P.a.z - 36) < 0.5 && Math.abs(P.a.x - 0.88) < 0.1) || world.piers[0];
@@ -153,12 +152,12 @@ const PIER_X = HOME_PIER.a.x, DECK_Y = 1.62, DECK = { x0: PIER_X - 2.1, x1: PIER
 const BERTHS = {
   boat: [
     { id: 'boatT', x: PIER_X, z: HOME_PIER.b.z + 2.2, h: -Math.PI / 2, through: true, lead: 18 },
-    { id: 'boatT', x: PIER_X, z: HOME_PIER.b.z + 2.2, h: Math.PI / 2, through: true, run: 20, lead: 14 },      // (from the west, short of the sea arch)
+    { id: 'boatT', x: PIER_X, z: HOME_PIER.b.z + 2.2, h: Math.PI / 2, through: true, lead: 18 },      // (from the west)
     { id: 'boatW', x: PIER_X - 4.8, z: 58, h: Math.PI, clear: HOME_PIER.b.z - 58 + 4, park: { x: PIER_X - 7, z: 84, h: 0 } },      // (clear: how far it backs out, its stern past the end of the pier, before it swings round)
   ],
   plane: [
     { id: 'planeE', x: PIER_X + 10.7, z: 58, h: Math.PI, leave: Math.PI / 2, park: { x: PIER_X + 12, z: 92, h: 0 } },      // (leave: the way it swings round to set off, away from the pier; park: where it waits at the start, nose out to sea)
-    { id: 'planeT', x: PIER_X + 0.55, z: HOME_PIER.b.z + 8, h: Math.PI / 2, through: true, run: 20, lead: 14 },
+    { id: 'planeT', x: PIER_X + 0.55, z: HOME_PIER.b.z + 8, h: Math.PI / 2, through: true },
   ],
 };
 const BERTH_CLASH = { boatT: 'planeT', planeT: 'boatT' };      // (both lie across the end of the pier)
@@ -420,7 +419,7 @@ function follow(p, key, chart, goal, need, look, then) {
 // and out of water too shallow to float in, whatever the swell is doing
 const DRAFT = 0.4;
 const shallow = (x, z) => terrainHeight(x, z) > -DRAFT;
-// is there rock standing in the water within pad of here? (sea stacks, the arch's feet, the huts' stilts, boulders that break the surface)
+// is there rock standing in the water within pad of here? (sea stacks, the huts' stilts, boulders that break the surface)
 // within pad metres of a pier or jetty (their footprints, as the water charts see them)
 function pierNear(x, z, pad) {
   for (const P of world.piers) {
@@ -430,7 +429,7 @@ function pierNear(x, z, pad) {
   return false;
 }
 function rockNear(x, z, pad) {
-  for (const o of OBSTACLES) if (!o.easy && (x - o.x) ** 2 + (z - o.z) ** 2 < ((o.wr || o.r) + pad) ** 2) return true;
+  for (const o of OBSTACLES) if ((x - o.x) ** 2 + (z - o.z) ** 2 < ((o.wr || o.r) + pad) ** 2) return true;
   for (const o of SHOALS) if ((x - o.x) ** 2 + (z - o.z) ** 2 < (o.r + pad) ** 2) return true;
   return false;
 }
@@ -444,7 +443,7 @@ function fendOff(pos, yaw, len, beam, high, shoals = true, stacks = true) {
     const dx = pos.x + fx_ * t - ox, dz = pos.z + fz_ * t - oz, d = Math.hypot(dx, dz), min = r + beam;
     if (d < min && d > 0.01) { pos.x += dx / d * (min - d); pos.z += dz / d * (min - d); hit = true; }
   };
-  if (stacks) for (const o of OBSTACLES) if (!o.easy && high <= o.top) one(o.x, o.z, o.wr || o.r);
+  if (stacks) for (const o of OBSTACLES) if (high <= o.top) one(o.x, o.z, o.wr || o.r);
   if (shoals && high < 1.5) for (const o of SHOALS) one(o.x, o.z, o.r);
   return hit;
 }
@@ -590,7 +589,7 @@ function updatePlayer(p, dt, t) {
 
   // towers and buildings push the helicopter round them
   for (const o of OBSTACLES) {
-    if (p.pos.y - SKID > o.top || (o.easy && p.pro)) continue;
+    if (p.pos.y - SKID > o.top) continue;
     const dx = p.pos.x - o.x, dzz = p.pos.z - o.z, d = Math.hypot(dx, dzz), min = Math.max(o.r, o.wr || 0) + 4.5;      // (a stack spreads widest at the waterline)
     if (d < min && d > 0.01) { p.pos.x = o.x + (dx / d) * min; p.pos.z = o.z + (dzz / d) * min; bump(p, 'obstacle'); }
   }
@@ -733,7 +732,7 @@ function landingFor(S, ahead, from, skip, fly) {
       if (crow >= bs && !fly) continue;
       if (!nav.water.clear(ex, ez, qx + ux * (ahead + 15), qz + uz * (ahead + 15), LAND.room)) continue;
       if (!approachClear(qx, qz, ux, uz)) continue;
-      // (and nothing standing over the run on the water beyond: the sea arch spans water a hull could pass under, a wing cannot)
+      // (and nothing standing over the run on the water beyond)
       if (ahead > 0 && nav.ceiling(qx + ux * ahead * 0.5, qz + uz * ahead * 0.5) > 2) continue;
       if (ahead > 0 && !clearClimb({ x: qx + ux * (ahead - RUN_FREE), z: qz + uz * (ahead - RUN_FREE) }, h)) continue;      // (and climbing away after a scoop)
       // (flying: the curve round onto the final; still on the water: the way there, and some for turning to it)
@@ -990,7 +989,11 @@ function planApproach(p, alt, L) {
 // Returns { pts, i, sTD } (sTD: metres along it to touching down); each point has `alt`.
 function approachPath(p, alt, E, h, then) {
   // (the shortest curve first; if that runs over high ground, the next, which may go round the other side of it)
-  for (const d of dubins(p.pos.x, p.pos.z, p.yaw, E.x, E.z, h, APP.R, true)) {
+  const shapes = dubins(p.pos.x, p.pos.z, p.yaw, E.x, E.z, h, APP.R, true);
+  for (const d of shapes) {
+    // (low, just off the water: not one that circles round over the base to gain height, much longer than the
+    // shortest; round the high ground instead, trying again for a curve every second as it climbs)
+    if (alt < 25 && d.len > shapes[0].len * 1.4 + 120) break;
     const th = then.map(q => ({ ...q })), pts = samplePath(d, 6, th), n = pts.length, sTD = th[th.length - 2].s;
     // (what it must be over: 10 m above anything under the curve before the final, climbing to it in time...)
     for (const q of pts) q.need = sTD - q.s > APP.final ? nav.ceiling(q.x, q.z) + 12 : 0;      // (10 m clear, and a little for the plane lagging the height it is asked for)
@@ -1022,7 +1025,7 @@ function airRoute(p, A, to, out, look, then) {
   lookAhead(A.air, p.pos.x, p.pos.z, look, out.aim);
 }
 // the top of the tallest thing in the plane's way over the next `secs` seconds, following its turn: a tower, a stack,
-// the arch, a hill or the trees on it (or -1e9)
+// a hill or the trees on it (or -1e9)
 function tallAhead(p, secs) {
   let top = -1e9;
   for (let s = 0.5; s <= secs; s += 0.5) {
@@ -1197,7 +1200,7 @@ function updatePlane(p, dt, t) {
     const mine = clamp(PL.cruise + p.altOff, 0, 76);
     wantAlt = p.manualT > 0 ? mine : ap ? Math.min(mine, ap.alt) : mine;
     if (landAhead > -1e8) wantAlt = Math.max(wantAlt, landAhead + 9);        // never let a hill come to us
-    // nor a tower, a stack or the arch: wherever the plane will be in the next few seconds, turning as it is turning,
+    // nor a tower or a stack: wherever the plane will be in the next few seconds, turning as it is turning,
     // anything standing taller than it within reach of a wingtip has it climb over the top
     // (not on a lined-up final either: the approach to a landing spot is checked clear when the spot is chosen)
     const tall = (p.afloat && !(ap && ap.run)) || (ap && ap.final) ? -1e9 : tallAhead(p, 5);
@@ -1783,12 +1786,10 @@ function updateCamera(p, dt, t) {
   const fov = (activePlayers().length > 1 ? 66 : 58) + (pro ? sp * 0.36 : 0);
   if (Math.abs(p.cam.fov - fov) > 0.05) { p.cam.fov += (fov - p.cam.fov) * damp(3, dt); p.cam.updateProjectionMatrix(); }
   // Keep the view clear. Towers, rocks and huts: the camera steps sideways until the line from it to the machine
-  // passes them by. Going through the arch (the one easy obstacle) it drops low behind, to see through and not
-  // into the rock over the gap...
+  // passes them by...
   for (const o of OBSTACLES) {
     const ox = o.x - vx, oz = o.z - vz, dv = Math.hypot(ox, oz);
-    if (o.easy) { if (dv < o.r) cy = lerp(cy, Math.min(cy, vy + 1.5), THREE.MathUtils.smoothstep(o.r - dv, 0, 8) * clamp((14 - vy) / 4, 0, 1)); continue; }
-    const R = Math.min(Math.max(o.r + 2, (o.wr || 0) + 3), dv);      // (the arch's feet spread wider than they stand)
+    const R = Math.min(Math.max(o.r + 2, (o.wr || 0) + 3), dv);      // (a stack spreads widest at the waterline)
     if (dv < o.r || dv > back + R) continue;
     const sx = cx - vx, sz = cz - vz, L = Math.hypot(sx, sz) + 1e-6, f = clamp((ox * sx + oz * sz) / (L * L), 0, 1);
     let qx = vx + sx * f - o.x, qz = vz + sz * f - o.z, d = Math.hypot(qx, qz);
