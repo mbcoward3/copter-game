@@ -10,6 +10,7 @@
     "check": "node tools/check.mjs",
     "play-check": "node tools/play-check.mjs",
     "pilot-check": "node tools/pilot-check.mjs",
+    "menu-check": "node tools/menu-check.mjs",
     "render-check": "node tools/render-check.mjs",
     "profile": "node tools/profile-render.mjs",
     "build:hosted": "node build.mjs --hosted"

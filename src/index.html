@@ -96,6 +96,8 @@
   #setup>summary:focus-visible{outline:3px solid #ffd23c;outline-offset:3px;}
   .go-tip{font-size:clamp(20px,3vw,28px);font-weight:700;text-align:center;line-height:1.6;}
   .go-tip kbd{font-size:20px;min-width:42px;}
+  .go-tip .control-summary{display:block;font-size:16px;font-weight:500;}
+  #togetherGuide{max-width:650px;text-align:center;font-size:14px;line-height:1.5;color:#d8e6f0;}
   #loading{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);padding:8px 16px;border-radius:20px;background:#0e1826e8;font-size:14px;z-index:5;}
   @media(max-width:1100px){#mission{top:118px!important;max-width:calc(100% - 28px);padding:8px 12px;gap:8px;}#banner{top:37%;}}
   @media(max-width:600px){#menu{padding:20px 12px;gap:14px;}#menu h1{font-size:44px;}#menu h1 span{letter-spacing:.15em;font-size:.28em;}#stickers{gap:6px;font-size:28px;}.big{padding:14px 22px;font-size:22px;}#mSlots{gap:4px;}#mSlots span{width:25px;height:25px;font-size:20px;}#mIcon{font-size:25px;}#mission{font-size:14px;}.pane .tag{font-size:13px;padding:7px 9px;gap:6px;}.pane .slot{width:34px;height:34px;font-size:23px;}.pane .radar{width:112px;height:112px;}.pane .hint{bottom:140px;font-size:13px;padding:8px 12px;}.pane .alt{bottom:132px;}.pane .water{top:174px;font-size:19px;}#hud.two .pane .tag{top:66px;font-size:12px;gap:4px;}.pane .score{display:none;}#hud.two .pane .cargo{top:108px;gap:3px;}#hud.two .pane .slot{width:30px;height:30px;}#hud.two #mission{top:162px!important;}#hud.two #controls{top:14px;}#hud.two .pane .water{top:216px;}#hud.two #banner{top:44%;}.btn{padding:0 10px;}.pick{gap:5px;}.veh{font-size:12px;padding:9px 3px;}.flt{font-size:12px;white-space:normal;}}
@@ -156,6 +158,7 @@
 <div id="menu">
   <h1><span>HOLD GO · HELP FRIENDS</span>Little Rescue Squad</h1>
   <p class="go-tip">Hold <kbd>W</kbd> or <kbd>↑</kbd> to go.<br>Your crew helps with the rest.</p>
+  <p id="togetherGuide"></p>
   <div class="row" id="resumeRow" style="display:none"><button class="big" id="resume">▶ Keep playing</button></div>
   <div class="row">
     <button class="big" id="start1">Play solo</button>
@@ -203,7 +206,7 @@
     </div>
   </div>
   </details>
-  <p class="tip">Steering is optional. Hold go and your crew helps with the mission.<br>Grown-ups: choose Manual controls for more hands-on flying and boating.</p>
+  <p class="tip">Each pilot chooses their own controls in the options above.<br>Assisted: hold go and your crew helps. Manual: fly or steer the vehicle yourself.</p>
 </div>
 <div id="err"></div>
 

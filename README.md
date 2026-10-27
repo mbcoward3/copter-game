@@ -11,6 +11,7 @@ Alternatively, open **`rescue-squad-3d.html`** after building (no server or inte
 - The helicopter flies at a safe height by itself, slows near animals, drops its basket on its own,
   climbs over buildings and rock arches, turns back if it wanders too far, and lands itself when left alone over a helipad.
 - Each pilot picks a **helicopter**, a **seaplane** or a **fast boat** on the start screen (two players can mix).
+- The menu shows the starting keys for each pilot's selected vehicle and controls, including remembered Manual choices.
 - Helicopter: fly to a golden light beam; the side door slides open and the rescue basket goes down. Carry up to 3, fly home and they hop out.
   A friend waiting on an island is fetched by landing: fly over them and the helicopter sets itself down, they climb in, press go to leave.
   A smoking fishing boat has two or three friends on deck to winch off; when the last is safe she motors away.
