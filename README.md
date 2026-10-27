@@ -26,6 +26,9 @@ Alternatively, open **`rescue-squad-3d.html`** after building (no server or inte
   Boat: `W`/`S` throttle, `A`/`D` steer; stop beside a friend and the crew throws a ring automatically (`R` can also throw it).
   Seaplane: hold `W` on the water to take off; in the air it cruises by itself, with `W` boosting and `S` easing off.
   `A`/`D` turn and `Space`/`Shift` climb and descend. Fly down to land on water, then taxi up to a friend and stop for boarding.
+  Manual pilots have a compact live instrument panel: speed, height above the surface and climb/descent for aircraft;
+  speed and approach range for boats. It shows a nearby friend, home or the gap to the pier as appropriate. Lower-star
+  landings and pickups give a practical target for the next attempt. Each pilot's instruments follow their own controls.
 - Choose **Rescue**, **Firefighting**, or **Surprise me** under **Choose mission, vehicles and controls**, then pick any of the six locations or **Random locations**. Fixed choices repeat; random choices avoid repeating the same place and job immediately. Preferences are remembered. Pause to change the options; starting with changed options begins a fresh outing.
 - Firefighting sends the crew to one substantial incident. A fresh outing starts at the home base; each next mission starts wherever the crew already is: a spreading woodland/scrub front or a rooftop fire. Fire occupies a terrain-following field of fuel patches, and wind encourages it into neighbouring dry fuel. Friends and landing pads stay clear of the burning area.
   Water lands over an actual footprint. It cools burning patches and wets unburnt ground to make a firebreak; a missed drop does not damage a distant fire. Secured patches stay out. The crew finishes by cooling remaining embers and checking the ground before celebrating.

@@ -22,6 +22,7 @@ import { chooseMission, LOCATIONS, MODES } from './missions.mjs';
 import { createPortraits } from './portraits.js';
 import { retireObject, sharedResource } from './render-resources.js';
 import { createRenderMetrics } from './render-metrics.js';
+import { pilotReadout, ratedFeedback } from './pilot-feedback.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const clamp = THREE.MathUtils.clamp, lerp = THREE.MathUtils.lerp;
@@ -359,9 +360,9 @@ const flightEnvelope = {};
 const V = new THREE.Vector3(), V2 = new THREE.Vector3();
 
 // a word and some stars for a piece of flying done well (only pilots flying it properly are marked)
-function rate(p, stars, words) {
+function rate(p, stars, words, advice = '') {
   if (p.rateCd > 0) return;
-  p.rateCd = 4; p.style += stars; p.flash = '\u2605'.repeat(stars) + ' ' + words; p.flashT = 2.8;
+  p.rateCd = 4; p.style += stars; p.flash = ratedFeedback(stars, words, advice); p.flashT = stars < 3 && advice ? 4.5 : 2.8;
   syncHud();
 }
 function surfaceAt(x, z, t, out) {
@@ -608,7 +609,7 @@ function updatePlayer(p, dt, t) {
       fx.dust(p.pos.x, SURF.y, p.pos.z, 60); sfx.touchdown();
       p.shake = 1; p.squash = 1;
       if (p.pro && (PADS.some(pad => Math.hypot(p.pos.x - pad.x, p.pos.z - pad.z) < 8.5) || SITES.some(q => Math.hypot(p.pos.x - q.x, p.pos.z - q.z) < q.r))) {
-        if (p.vel.y > -1.5) rate(p, 3, 'Greased it'); else if (p.vel.y > -3) rate(p, 2, 'Good landing'); else rate(p, 1, 'Firm one!');
+        if (p.vel.y > -1.5) rate(p, 3, 'Greased it'); else if (p.vel.y > -3) rate(p, 2, 'Good landing', 'Descend below 1.5 m/s'); else rate(p, 1, 'Firm one!', 'Descend below 1.5 m/s');
       }
     }
     p.pos.y = floor; p.vel.y = Math.max(p.vel.y, 0);
@@ -1269,7 +1270,7 @@ function updatePlane(p, dt, t) {
       // splashdown
       for (const sx of [-1.8, 1.8]) fx.splash(p.pos.x - nfz * sx, wave, p.pos.z + nfx * sx, 34, 1.3);
       sfx.splash(1, true); p.shake = 0.6; p.squash = 1;
-      if (p.pro) { if (p.descent > -1.5) rate(p, 3, 'Greased it'); else if (p.descent > -3.2) rate(p, 2, 'Good landing'); else rate(p, 1, 'Firm splashdown!'); }
+      if (p.pro) { if (p.descent > -1.5) rate(p, 3, 'Greased it'); else if (p.descent > -3.2) rate(p, 2, 'Good landing', 'Descend below 1.5 m/s'); else rate(p, 1, 'Firm splashdown!', 'Descend below 1.5 m/s'); }
     }
     p.pos.y = floor; p.vel.y = Math.max(p.vel.y, 0);
   }
@@ -1289,7 +1290,7 @@ function updatePlane(p, dt, t) {
   if (p.pro && p.afloat && Math.abs(p.fs) < 7.5 && room) for (const an of waiting) {
     if (an.fire || outOfReach(an, p)) continue;
     const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z);
-    if (d < (an.kind === 'islet' ? 24 : 12)) { board(an, p); if (an.kind === 'islet' || d < 7) rate(p, 3, 'Right alongside'); else if (d < 10) rate(p, 2, 'Nice taxiing'); else rate(p, 1, 'A long swim!'); break; }
+    if (d < (an.kind === 'islet' ? 24 : 12)) { board(an, p); if (an.kind === 'islet' || d < 7) rate(p, 3, 'Right alongside'); else if (d < 10) rate(p, 2, 'Nice taxiing', 'Come within 7 m'); else rate(p, 1, 'A long swim!', 'Come within 7 m'); break; }
   }
   // ---- the water bomber: skimming fast along the sea fills the tank; passing low over the fire empties it onto them
   if (p.fireJob && !p.attack && p.water < 1 && p.afloat && p.fs > 6 && (p.scoopOpen || 0) > .7) {
@@ -1313,7 +1314,7 @@ function updatePlane(p, dt, t) {
   p.dropCd -= dt;
   // (moored: out of the door, across the wing float and up onto the pier, one by one. A pilot brings it alongside and
   // stops, the door side to the pier for the shortest hop)
-  if (p.cargo.length && p.afloat && p.dropCd <= 0 && (p.pro ? Math.abs(p.fs) < 3 && deckGap(p) < 3 : p.berthed)) { if (p.pro && !p.unloading) { const g = deckGap(p); rate(p, g < 1.2 ? 3 : 2, g < 1.2 ? 'Neat mooring' : 'Moored'); } deliverOne(p); p.dropCd = 0.45; }
+  if (p.cargo.length && p.afloat && p.dropCd <= 0 && (p.pro ? Math.abs(p.fs) < 3 && deckGap(p) < 3 : p.berthed)) { if (p.pro && !p.unloading) { const g = deckGap(p); rate(p, g < 1.2 ? 3 : 2, g < 1.2 ? 'Neat mooring' : 'Moored', 'Pier gap below 1.2 m'); } deliverOne(p); p.dropCd = 0.45; }
   if (!p.parked && p.afloat && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; }
   p.mode = p.target || p.incoming ? 'pickup' : (p.cargo.length && dockD < 130 ? 'deliver' : 'idle');
 
@@ -1529,7 +1530,7 @@ function updateBoat(p, dt, t) {
     p.throwCd = 0.8;
     let best = null, bd = 1e9;
     for (const an of waiting) { if (inland(an) || an.fire) continue; const d = Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z); if (d < bd) { bd = d; best = an; } }
-    if (best && bd < (best.kind === 'islet' ? 26 : 17) && Math.abs(p.fs) < 4) { board(best, p); if (bd < 8) rate(p, 3, 'Right alongside'); else if (bd < 12) rate(p, 2, 'Good throw'); else rate(p, 1, 'Long throw!'); }
+    if (best && bd < (best.kind === 'islet' ? 26 : 17) && Math.abs(p.fs) < 4) { board(best, p); if (bd < 8) rate(p, 3, 'Right alongside'); else if (bd < 12) rate(p, 2, 'Good throw', 'Come within 8 m'); else rate(p, 1, 'Long throw!', 'Come within 8 m'); }
   }
   // ---- the water cannon: stopped (or nearly) close enough to a fire, the crew plays it on the flames until it is out
   const was = p.spray;
@@ -1566,7 +1567,7 @@ function updateBoat(p, dt, t) {
   p.dropCd -= dt;
   // ---- home: lying alongside the pier, the friends hop up onto it one by one and walk home (a pilot brings it in
   // alongside and stops; the easy boat ties up at its berth)
-  if (p.cargo.length && p.dropCd <= 0 && (p.pro ? Math.abs(p.fs) < 2.5 && deckGap(p) < 2.5 : p.berthed)) { if (p.pro && !p.unloading) { const g = deckGap(p); rate(p, g < 1 ? 3 : 2, g < 1 ? 'Neat docking' : 'Docked'); } deliverOne(p); p.dropCd = 0.45; }
+  if (p.cargo.length && p.dropCd <= 0 && (p.pro ? Math.abs(p.fs) < 2.5 && deckGap(p) < 2.5 : p.berthed)) { if (p.pro && !p.unloading) { const g = deckGap(p); rate(p, g < 1 ? 3 : 2, g < 1 ? 'Neat docking' : 'Docked', 'Pier gap below 1 m'); } deliverOne(p); p.dropCd = 0.45; }
   if (!p.parked && Math.abs(p.fs) < 1 && p.idleT > 3 && !p.cargo.length && !p.incoming && dockD < 70) { p.parked = true; }
   p.mode = p.target || p.incoming ? 'pickup' : (p.cargo.length && dockD < 120 ? 'deliver' : 'idle');
 
@@ -1724,7 +1725,7 @@ function updateWinch(p, dt, t) {
     if (an.kind === 'camp' || an.fire || Math.hypot(b.x - an.pos.x, b.z - an.pos.z) > 3.2 || Math.abs(b.y - an.pos.y) > 2.6) continue;
     const sp = Math.hypot(p.vel.x, p.vel.z);
     board(an, p);
-    if (sp < 1.5) rate(p, 3, 'Rock-steady hover'); else if (sp < 4) rate(p, 2, 'Nice pickup'); else rate(p, 1, 'Snatched it!');
+    if (sp < 1.5) rate(p, 3, 'Rock-steady hover'); else if (sp < 4) rate(p, 2, 'Nice pickup', 'Slow below 5 km/h'); else rate(p, 1, 'Snatched it!', 'Slow below 5 km/h');
     break;
   }
 
@@ -2914,6 +2915,9 @@ function syncHud() {
     p.boat.monitor.visible = p.boat.pump.visible = p.boat.crew.visible = game.fire; p.plane.fireTank.visible = game.fire;
     $('.cargo', p.pane).style.display = game.fire ? 'none' : '';
     p.pane.classList.toggle('fighting', game.fire);
+    p.pane.classList.toggle('pilot', p.pro);
+    p.ui.alt.hidden = !p.pro;
+    p.ui.alt.setAttribute('aria-label', (p.vehicle === 'heli' ? 'Helicopter' : p.vehicle === 'plane' ? 'Seaplane' : 'Boat') + ' instruments');
     p.ui.score.textContent = (game.fire ? '🔥 ' : '🐾 ') + p.rescued + (p.pro ? '  \u2605 ' + p.style : '');
     p.ui.slots.forEach((el, i) => { const a = p.cargo[i]; setFace(el, a ? a.type.e : ''); el.classList.toggle('full', !!a); });
   }
@@ -3034,6 +3038,30 @@ function drawRadar(p) {
   g.fillStyle = '#fff'; g.beginPath(); g.moveTo(c, c - 16); g.lineTo(c + 11, c + 12); g.lineTo(c, c + 5); g.lineTo(c - 11, c + 12); g.closePath(); g.fill();
 }
 let hudAcc = 0;
+function updatePilotInstruments(p) {
+  const name = (p.vehicle === 'heli' ? 'Helicopter' : p.vehicle === 'plane' ? 'Seaplane' : 'Boat') + ' instruments';
+  if (p.ui.alt.getAttribute('aria-label') !== name) p.ui.alt.setAttribute('aria-label', name);
+  // Geometric range only. Do not query a navigation planner (or warm reachability caches) from the HUD.
+  let friendDistance = Infinity;
+  if (!game.fire && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
+    if (an.fire || (p.vehicle !== 'heli' && (inland(an) || an.landlocked || (p.vehicle === 'plane' && an.kind === 'hut')))) continue;
+    friendDistance = Math.min(friendDistance, Math.hypot(p.pos.x - an.pos.x, p.pos.z - an.pos.z));
+  }
+  const home = p.vehicle === 'heli' ? HOME_SPOT : DOCK;
+  const homeDistance = Math.hypot(p.pos.x - home.x, p.pos.z - home.z);
+  const pierGap = p.vehicle !== 'heli' && p.cargo.length && homeDistance < 90 ? deckGap(p) : Infinity;
+  const rows = pilotReadout(p, { friendDistance, homeDistance, pierGap });
+  const keys = rows.map(r => r.key).join(',');
+  if (p.ui.alt.dataset.rows !== keys) {
+    p.ui.alt.innerHTML = rows.map(r => `<span class="instrument" data-instrument="${r.key}"><span class="instrument-label">${r.label}</span><strong class="instrument-value" data-value="${r.value}">${r.value}<small> ${r.unit}</small></strong></span>`).join('');
+    p.ui.alt.dataset.rows = keys;
+  } else rows.forEach((r, i) => {
+    const el = p.ui.alt.children[i], label = el.firstElementChild, value = el.lastElementChild;
+    if (label.textContent !== r.label) label.textContent = r.label;
+    if (value.dataset.value !== String(r.value)) { value.dataset.value = r.value; value.firstChild.nodeValue = r.value; }
+    if (value.lastElementChild.textContent.trim() !== r.unit) value.lastElementChild.textContent = ' ' + r.unit;
+  });
+}
 function updateHud(dt) {
   if (bannerT > 0) { bannerT -= dt; if (bannerT <= 0) bannerEl.classList.remove('show'); }
   hudAcc += dt;
@@ -3048,6 +3076,9 @@ function updateHud(dt) {
   }
   for (const p of activePlayers()) {
     drawRadar(p);
+    // Instrument readings follow the current rendered state, including a boat's sharp deceleration near shore.
+    // Reuse the row nodes and change only readings that actually moved.
+    if (p.pro) updatePilotInstruments(p);
     p.flashT -= dt; p.rateCd -= dt;
     if (slow) {
       const showWater = game.fire;
@@ -3066,7 +3097,6 @@ function updateHud(dt) {
       }
       const h = hintFor(p);
       if (h !== p.hint) { p.hint = h; p.ui.hint.textContent = h; }
-      p.ui.alt.innerHTML = '↕ ' + Math.max(0, p.clearance).toFixed(0).padStart(2, ' ') + ' m<br>➤ ' + (Math.hypot(p.vel.x, p.vel.z) * 3.6).toFixed(0) + ' km/h';
     }
   }
 }

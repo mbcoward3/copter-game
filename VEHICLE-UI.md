@@ -1,5 +1,10 @@
 # Shared vehicle feedback
 
+Manual pilots use the existing compact instrument area for live readings and actionable pickup/landing feedback;
+see `PILOT-PRECISION.md`. Aircraft show height and vertical rate; boats show speed and approach range. Each pilot's
+assistance setting controls instrument visibility independently. This panel is separate from the existing equipment
+gauge described below, and does not replace the shared rescue/fire guidance.
+
 Preserve the original seaplane's simple presentation across all three vehicles:
 one compact water gauge, a short percentage label, and the existing bottom hint.
 Do not add a separate status header or progress bar. Equipment level, inline fire
