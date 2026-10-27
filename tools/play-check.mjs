@@ -49,6 +49,7 @@ const SAMPLE = `(() => {
     // Check the rendered feedback for every machine, including the boat's continuous seawater pump.
     const panel = p.pane.querySelector('.water');
     q.hud = { visible: getComputedStyle(panel).display !== 'none', hint: p.pane.querySelector('.hint').textContent,
+      manual: p.pro, instruments: !p.ui.alt.hidden && getComputedStyle(p.ui.alt).display !== 'none',
       equipment: panel.getAttribute('aria-label'), level: Number(panel.getAttribute('aria-valuenow')),
       label: panel.querySelector('.water-label').textContent, height: panel.getBoundingClientRect().height };
     if (p.vehicle === 'heli') {
@@ -112,6 +113,7 @@ async function play(job, page) {
     o.pilots.forEach((q, i) => {
       if (q.bad.length) broke('notANumber', q.v + ': ' + q.bad.join(','));
       if (q.hud.visible !== o.fire) broke('fireHudVisibility', q.v + ': fire panel visibility disagrees with mission');
+      if (q.hud.instruments !== q.hud.manual) broke('pilotInstruments', q.v + ': instrument visibility disagrees with this pilot’s controls');
       if (!o.fire && !q.hud.hint.trim()) broke('rescueHudGuidance', q.v + ': doing rescue mission with no guidance in the existing hint');
       if (o.fire) {
         const equipment = q.v === 'boat' ? 'Pump pressure' : q.v === 'heli' ? 'Bucket' : 'Tank';

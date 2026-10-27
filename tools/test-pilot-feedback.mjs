@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { pilotReadout, ratedFeedback } from '../src/pilot-feedback.mjs';
+const aircraft = { vehicle: 'heli', vel: { x: 3, y: -2.4, z: 4 }, grounded: false, clearance: 18.6, cargo: [], incoming: 0 };
+const rows = pilotReadout(aircraft, { friendDistance: 12.4 });
+assert.deepEqual(rows.map(r => [r.label, r.value, r.unit]), [['Speed', 18, 'km/h'], ['Height', 19, 'm'], ['Descent', '2.4', 'm/s'], ['Friend', 12, 'm']]);
+assert.equal(pilotReadout({ ...aircraft, grounded: true })[2].value, '0.0', 'parked aircraft must not show wave-induced descent');
+const boat = { ...aircraft, vehicle: 'boat', fs: -2, cargo: [{}] };
+assert.deepEqual(pilotReadout(boat, { homeDistance: 35, pierGap: 1.24 }).map(r => [r.label, r.value, r.unit]), [['Astern', 18, 'km/h'], ['Pier gap', '1.2', 'm']]);
+assert.equal(pilotReadout({ ...aircraft, vehicle: 'plane', afloat: false, cargo: [{}] }, { homeDistance: 35, pierGap: 1 }).at(-1).label, 'Home', 'an airborne plane needs home range rather than a misleading hull-to-pier gap');
+assert.equal(pilotReadout({ ...aircraft, cargo: [{}, {}, {}] }, { friendDistance: 2 }).length, 3, 'full crews must not be directed to another pickup');
+assert.equal(pilotReadout(aircraft, { friendDistance: 121 }).length, 3, 'distant friends must not clutter the precision readout');
+assert.equal(pilotReadout({ ...aircraft, cargo: [{}] }, { friendDistance: 8, homeDistance: 70 }).at(-1).label, 'Friend', 'partial crews still need nearby pickup range when the friend is closer than home');
+assert.equal(pilotReadout(aircraft, { friendDistance: 95, homeDistance: 4 }).at(-1).label, 'Friend', 'an empty crew at home needs a pickup range, not a comparison with its already-reached base');
+assert.equal(ratedFeedback(2, 'Good landing', 'Descend below 1.5 m/s'), '★★ Good landing · Descend below 1.5 m/s');
+assert.equal(ratedFeedback(3, 'Rock-steady hover', 'Slow below 5 km/h'), '★★★ Rock-steady hover', 'a perfect result needs no corrective instruction');
+console.log('Manual instrument units, vehicle differences and actionable ratings passed');
