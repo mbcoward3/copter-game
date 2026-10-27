@@ -99,14 +99,14 @@ export function createFx(scene) {
         emit(x, y + 0.2, z, Math.cos(a) * s, 0.5 + Math.random() * 1.5, Math.sin(a) * s, 0.82, 0.78, 0.68, 0.4, 0.9 + Math.random(), 0.8 + Math.random() * 0.6, 0.5, 1.8);
       }
     },
-    firework(x, y, z) {
+    firework(x, y, z, scale = 1, density = 1) {
       const c = BRIGHT[(Math.random() * BRIGHT.length) | 0];
       const k = 5;  // HDR so bloom makes them glow
-      for (let i = 0; i < 150; i++) {
-        const u = Math.random() * 2 - 1, a = Math.random() * 6.283, s = 14 + Math.random() * 5, q = Math.sqrt(1 - u * u);
-        emit(x, y, z, q * Math.cos(a) * s, u * s, q * Math.sin(a) * s, c[0] * k, c[1] * k, c[2] * k, 1, 0.55, 1.5 + Math.random() * 0.8, 4, 1.3);
+      for (let i = 0; i < Math.round(150 * density); i++) {
+        const u = Math.random() * 2 - 1, a = Math.random() * 6.283, s = (14 + Math.random() * 5) * scale, q = Math.sqrt(1 - u * u);
+        emit(x, y, z, q * Math.cos(a) * s, u * s, q * Math.sin(a) * s, c[0] * k, c[1] * k, c[2] * k, 1, 0.55 * scale, 1.5 + Math.random() * 0.8, 4 * scale, 1.3);
       }
-      for (let i = 0; i < 25; i++) emit(x, y, z, R(4), R(4), R(4), 6, 6, 5, 1, 0.9, 0.35, 0, 1);
+      for (let i = 0; i < Math.round(25 * density); i++) emit(x, y, z, R(4) * scale, R(4) * scale, R(4) * scale, 6, 6, 5, 1, 0.9 * scale, 0.35, 0, 1);
     },
     sparkle(x, y, z, n = 8, c = [3, 2.4, 0.8]) {
       for (let i = 0; i < n; i++) emit(x + R(1.2), y + R(1.2), z + R(1.2), R(1.5), 1 + Math.random() * 2, R(1.5), c[0], c[1], c[2], 1, 0.22 + Math.random() * 0.2, 0.6 + Math.random() * 0.6, -1, 1);
