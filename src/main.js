@@ -25,6 +25,7 @@ import { createRenderMetrics } from './render-metrics.js';
 import { pilotReadout, ratedFeedback } from './pilot-feedback.mjs';
 import { showRescueFor } from './rescue-guidance.mjs';
 import { celebrationBurst } from './celebration.mjs';
+import { manualAxis } from './manual-controls.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const clamp = THREE.MathUtils.clamp, lerp = THREE.MathUtils.lerp;
@@ -327,7 +328,7 @@ function readInput(p) {
     const b = i => (gp.buttons[i] ? gp.buttons[i].value : 0);
     if (pro) {
       // left stick tilts the disc, right stick turns the nose, triggers are the collective, A runs the winch out
-      f += -dz(gp.axes[1] || 0) + b(12) - b(13); s += dz(gp.axes[0] || 0) + b(15) - b(14); t += -dz(gp.axes[2] || 0);
+      f += -manualAxis(gp.axes[1] || 0) + b(12) - b(13); s += manualAxis(gp.axes[0] || 0) + b(15) - b(14); t += -manualAxis(gp.axes[2] || 0);
       l += b(7) - b(6); w += b(0);
     } else {
       f += -dz(gp.axes[1] || 0) + b(12) - b(13); t += -dz(gp.axes[0] || 0) + b(14) - b(15);
@@ -1194,7 +1195,7 @@ function updatePlane(p, dt, t) {
     if (p.afloat) {
       // (with a friend close by and room aboard, W taxis up to them; otherwise it is take-off power)
       const taxi = room && waiting.some(an => !an.fire && !outOfReach(an, p) && Math.hypot(an.pos.x - p.pos.x, an.pos.z - p.pos.z) < 45);
-      const want = !ready || p.incoming ? 0 : inp.f > 0 ? (taxi ? 6 : 30) : inp.f < 0 ? -3 : 0;
+      const want = !ready || p.incoming ? 0 : inp.f > 0 ? (taxi ? 6 : 30) * inp.f : inp.f < 0 ? 3 * inp.f : 0;
       p.fs += clamp(want - p.fs, -7 * dt, 7 * dt);
       if (inp.f > 0 && !taxi && p.fs > 19) vyT = 7;                             // rotate and climb away
       else if (inp.l > 0 && p.fs > 15) vyT = 6;

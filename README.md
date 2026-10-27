@@ -26,6 +26,7 @@ Alternatively, open **`rescue-squad-3d.html`** after building (no server or inte
   work the collective for height, land it yourself and hold a hover to winch. Landings and pickups are marked out of three stars.
   Keys: `W`/`S` tilt, `A`/`D` turn, `Q`/`E` slide, `Space`/`Shift` climb and descend, `R` winch (blue: arrows, `,`/`.`, `Enter`/`Shift`, `Ctrl`).
   Gamepad: left stick tilt, right stick turn, triggers climb and descend, A winch.
+  For slow seaplane taxiing on a gamepad, use a light forward or reverse stick input; full forward gives takeoff power.
   Boat: `W`/`S` throttle, `A`/`D` steer; stop beside a friend and the crew throws a ring automatically (`R` can also throw it).
   Seaplane: hold `W` on the water to take off; in the air it cruises by itself, with `W` boosting and `S` easing off.
   `A`/`D` turn and `Space`/`Shift` climb and descend. Fly down to land on water, then taxi up to a friend and stop for boarding.
