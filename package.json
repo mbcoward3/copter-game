@@ -4,7 +4,7 @@
   "description": "Little Rescue Squad 3D: an offline-capable cooperative rescue game",
   "private": true,
   "scripts": {
-    "test": "node tools/test-flight-safety.mjs && node tools/test-flightpath.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs && node tools/test-fire-scene.mjs && node tools/test-render-resources.mjs",
+    "test": "node tools/test-flight-safety.mjs && node tools/test-flightpath.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs && node tools/test-fire-scene.mjs && node tools/test-render-resources.mjs && node tools/test-mission-transition.mjs",
     "build": "node build.mjs",
     "serve": "node serve.mjs",
     "check": "node tools/check.mjs",

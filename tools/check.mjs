@@ -102,11 +102,17 @@ for (const [key, s] of Object.entries(summary)) {
   if (s.unfinished.length) notes.push(`NOT FINISHED (seeds ${s.unfinished.join(', ')})`);
   for (const [rule, list] of Object.entries(s.rules)) notes.push(`BROKE ${rule}: ${list.map(x => `seed ${x.seed} ${x.seconds}${typeof x.seconds === 'number' ? ' s' : ''}${x.first ? ` first at t=${x.first.t} (${x.first.at.join(',')})${x.first.doing ? ' doing [' + x.first.doing + ']' : ''}` : ''}`).join('; ')}`);
   const b = base && base.summary[key];
+  // Additional seeds expand rule coverage; they must not change the population used for a speed/handling
+  // regression against a three-seed baseline. Compare the matching seeds, while checking rules on every run.
+  const matching = b && list.filter(r => r.seed <= base.seeds);
+  const comparable = matching && matching.length === base.seeds;
   if (b) for (const [k, tol] of Object.entries(WORSE_UP)) {
-    if (s[k] == null || b[k] == null) continue;
+    const value = comparable ? mean(matching, k) : null;
+    if (value == null || b[k] == null) continue;
     const slack = Math.max(b[k] * tol, k === 'stuckS' || k === 'goArounds' || k === 'bumps' ? 1 : 0);
-    if (s[k] > b[k] + slack) notes.push(`worse ${k}: ${b[k]} -> ${s[k]}`);
+    if (value > b[k] + slack) notes.push(`worse ${k}: ${b[k]} -> ${value} (matching ${base.seeds} seeds)`);
   }
+  if (b && !comparable) console.log(`note: ${key} has fewer than ${base.seeds} baseline seeds; performance comparison skipped, rules still checked`);
   if (notes.length) failed = true;
   const line = `${notes.length ? 'FAIL' : 'ok  '} ${key.padEnd(20)} finish ${String(s.finishS).padStart(6)} s  turn/rescue ${String(s.turnDegPerRescue).padStart(5)}°  m/rescue ${String(s.metresPerRescue).padStart(5)}  flips/min ${String(s.flipsPerMin).padStart(4)}`;
   console.log(line);

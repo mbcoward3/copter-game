@@ -117,7 +117,7 @@ function makePlayer(idx) {
     parked: true, altOff: 0, idleT: 0, incoming: 0, shake: 0, squash: 0, camG: 1,
     cargo: [], target: null, boardCd: 0, dropCd: 0, washAcc: 0, hornCd: 0, speakCd: 0,
     camPos: new THREE.Vector3(), camYaw: 0, camLook: new THREE.Vector3(),
-    rescued: 0, hint: '', input: { f: 0, t: 0, l: 0, s: 0, w: 0, horn: false },
+    rescued: 0, hint: '', rescueDestination: '', input: { f: 0, t: 0, l: 0, s: 0, w: 0, horn: false },
     pro: false, tiltF: 0, tiltS: 0, winch: 0, style: 0, flash: '', flashT: 0, rateCd: 0,
     ui: { score: $('.score', pane), slots: [...pane.querySelectorAll('.slot')], hint: $('.hint', pane), alt: $('.alt', pane), water: $('.water', pane), fill: $('.water .fill', pane), radar: $('.radar', pane).getContext('2d') },
   };
@@ -265,6 +265,7 @@ function parkPlayer(p) {
   p.bpos.copy(p.pos).y -= 3; p.bvel.set(0, 0, 0); p.ropeLen = 0.6; p.stow = 1;
   p.camYaw = p.yaw; p.camPos.set(pad.x - Math.sin(p.yaw) * 24, PAD_Y + 12, pad.z - Math.cos(p.yaw) * 24); p.camLook.copy(p.pos);
   p.avoidT = p.backT = p.wedgeT = p.manualT = 0; p.wedgeAt = null; p.spray = null;
+  p.rescueDestination = '';
 }
 assignBerths(); players.forEach(parkPlayer);
 const activePlayers = () => players.filter(p => p.active);
@@ -549,7 +550,9 @@ function updatePlayer(p, dt, t) {
       const room = p.cargo.length + p.incoming < MAX_CARGO, guide = room ? nearestFor(p) : null;
       const an = p.target || (guide && guide.an);
       // (fighting a fire: to the nearest open water to fill the bucket, then over the flames)
-      const goal = p.fireJob ? (waterReady(p) ? { x: p.fireAim.x - (p.hook.x - p.pos.x), z: p.fireAim.z - (p.hook.z - p.pos.z) } : p.fireJob.fire.dip) : p.cargo.length && (!room || !guide || guide.d > 200) ? HOME_SPOT : an ? (an.kind === 'camp' ? an.site : an.pos) : null;
+      const home = p.cargo.length && (!room || !guide || guide.d > 200);
+      const goal = p.fireJob ? (waterReady(p) ? { x: p.fireAim.x - (p.hook.x - p.pos.x), z: p.fireAim.z - (p.hook.z - p.pos.z) } : p.fireJob.fire.dip) : home ? HOME_SPOT : an ? (an.kind === 'camp' ? an.site : an.pos) : null;
+      p.rescueDestination = p.fireJob ? '' : home ? 'home' : an ? 'friend' : '';
       if (goal) {
         gd = Math.hypot(goal.x - p.pos.x, goal.z - p.pos.z);
         off = angDiff(Math.atan2(goal.x - p.pos.x, goal.z - p.pos.z), p.yaw);
@@ -741,14 +744,21 @@ function landingFor(S, ahead, from, skip, fly) {
       const far = from.h !== undefined ? dubinsLength(from.x, from.z, from.h, ex, ez, h, APP.R) : Math.hypot(ex - from.x, ez - from.z) + 60 * Math.abs(angDiff(Math.atan2(qx - from.x, qz - from.z), h));
       // (and facing the way it will taxi on, so it does not land and then have to turn about on the water)
       const cost = far + 4 * r + (r > 10 ? 25 * Math.abs(angDiff(h, Math.atan2(wet.x - qx, wet.z - qz))) : 0);
-      if (fly) near.push({ x: qx, z: qz, h, r, cost });
+      // The actual approach may need a long detour over terrain. Do not let a fixed shortlist of cheap-looking
+      // lanes hide a slightly further landing with a much shorter safe flight. The bound includes the final and
+      // allows the 15% preference for the lane chosen before takeoff; terrain can only lengthen that flight.
+      if (fly) near.push({ x: qx, z: qz, h, r, cost, lower: 0.85 * (far + APP.final) + 4 * r });
       if (cost < bs) { bs = cost; best = { x: qx, z: qz, h }; }
     }
   }
   if (fly && near.length) {
-    near.sort((a, b) => a.cost - b.cost);
+    near.sort((a, b) => a.lower - b.lower);
     let fb = 1e9;
-    for (const q of near.slice(0, 16)) { const c = fly(q) + 4 * q.r; if (c < fb) { fb = c; best = { x: q.x, z: q.z, h: q.h }; } }
+    for (const q of near) {
+      if (q.lower >= fb) break;
+      const c = fly(q) + 4 * q.r;
+      if (c < fb) { fb = c; best = { x: q.x, z: q.z, h: q.h }; }
+    }
   }
   return best;
 }
@@ -782,6 +792,7 @@ function planePilot(p, t, dt, ready, room) {
     if (!A.park) { const ahead = { x: p.pos.x + Math.sin(p.yaw) * 220, z: p.pos.z + Math.cos(p.yaw) * 220 }; A.park = nav.water.open(ahead.x, ahead.z, 22, 260) || nav.water.open(p.pos.x, p.pos.z, 22, 400) || { x: p.pos.x, z: p.pos.z }; }
     kind = 'park'; goal = A.park; key = 'park';
   } else { kind = 'free'; goal = null; key = 'free'; }
+  p.rescueDestination = kind === 'dock' ? 'home' : kind === 'pickup' ? 'friend' : '';
   if (p.input.f > 0 || (p.afloat && p.fs < 6)) A.park = null;          // (kept through the splash and roll-out)
   if (key !== A.key) { A.key = key; A.land = null; A.final = false; A.air = null; A.path = null; A.bomb = null; A.arrived = false; A.stallT = null; A.stallAt = null; A.reverseUntil = 0; A.tried = null; A.goes = 0; A.tkSpot = null; A.pre = undefined; }
   // (setting off from its berth: first round, slowly and nearly on the spot, to face away from the pier, so the wing
@@ -912,6 +923,10 @@ function planePilot(p, t, dt, ready, room) {
   // ---- in the air, to land: a spot chosen once and kept (a pilot who keeps changing their mind never lands), chosen
   // again only if the friend drifts well away from it; then the curve onto its final, and the final
   if (A.land && Math.hypot(goal.x - A.land.gx, goal.z - A.land.gz) > 30) A.land = null;
+  // A lane chosen during climb-out may have no flyable approach yet. Once the terrain-avoiding climb has changed
+  // our position and height, compare lanes again instead of committing to the first one and an extra circuit.
+  const retryApproach = game.t - (A.pathFail ?? -9) > 1 || alt > (A.pathFailAlt ?? Infinity) + 4;
+  if (A.land && !A.path && !A.final && retryApproach) A.land = null;
   if (!A.land) {
     const ahead = kind === 'scoop' ? 100 : 0;      // (skim, fill and lift off: about 100 m of water beyond touching down)
     // (by the length of the path it would really fly; the spot it chose before taking off a little favoured, so it does
@@ -935,7 +950,10 @@ function planePilot(p, t, dt, ready, room) {
   // (the path: planned once from here, and again only if it strays well off it or it was blocked)
   // (too high to get down off the curve as it is, it tries joining the final's line further back, for more room to
   // come down; and if nothing works from here, it tries again in a second)
-  if (!A.path && game.t - (A.pathFail || -9) > 1) { A.path = planApproach(p, alt, L); if (!A.path) A.pathFail = game.t; }
+  if (!A.path && retryApproach) {
+    A.path = planApproach(p, alt, L);
+    if (!A.path) { A.pathFail = game.t; A.pathFailAlt = alt; }
+  }
   const Tk = A.trk || (A.trk = {});
   if (A.path) {
     const pts = A.path.pts;
@@ -1392,6 +1410,7 @@ function updateBoat(p, dt, t) {
   // (home with friends aboard: round to the start of its berth's line, then in along it to lie alongside the pier, and
   // there it waits until everyone is off)
   const home = !p.pro && !fj && !p.target && !!p.berth && ((p.cargo.length > 0 && (!room || !guide || guide.d > 160)) || p.unloading > 0);
+  p.rescueDestination = home ? 'home' : !fj && (p.target || guide) ? 'friend' : '';
   if (home) chooseBerth(p);
   const Bk = home ? berthing(p) : null;
   if (!home) p.berthing = false;
@@ -2934,11 +2953,25 @@ function fireWaypoint(p) {
   if (p.vehicle === 'boat') return p.spray ? null : F.shore;
   return waterReady(p) ? null : p.vehicle === 'plane' ? F.scoop : F.dip;
 }
+// The same small rescue vocabulary for every crew; keep it in the existing bottom hint rather than adding a HUD.
+function assistedRescueHint(p) {
+  const go = activePlayers().length === 1 ? 'W / ↑' : p.idx === 0 ? 'W' : '↑';
+  if (game.celebrate > 0) return '💛 Everyone safe · great rescuing!';
+  if (p.incoming) return p.vehicle === 'heli' ? '🛟 Bringing our friend aboard…' : p.vehicle === 'plane' ? '🛟 Our friend is climbing in…' : '🛟 Pulling our friend aboard…';
+  if (p.unloading || (p.vehicle === 'heli' && p.cargo.length && Math.hypot(p.pos.x, p.pos.z) < 60 && p.grounded)) return '🏡 Helping our friends ashore…';
+  if (p.parked) return 'Hold ' + go + ' · let’s help our friends';
+  if (p.spin < 0.9) return p.vehicle === 'heli' ? 'Hold go · spinning up the rotor…' : 'Hold go · starting the engines…';
+  // Presentation reads the decision already made by the vehicle. Asking navigation again here can warm its
+  // reachability caches at a different point on a drifting friend's route and change the next rescue decision.
+  if (p.rescueDestination === 'home') return '🏡 Hold go · bringing our friends home';
+  if (p.target || p.pickup || p.rescueDestination === 'friend') return '🛟 Hold go · heading to a friend';
+  return '🔎 Hold go · looking for friends';
+}
 // A line of guidance under each pilot's picture; Pilot mode names the actual keys for that player.
 function hintFor(p) {
   const solo = activePlayers().length === 1;
   if (p.flashT > 0) return p.flash;
-  if (!p.pro) return game.fire ? (p.fireJob || p.spray ? ((p.spray || p.fireJob).fire.phase === 'checking' ? '✅ Checking the ground · nearly safe' : 'Hold go · ' + fireStatusFor(p)) : '🔥 Looking for the next fire') : '';
+  if (!p.pro) return game.fire ? (p.fireJob || p.spray ? ((p.spray || p.fireJob).fire.phase === 'checking' ? '✅ Checking the ground · nearly safe' : 'Hold go · ' + fireStatusFor(p)) : '🔥 Looking for the next fire') : assistedRescueHint(p);
   const key = (a, b) => (p.idx && !solo ? b : a);
   const full = p.cargo.length >= MAX_CARGO || (p.cargo.length && !waiting.length);
   if (p.fireJob || p.spray) {

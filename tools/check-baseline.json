@@ -175,10 +175,10 @@
     "heli:snow": {
       "runs": 3,
       "unfinished": [],
-      "finishS": 128.9,
-      "metresPerRescue": 535.3,
-      "turnDegPerRescue": 162,
-      "flipsPerMin": 1.2,
+      "finishS": 131.2,
+      "metresPerRescue": 527,
+      "turnDegPerRescue": 172,
+      "flipsPerMin": 1.8,
       "stuckS": 0,
       "goArounds": null,
       "bumps": 0,
@@ -349,5 +349,8 @@
       "detourPct": 124,
       "rules": {}
     }
+  },
+  "acceptanceNotes": {
+    "heli:snow": "Refreshed for the previously merged summit and iceberg scenery. Original game and polish build both complete in 131.2 s with 1.8 turn-direction changes/min and no rule failures; see RESCUE-POLISH.md."
   }
 }
