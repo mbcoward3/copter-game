@@ -24,6 +24,7 @@ import { retireObject, sharedResource } from './render-resources.js';
 import { createRenderMetrics } from './render-metrics.js';
 import { pilotReadout, ratedFeedback } from './pilot-feedback.mjs';
 import { showRescueFor } from './rescue-guidance.mjs';
+import { celebrationBurst } from './celebration.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const clamp = THREE.MathUtils.clamp, lerp = THREE.MathUtils.lerp;
@@ -2792,7 +2793,8 @@ function missionComplete() {
   // the mission's sticker goes in the book, and its picture showers down round every pilot
   addSticker(game.fire ? 'fire' : Z.id);
   game.stickerT = 0; game.stickerBursts = 14; game.stickerIcon = icon;
-  fx.confetti(0, BASE_Y + 8, 0, 160);
+  const crew = activePlayers();
+  for (const p of crew) fx.confetti(p.pos.x, p.pos.y + 4, p.pos.z, 160 / crew.length);
 }
 // Friends left waiting somewhere nobody is heading any more wave and go home by themselves (reuses the hoppers list).
 function releaseWaiting(test) {
@@ -2968,7 +2970,6 @@ function fireWaypoint(p) {
 // The same small rescue vocabulary for every crew; keep it in the existing bottom hint rather than adding a HUD.
 function assistedRescueHint(p) {
   const go = activePlayers().length === 1 ? 'W / ↑' : p.idx === 0 ? 'W' : '↑';
-  if (game.celebrate > 0) return '💛 Everyone safe · great rescuing!';
   if (p.incoming) return p.vehicle === 'heli' ? '🛟 Bringing our friend aboard…' : p.vehicle === 'plane' ? '🛟 Our friend is climbing in…' : '🛟 Pulling our friend aboard…';
   if (p.unloading || (p.vehicle === 'heli' && p.cargo.length && Math.hypot(p.pos.x, p.pos.z) < 60 && p.grounded)) return '🏡 Helping our friends ashore…';
   if (p.parked) return 'Hold ' + go + ' · let’s help our friends';
@@ -2982,6 +2983,7 @@ function assistedRescueHint(p) {
 // A line of guidance under each pilot's picture; Pilot mode names the actual keys for that player.
 function hintFor(p) {
   const solo = activePlayers().length === 1;
+  if (game.celebrate > 0) return game.fire ? '💛 All fires out · everyone safe!' : '💛 Everyone safe · great rescuing!';
   if (p.flashT > 0) return p.flash;
   if (!p.pro) return game.fire ? (p.fireJob || p.spray ? ((p.spray || p.fireJob).fire.phase === 'checking' ? '✅ Checking the ground · nearly safe' : 'Hold go · ' + fireStatusFor(p)) : '🔥 Looking for the next fire') : assistedRescueHint(p);
   const key = (a, b) => (p.idx && !solo ? b : a);
@@ -3782,7 +3784,11 @@ function simulate(dt) {
       game.celebrate -= dt; game.fireT -= dt;
       if (game.fireT <= 0) {
         game.fireT = 0.28 + Math.random() * 0.3;
-        fx.firework((Math.random() - 0.5) * 90, 34 + Math.random() * 30, (Math.random() - 0.5) * 90 - 10);
+        const crew = activePlayers();
+        for (const p of crew) {
+          const { position: at, scale } = celebrationBurst(p.cam, p.pos, terrainHeight);
+          fx.firework(at.x, at.y, at.z, scale, 1 / crew.length);
+        }
         sfx.firework(0.6 + Math.random() * 0.4);
       }
       if (game.celebrate <= 0) nextMission();
