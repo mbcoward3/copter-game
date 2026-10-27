@@ -82,6 +82,7 @@ const LOOKS = {
   Roof: [[0.2, 0.27, 0.33], 0.45, 0.4], Concrete: [[0.42, 0.42, 0.4], 0.85, 0], FurA: [[0.8, 0.6, 0.4], 0.85, 0], FurB: [[0.95, 0.9, 0.8], 0.85, 0],
   Whale: [[0.1, 0.125, 0.16], 0.22, 0], FlagA: [[1.0, 0.1, 0.012], 0.8, 0], FlagB: [[0.86, 0.86, 0.83], 0.8, 0], FlagC: [[1.0, 0.32, 0.38], 0.8, 0],
   FlagD: [[1.0, 0.4, 0.015], 0.8, 0], FlagE: [[0.02, 0.1, 0.36], 0.8, 0],
+  Snow: [[0.8, 0.84, 0.9], 0.75, 0], Ice: [[0.42, 0.66, 0.84], 0.08, 0],
 };
 // Baked shade (see tools/pack_models.py): dark in the creases, seams and underneath, and a little grimy there too.
 // It rides in the material's "map" slot, so it also dims the surface colour instead of only the ambient light.

@@ -8,6 +8,9 @@
 //   - the helicopter's cable really joins the hook to the basket or bucket, and only one of them is out
 //   - no boat sails through the home pier or the harbour's jetties
 //   - moving on to the next mission leaves everyone where they are (only a fresh outing starts at home)
+//   - the snowy peaks' scenery is in place (__game.debug.icyCheck: icebergs charted and clear of rescue spots, penguins
+//     and the lodge on the ground), and in its own outing at night the easy helicopter, holding only go, fetches the
+//     climber off the summit without any new shaders being built on the way (see ICY-PEAKS.md)
 // and saves screenshots along the way (build/play/) to look at.
 //
 //   npm run play-check                      every machine x Rescue / Firefighting / Surprise me, solo, plus two together
@@ -27,6 +30,7 @@ mkdirSync(OUT, { recursive: true });
 const jobs = [];
 for (const v of ['heli', 'plane', 'boat']) for (const mode of ['rescue', 'fire', 'mixed']) jobs.push({ name: `${v}-${mode}`, pilots: [v], mode });
 jobs.push({ name: 'heli+plane-rescue', pilots: ['heli', 'plane'], mode: 'rescue' }, { name: 'plane+boat-fire', pilots: ['plane', 'boat'], mode: 'fire' });
+jobs.push({ name: 'heli-summit-night', pilots: ['heli'], mode: 'rescue', stage: 'summit' });
 const todo = jobs.filter(j => !ONLY || j.name.includes(ONLY));
 
 // what the page reports twice a second (kept small: it crosses the pipe)
@@ -82,6 +86,11 @@ async function play(job, page) {
   await new Promise(r => setTimeout(r, 1500));
   const first = await page.evaluate(SAMPLE);
   for (const q of first.pilots) { const d = Math.hypot(q.pos[0], q.pos[2]); if (d > 120) notes.push(`${q.v} started ${Math.round(d)} m from the home base (at ${q.pos[0]},${q.pos[2]})`); }
+  for (const b of await page.evaluate('__game.debug.icyCheck()')) notes.push('BROKE icyScenery: ' + b);
+  // (the summit outing: at night, on a snowy-peaks mission, 60 m out from the zone, with a climber waiting up top)
+  let summit = null;
+  if (job.stage === 'summit') summit = await page.evaluate(`(() => { const G = __game; G.setPreset(2); G.debug.zone('snow'); G.debug.goto('snow', 60);
+    window.__summitId = G.debug.add('summit').id; return { programs: G.renderer.info.programs.length, picked: null }; })()`);
   // hold go: W for the first pilot, up arrow for the second
   await page.key('KeyW', true); if (job.pilots.length > 1) await page.key('ArrowUp', true);
   const start = first.pilots.map(q => ({ rescued: q.rescued, water: q.water })), seen = { cargo: [0, 0], water: [0, 0], drop: [0, 0], idle: [0, 0], mission: first.mission };
@@ -111,8 +120,15 @@ async function play(job, page) {
       if (q.water < 0.2 && seen.water[i] > 0.8) seen.drop[i] = 1;
     });
     if (o.boatsInPiers.length) broke('boatInPier', o.boatsInPiers[0].join(','));
+    if (summit && summit.picked === null && await page.evaluate('!__game.waiting.some(a => a.id === window.__summitId)')) summit.picked = s / 2;
+    if (summit && s === 20) summit.programs = await page.evaluate('__game.renderer.info.programs.length');
     if (o.mission !== seen.mission) seen.missionDone = true;
     if (s === 10 || s === SECONDS || s === SECONDS * 2 - 1) { const f = join(OUT, `${job.name}-${Math.round(s / 2)}s.jpg`); writeFileSync(f, await page.screenshot()); shots.push(f); }
+  }
+  if (summit) {
+    if (summit.picked === null || summit.picked > 90) notes.push(`NO PROGRESS: the summit climber was not picked up within ${Math.min(SECONDS, 90)} s`);
+    const now = await page.evaluate('__game.renderer.info.programs.length');
+    if (now > summit.programs) notes.push(`BROKE shaderHitch: ${now - summit.programs} shader programs were built after the first 10 s in the snowy peaks at night`);
   }
   // on to the next mission, as finishing this one does: nobody is moved (watched every 50 ms across the switch)
   const before = await page.evaluate('({ m: __game.game.mission, pos: __game.players.filter(p => p.active).map(p => p.pos.toArray()) })');
@@ -142,7 +158,7 @@ async function play(job, page) {
     if (fire && !seen.water[i] && v !== 'boat' && !seen.missionDone) notes.push(`NO PROGRESS: ${v} never took on water in ${SECONDS} s`);
     if (fire && seen.water[i] >= 0.8 && !seen.drop[i] && v !== 'boat') notes.push(`NO PROGRESS: ${v} filled up but never dropped in ${SECONDS} s`);
   });
-  return { ...job, ok: !notes.length, notes, shots, fire: first.fire, rate: +rate.toFixed(2) };
+  return { ...job, ok: !notes.length, notes, shots, fire: first.fire, rate: +rate.toFixed(2), summitS: summit ? summit.picked : undefined };
 }
 
 if (!CHROME) { console.error('No Chrome found (set CHROME to its path).'); process.exit(2); }
@@ -161,7 +177,7 @@ console.log('\n');
 let failed = false;
 for (const r of results.sort((a, b) => a.name.localeCompare(b.name))) {
   if (!r.ok) failed = true;
-  console.log(`${r.ok ? 'ok  ' : 'FAIL'} ${r.name}${r.fire ? ' (fire)' : ''}  (game ran at ${r.rate}x real time)`);
+  console.log(`${r.ok ? 'ok  ' : 'FAIL'} ${r.name}${r.fire ? ' (fire)' : ''}  (game ran at ${r.rate}x real time)${r.summitS != null ? `  summit climber aboard at ${r.summitS} s` : ''}`);
   for (const n of r.notes) console.log('       ' + n);
 }
 writeFileSync(join(OUT, 'results.json'), JSON.stringify(results, null, 2));
