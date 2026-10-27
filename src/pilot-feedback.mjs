@@ -16,7 +16,7 @@ export function pilotReadout(p, { friendDistance = Infinity, homeDistance = Infi
   } else if (p.cargo.length && homeDistance < 90 && (boat || (p.vehicle === 'plane' && p.afloat)) && Number.isFinite(pierGap)) {
     rows.push(row('range', 'Pier gap', Math.max(0, pierGap).toFixed(1), 'm'));
   } else if (p.cargo.length && Number.isFinite(homeDistance)) {
-    rows.push(row('range', 'Home', Math.round(homeDistance), 'm'));
+    rows.push(row('range', p.vehicle === 'heli' ? 'Home' : 'Jetty', Math.round(homeDistance), 'm'));
   }
   return rows;
 }

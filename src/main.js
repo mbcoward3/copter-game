@@ -23,6 +23,7 @@ import { createPortraits } from './portraits.js';
 import { retireObject, sharedResource } from './render-resources.js';
 import { createRenderMetrics } from './render-metrics.js';
 import { pilotReadout, ratedFeedback } from './pilot-feedback.mjs';
+import { showRescueFor } from './rescue-guidance.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const clamp = THREE.MathUtils.clamp, lerp = THREE.MathUtils.lerp;
@@ -3020,8 +3021,11 @@ function drawRadar(p) {
     if (d > R) { rx *= R / d; ry *= R / d; edge = true; }
     draw(c + rx, c - ry, edge);
   };
-  // base
-  plot(0, 0, (x, y) => { g.fillStyle = '#5dff8f'; g.beginPath(); g.arc(x, y, 13, 0, 7); g.fill(); g.fillStyle = '#0b3'; g.font = 'bold 17px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#063'; g.fillText('H', x, y + 1); });
+  // The delivery area: helicopters use the paddock; water vehicles unload beside the home pier.
+  const home = p.vehicle === 'heli' ? HOME_SPOT : DOCK;
+  const radar = g.canvas, description = 'Radar. Green ' + (p.vehicle === 'heli' ? 'H: home landing area.' : 'anchor: home jetty.') + ' Gold: friends for your vehicle. Orange: fires for your equipment. Blue: fill point.';
+  if (radar.getAttribute('aria-label') !== description) radar.setAttribute('aria-label', description);
+  plot(home.x, home.z, (x, y) => { g.fillStyle = '#5dff8f'; g.beginPath(); g.arc(x, y, 13, 0, 7); g.fill(); g.font = 'bold 17px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#063'; g.fillText(p.vehicle === 'heli' ? 'H' : '⚓', x, y + 1); });
   // the zone this mission is in, when the pilot is not there yet: its picture on a disc of its colour, at the radar's rim
   const Z = game.zone;
   if (Z.id !== 'home' && Math.hypot(p.pos.x - Z.x, p.pos.z - Z.z) > Z.r * 0.7) plot(Z.x, Z.z, (x, y) => {
@@ -3031,10 +3035,13 @@ function drawRadar(p) {
   });
   // animals
   const pulse = 0.5 + 0.5 * Math.sin(game.t * 5);
-  for (const a of waiting) plot(a.fire?.x ?? a.pos.x, a.fire?.z ?? a.pos.z, (x, y, edge) => {
-    g.fillStyle = burning(a) ? '#ff5a2a' : '#ffd23c'; g.beginPath(); g.arc(x, y, edge ? 8 : 10, 0, 7); g.fill();
-    g.strokeStyle = 'rgba(255,210,60,' + (0.7 - pulse * 0.6) + ')'; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 12 + pulse * 12, 0, 7); g.stroke();
-  });
+  for (const a of waiting) {
+    if (!showRescueFor(p.vehicle, a, game.t)) continue;
+    plot(a.fire?.x ?? a.pos.x, a.fire?.z ?? a.pos.z, (x, y, edge) => {
+      g.fillStyle = burning(a) ? '#ff5a2a' : '#ffd23c'; g.beginPath(); g.arc(x, y, edge ? 8 : 10, 0, 7); g.fill();
+      g.strokeStyle = 'rgba(255,210,60,' + (0.7 - pulse * 0.6) + ')'; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 12 + pulse * 12, 0, 7); g.stroke();
+    });
+  }
   const fill = fireWaypoint(p);
   if (fill) {
     plot(fill.x, fill.z, (x, y) => { g.fillStyle = '#56caff'; g.beginPath(); g.arc(x, y, 14, 0, 7); g.fill(); g.fillStyle = '#042840'; g.font = 'bold 19px sans-serif'; g.textAlign = 'center'; g.fillText('💧', x, y + 6); });
@@ -3051,7 +3058,7 @@ function updatePilotInstruments(p) {
   // Geometric range only. Do not query a navigation planner (or warm reachability caches) from the HUD.
   let friendDistance = Infinity;
   if (!game.fire && p.cargo.length + p.incoming < MAX_CARGO) for (const an of waiting) {
-    if (an.fire || (p.vehicle !== 'heli' && (inland(an) || an.landlocked || (p.vehicle === 'plane' && an.kind === 'hut')))) continue;
+    if (an.fire || !showRescueFor(p.vehicle, an, game.t)) continue;
     friendDistance = Math.min(friendDistance, Math.hypot(p.pos.x - an.pos.x, p.pos.z - an.pos.z));
   }
   const home = p.vehicle === 'heli' ? HOME_SPOT : DOCK;
