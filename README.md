@@ -24,12 +24,13 @@ Alternatively, open **`rescue-squad-3d.html`** after building (no server or inte
   sites, and stuck on sea-cliff ledges where only the helicopter's basket can reach.
 - Manual controls (per pilot, under “Choose vehicles and controls”) are for grown-ups, and work for all three machines. Helicopter: tilt to accelerate, turn the nose, slide sideways,
   work the collective for height, land it yourself and hold a hover to winch. Landings and pickups are marked out of three stars.
-  Keys: `W`/`S` tilt, `A`/`D` turn, `Q`/`E` slide, `Space`/`Shift` climb and descend, `R` winch (blue: arrows, `,`/`.`, `Enter`/`Shift`, `Ctrl`).
+  Keys: `W`/`S` tilt, `A`/`D` turn, `Q`/`E` slide, `Space`/`Left Shift` climb and descend, `R` winch (blue: arrows, `,`/`.`, `Enter`/`Right Shift`, `Right Ctrl`).
   Gamepad: left stick tilt, right stick turn, triggers climb and descend, A winch.
   For slow seaplane taxiing on a gamepad, use a light forward or reverse stick input; full forward gives takeoff power.
+  You can bring friends home before filling every seat; the hints explain boarding and the approach to the base or jetty.
   Boat: `W`/`S` throttle, `A`/`D` steer; stop beside a friend and the crew throws a ring automatically (`R` can also throw it).
   Seaplane: hold `W` on the water to take off; in the air it cruises by itself, with `W` boosting and `S` easing off.
-  `A`/`D` turn and `Space`/`Shift` climb and descend. Fly down to land on water, then taxi up to a friend and stop for boarding.
+  `A`/`D` turn and `Space`/`Left Shift` climb and descend. Fly down to land on water, then taxi up to a friend and stop for boarding.
   Manual pilots have a compact live instrument panel: speed, height above the surface and climb/descent for aircraft;
   speed and approach range for boats. It shows a nearby friend, home or the gap to the pier as appropriate. Lower-star
   landings and pickups give a practical target for the next attempt. Each pilot's instruments follow their own controls.

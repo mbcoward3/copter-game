@@ -4,7 +4,7 @@
   "description": "Little Rescue Squad 3D: an offline-capable cooperative rescue game",
   "private": true,
   "scripts": {
-    "test": "node tools/test-flight-safety.mjs && node tools/test-flightpath.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs && node tools/test-fire-scene.mjs && node tools/test-render-resources.mjs && node tools/test-mission-transition.mjs && node tools/test-check-comparison.mjs && node tools/test-pilot-feedback.mjs && node tools/test-rescue-guidance.mjs && node tools/test-celebration.mjs && node tools/test-manual-controls.mjs",
+    "test": "node tools/test-flight-safety.mjs && node tools/test-flightpath.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs && node tools/test-fire-scene.mjs && node tools/test-render-resources.mjs && node tools/test-mission-transition.mjs && node tools/test-check-comparison.mjs && node tools/test-pilot-feedback.mjs && node tools/test-rescue-guidance.mjs && node tools/test-celebration.mjs && node tools/test-manual-controls.mjs && node tools/test-manual-guidance.mjs && node tools/test-fire-progress.mjs",
     "build": "node build.mjs",
     "serve": "node serve.mjs",
     "check": "node tools/check.mjs",
@@ -14,6 +14,7 @@
     "radar-check": "node tools/radar-check.mjs",
     "celebration-check": "node tools/celebration-check.mjs",
     "analog-check": "node tools/analog-check.mjs",
+    "manual-guidance-check": "node tools/manual-guidance-check.mjs",
     "render-check": "node tools/render-check.mjs",
     "profile": "node tools/profile-render.mjs",
     "build:hosted": "node build.mjs --hosted"
