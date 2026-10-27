@@ -2901,7 +2901,13 @@ function setFace(el, emoji) {
   }
   return true;
 }
+function syncGameGuidance() {
+  canvas.setAttribute('aria-label', 'Rescue game. ' + activePlayers().map(p =>
+    (p.idx ? 'Blue: ' : 'Red: ') + (p.pro ? pilotStartGuide(p.vehicle, !!p.idx).replace(/<[^>]*>/g, '') : 'Hold ' + (p.idx ? 'up arrow' : 'W') + ' to go; your crew helps.')
+  ).join(' '));
+}
 function syncHud() {
+  syncGameGuidance();
   $('#mIcon').textContent = game.fire ? FIRE_ICON : game.zone.icon;
   const row = $('#mSlots');
   while (row.children.length < game.goal) row.appendChild(document.createElement('span'));
@@ -2923,6 +2929,7 @@ function syncHud() {
   }
 }
 function layoutHud() {
+  syncGameGuidance();
   const two = activePlayers().length > 1, playing = game.state === 'play';
   const p0 = players[0].pane, p1 = players[1].pane;
   p0.style.display = playing ? '' : 'none'; p1.style.display = playing && two ? '' : 'none';
@@ -3157,6 +3164,20 @@ function beginOuting() {
 function savePilotChoices() {
   try { localStorage.setItem('rescue-squad-pilots', JSON.stringify(players.map(p => ({ vehicle: vehicleChoice[p.idx], pro: p.pro })))); } catch { /* private browsing */ }
 }
+function pilotStartGuide(vehicle, blue) {
+  const go = blue ? '↑' : 'W', lift = blue ? 'Enter' : 'Space';
+  if (vehicle === 'heli') return `Hold <kbd>${lift}</kbd> to lift off, then <kbd>${go}</kbd> to fly.`;
+  if (vehicle === 'plane') return `Hold <kbd>${go}</kbd> to speed up, then <kbd>${lift}</kbd> to lift off.`;
+  return `Hold <kbd>${go}</kbd> to throttle; <kbd>${blue ? '← / →' : 'A / D'}</kbd> to steer.`;
+}
+function syncMenuGuidance() {
+  const names = { heli: 'helicopter', plane: 'seaplane', boat: 'boat' };
+  const red = players[0], blue = players[1];
+  $('.go-tip').innerHTML = (red.pro ? pilotStartGuide(vehicleChoice[0], false) : 'Hold <kbd>W</kbd> (or <kbd>↑</kbd> solo) to go.') +
+    `<span class="control-summary">${red.pro ? 'Manual' : 'Assisted'} ${names[vehicleChoice[0]]} · ${red.pro ? (vehicleChoice[0] === 'boat' ? 'you handle throttle and steering' : 'you handle height and steering') : 'Your crew helps with the rest.'}</span>`;
+  $('#togetherGuide').innerHTML = `Playing together? Blue: ${blue.pro ? 'Manual' : 'Assisted'} ${names[vehicleChoice[1]]} · ` +
+    (blue.pro ? pilotStartGuide(vehicleChoice[1], true) : 'Hold <kbd>↑</kbd> to go; your crew helps.');
+}
 function syncPilotChoices() {
   for (const p of players) {
     const card = $('.card[data-pilot="' + p.idx + '"]');
@@ -3168,6 +3189,7 @@ function syncPilotChoices() {
       const on = (b.dataset.m === 'pro') === p.pro; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
     }
   }
+  syncMenuGuidance();
 }
 try {
   const choices = JSON.parse(localStorage.getItem('rescue-squad-pilots') || 'null');
