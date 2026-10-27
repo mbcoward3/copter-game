@@ -22,9 +22,10 @@ import { CHROME, launch, openPage } from './cdp.mjs';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const args = process.argv.slice(2), opt = (n, d) => { const i = args.indexOf('--' + n); return i < 0 ? d : args[i + 1]; };
+const LOCATION = opt('location', '');
 const SECONDS = Number(opt('seconds', 75)), ONLY = opt('only', ''), WORKERS = Number(opt('workers', 4));
 const GAME = pathToFileURL(resolve(opt('game', join(ROOT, 'rescue-squad-3d.html')))).href;
-const OUT = join(ROOT, 'build', 'play');
+const OUT = join(ROOT, 'build', LOCATION ? 'play-' + LOCATION : 'play');
 mkdirSync(OUT, { recursive: true });
 
 const jobs = [];
@@ -81,10 +82,12 @@ async function play(job, page) {
   // the menu, as a person uses it
   await page.click('#setup > summary');
   await page.click(`[data-mode="${job.mode}"]`);
+  if (LOCATION) await page.evaluate(`(() => { const s=document.querySelector('#location'); s.value=${JSON.stringify(LOCATION)}; s.dispatchEvent(new Event('change',{bubbles:true})); })()`);
   for (let i = 0; i < job.pilots.length; i++) { await page.click(`.veh[data-p="${i}"][data-v="${job.pilots[i]}"]`); await page.click(`.flt[data-p="${i}"][data-m="easy"]`); }
   await page.click(job.pilots.length > 1 ? '#start2' : '#start1');
   await new Promise(r => setTimeout(r, 1500));
   const first = await page.evaluate(SAMPLE);
+  if (LOCATION && await page.evaluate('__game.game.zone.id') !== LOCATION) notes.push('doing: starting a fixed-location outing; wrong zone');
   for (const q of first.pilots) { const d = Math.hypot(q.pos[0], q.pos[2]); if (d > 120) notes.push(`${q.v} started ${Math.round(d)} m from the home base (at ${q.pos[0]},${q.pos[2]})`); }
   for (const b of await page.evaluate('__game.debug.icyCheck()')) notes.push('BROKE icyScenery: ' + b);
   // (the summit outing: at night, on a snowy-peaks mission, 60 m out from the zone, with a climber waiting up top)
