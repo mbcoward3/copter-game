@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { compareBaseline } from './check-comparison.mjs';
+const runs = Array.from({ length: 8 }, (_, i) => ({ seed: i + 1, scores: { finishS: i < 3 ? 100 : 1000 } }));
+const baseline = { finishS: 100 }, tolerances = { finishS: 0.2 };
+assert.deepEqual(compareBaseline(runs, baseline, 3, tolerances), { comparable: true, regressions: [] }, 'different extra scenarios must not look like a regression');
+runs[0].scores.finishS = 180;
+assert.equal(compareBaseline(runs, baseline, 3, tolerances).regressions.length, 1, 'expanded coverage must still catch a slowdown on baseline scenarios');
+assert.equal(compareBaseline(runs.slice(0, 2), baseline, 3, tolerances).comparable, false, 'a partial baseline population cannot be compared');
+assert.equal(compareBaseline(runs.slice(0, 3), { finishS: null }, 3, tolerances).regressions.length, 0, 'missing baseline metrics remain unavailable');
+console.log('Matching-seed baseline comparisons and regression detection passed');

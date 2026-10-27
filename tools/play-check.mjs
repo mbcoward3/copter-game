@@ -19,6 +19,7 @@ import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CHROME, launch, openPage } from './cdp.mjs';
+import { observeMissionTransition } from './mission-transition.mjs';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const args = process.argv.slice(2), opt = (n, d) => { const i = args.indexOf('--' + n); return i < 0 ? d : args[i + 1]; };
@@ -32,6 +33,8 @@ const jobs = [];
 for (const v of ['heli', 'plane', 'boat']) for (const mode of ['rescue', 'fire', 'mixed']) jobs.push({ name: `${v}-${mode}`, pilots: [v], mode });
 jobs.push({ name: 'heli+plane-rescue', pilots: ['heli', 'plane'], mode: 'rescue' }, { name: 'plane+boat-fire', pilots: ['plane', 'boat'], mode: 'fire' });
 jobs.push({ name: 'heli-summit-night', pilots: ['heli'], mode: 'rescue', stage: 'summit' });
+for (const v of ['heli', 'plane', 'boat']) for (const mode of ['rescue', 'fire']) jobs.push({ name: `${v}-manual-${mode}`, pilots: [v], mode, manual: true });
+jobs.push({ name: 'heli+boat-mixed-controls-rescue', pilots: ['heli', 'boat'], mode: 'rescue', manual: true, mixedControls: true });
 const todo = jobs.filter(j => !ONLY || j.name.includes(ONLY));
 
 // what the page reports twice a second (kept small: it crosses the pipe)
@@ -78,12 +81,14 @@ const SAMPLE = `(() => {
 
 async function play(job, page) {
   const notes = [], shots = [];
+  // Manual outings exercise real startup, throttle and steering; mission completion still needs a human pilot.
+  const seconds = job.manual ? Math.min(SECONDS, 20) : SECONDS;
   await page.goto(GAME, "!!(window.__game && document.querySelector('canvas.ready'))");
   // the menu, as a person uses it
   await page.click('#setup > summary');
   await page.click(`[data-mode="${job.mode}"]`);
   if (LOCATION) await page.evaluate(`(() => { const s=document.querySelector('#location'); s.value=${JSON.stringify(LOCATION)}; s.dispatchEvent(new Event('change',{bubbles:true})); })()`);
-  for (let i = 0; i < job.pilots.length; i++) { await page.click(`.veh[data-p="${i}"][data-v="${job.pilots[i]}"]`); await page.click(`.flt[data-p="${i}"][data-m="easy"]`); }
+  for (let i = 0; i < job.pilots.length; i++) { await page.click(`.veh[data-p="${i}"][data-v="${job.pilots[i]}"]`); await page.click(`.flt[data-p="${i}"][data-m="${job.manual && (!job.mixedControls || i === 1) ? 'pro' : 'easy'}"]`); }
   await page.click(job.pilots.length > 1 ? '#start2' : '#start1');
   await new Promise(r => setTimeout(r, 1500));
   const first = await page.evaluate(SAMPLE);
@@ -96,16 +101,18 @@ async function play(job, page) {
     window.__summitId = G.debug.add('summit').id; return { programs: G.renderer.info.programs.length, picked: null }; })()`);
   // hold go: W for the first pilot, up arrow for the second
   await page.key('KeyW', true); if (job.pilots.length > 1) await page.key('ArrowUp', true);
+  if (job.manual && !job.mixedControls && job.pilots[0] === 'heli') { await page.key('Space', true); await new Promise(r => setTimeout(r, 6000)); await page.key('Space', false); }
   const start = first.pilots.map(q => ({ rescued: q.rescued, water: q.water })), seen = { cargo: [0, 0], water: [0, 0], drop: [0, 0], idle: [0, 0], mission: first.mission };
   const breaks = {};
   const broke = (k, detail) => { if (!breaks[k]) breaks[k] = { n: 0, first: detail }; breaks[k].n++; };
-  for (let s = 0; s < SECONDS * 2; s++) {
+  for (let s = 0; s < seconds * 2; s++) {
     await new Promise(r => setTimeout(r, 500));
     const o = await page.evaluate(SAMPLE);
     if (o.state !== 'play' || o.paused) { broke('notPlaying', o.state + (o.paused ? ' paused' : '')); await page.key('KeyW', true); }
     o.pilots.forEach((q, i) => {
       if (q.bad.length) broke('notANumber', q.v + ': ' + q.bad.join(','));
       if (q.hud.visible !== o.fire) broke('fireHudVisibility', q.v + ': fire panel visibility disagrees with mission');
+      if (!o.fire && !q.hud.hint.trim()) broke('rescueHudGuidance', q.v + ': doing rescue mission with no guidance in the existing hint');
       if (o.fire) {
         const equipment = q.v === 'boat' ? 'Pump pressure' : q.v === 'heli' ? 'Bucket' : 'Tank';
         if (q.hud.equipment !== equipment || !q.hud.label) broke('fireHudEquipment', q.v + ': missing equipment or guidance');
@@ -126,27 +133,24 @@ async function play(job, page) {
     if (summit && summit.picked === null && await page.evaluate('!__game.waiting.some(a => a.id === window.__summitId)')) summit.picked = s / 2;
     if (summit && s === 20) summit.programs = await page.evaluate('__game.renderer.info.programs.length');
     if (o.mission !== seen.mission) seen.missionDone = true;
-    if (s === 10 || s === SECONDS || s === SECONDS * 2 - 1) { const f = join(OUT, `${job.name}-${Math.round(s / 2)}s.jpg`); writeFileSync(f, await page.screenshot()); shots.push(f); }
+    if (job.manual && s === 12) await page.key(job.mixedControls ? 'ArrowLeft' : 'KeyA', true);
+    if (job.manual && s === 16) await page.key(job.mixedControls ? 'ArrowLeft' : 'KeyA', false);
+    if (s === 10 || s === seconds || s === seconds * 2 - 1) { const f = join(OUT, `${job.name}-${Math.round(s / 2)}s.jpg`); writeFileSync(f, await page.screenshot()); shots.push(f); }
   }
   if (summit) {
     if (summit.picked === null || summit.picked > 90) notes.push(`NO PROGRESS: the summit climber was not picked up within ${Math.min(SECONDS, 90)} s`);
     const now = await page.evaluate('__game.renderer.info.programs.length');
     if (now > summit.programs) notes.push(`BROKE shaderHitch: ${now - summit.programs} shader programs were built after the first 10 s in the snowy peaks at night`);
   }
-  // on to the next mission, as finishing this one does: nobody is moved (watched every 50 ms across the switch)
-  const before = await page.evaluate('({ m: __game.game.mission, pos: __game.players.filter(p => p.active).map(p => p.pos.toArray()) })');
-  await page.evaluate('__game.debug.next()');
-  let prev = before.pos, after = null;
-  for (let i = 0; i < 60 && !after; i++) {
-    await new Promise(r => setTimeout(r, 50));
-    const o = await page.evaluate('({ m: __game.game.mission, pos: __game.players.filter(p => p.active).map(p => p.pos.toArray()) })');
-    if (o.m !== before.m) after = { prev, pos: o.pos }; else prev = o.pos;
-  }
+  // Watch inside the page, frame by frame: a delayed DevTools reply must not turn normal travel into a teleport.
+  const after = await page.evaluate(`(${observeMissionTransition.toString()})(__game)`);
   if (!after) notes.push('BROKE nextMission: the next mission never started');
   else after.pos.forEach((q, i) => { const d = Math.hypot(q[0] - after.prev[i][0], q[2] - after.prev[i][2]); if (d > 15) notes.push(`BROKE movedBetweenMissions: ${job.pilots[i]} jumped ${Math.round(d)} m when the next mission started`); });
   await page.key('KeyW', false);
+  if (job.pilots.length > 1) await page.key('ArrowUp', false);
+  if (job.manual) await page.key(job.mixedControls ? 'ArrowLeft' : 'KeyA', false);
   // (how much game time really passed: a game crawling along cannot be judged on progress)
-  const tEnd = await page.evaluate('__game.game.t'), rate = (tEnd - first.t) / SECONDS;
+  const tEnd = await page.evaluate('__game.game.t'), rate = (tEnd - first.t) / (seconds + (job.manual && !job.mixedControls && job.pilots[0] === 'heli' ? 6 : 0));
   if (rate < 0.8) notes.push(`TOO SLOW TO JUDGE: only ${rate.toFixed(2)} game seconds per real second`);
   const problems = await page.evaluate('window.__gameProblems || []');
   for (const p of problems.slice(0, 4)) notes.push('game problem: ' + (p.message || p.what) + (p.kind ? ` (${p.kind})` : ''));
@@ -155,12 +159,17 @@ async function play(job, page) {
   for (const [k, v] of Object.entries(breaks)) notes.push(`BROKE ${k} (${v.n} samples): ${v.first}`);
   // progress: something must have happened while go was held
   if (rate >= 0.8) job.pilots.forEach((v, i) => {
+    if (job.manual) return;
     const fire = first.fire;
     if (!fire && !seen.cargo[i] && !seen.missionDone) notes.push(`NO PROGRESS: ${v} picked up nobody in ${SECONDS} s`);
     // (a crewmate may put the fire out first; idleInFire catches a pilot left with nothing to do)
     if (fire && !seen.water[i] && v !== 'boat' && !seen.missionDone) notes.push(`NO PROGRESS: ${v} never took on water in ${SECONDS} s`);
     if (fire && seen.water[i] >= 0.8 && !seen.drop[i] && v !== 'boat') notes.push(`NO PROGRESS: ${v} filled up but never dropped in ${SECONDS} s`);
   });
+  if (job.manual) {
+    const positions = await page.evaluate('__game.players.filter(p => p.active).map(p => p.pos.toArray())');
+    positions.forEach((pos, i) => { if (Math.hypot(pos[0] - first.pilots[i].pos[0], pos[2] - first.pilots[i].pos[2]) < 5) notes.push(`NO PROGRESS: doing manual startup and throttle; ${job.pilots[i]} moved less than 5 m`); });
+  }
   return { ...job, ok: !notes.length, notes, shots, fire: first.fire, rate: +rate.toFixed(2), summitS: summit ? summit.picked : undefined };
 }
 

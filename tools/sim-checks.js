@@ -53,12 +53,15 @@
         const A = p.ap || {}, alt = p.pos.y - G.PLANE_FLOAT;
         if (!p.afloat && P.airT === null) P.airT = t;
         // (counted from the start, or from the last friend aboard: one near enough to taxi to is fetched by water first)
-        if (p.cargo.length + p.incoming > (P.aboard ?? 0) || (p.ap && p.ap.taxi)) P.boardT = t;
+        const boarding = p.cargo.length + p.incoming > (P.aboard ?? 0);
+        if (boarding || (p.ap && p.ap.taxi)) P.boardT = t;
         P.aboard = p.cargo.length + p.incoming;
         if (P.airT === null && t - (P.boardT || 0) > 15) broke('slowTakeoff', p.pos.toArray());
         // (and it is a flying boat: holding go it gets into the air, not round and round the bay on the water. Waiting
         // while friends climb in or get off is not counted)
-        if (!p.afloat || G.game.celebrate > 0) P.wetT = 0;
+        // Nearby rescues legitimately use water: taking friends aboard or delivering them starts a new trip.
+        // Otherwise several successful short taxi trips can accumulate into a fictitious 40-second stall.
+        if (!p.afloat || G.game.celebrate > 0 || boarding || p.rescued > P.rescued) P.wetT = 0;
         else if (!p.incoming && !p.unloading && !(p.berthed && p.cargo.length)) P.wetT = (P.wetT || 0) + 0.1;
         if (P.wetT > 40) { broke('neverFlies', p.pos.toArray()); P.wetT = 0; }
         if (p.afloat) P.liftT = t;

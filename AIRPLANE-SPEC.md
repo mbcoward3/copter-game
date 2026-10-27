@@ -33,6 +33,11 @@ are landed at the pier rather than dropped off in passing:
   home and the berthing together can take a little over a minute, and nothing about that is giving up.
 - `roundabout` (new) is checked against the old teardrop: it flags 6 of 8 missions there, none now.
 
+Rule clarification during rescue polish (2026-10-26): `neverFlies` measures a water trip, restarting when a friend
+boards or is delivered. Home seeds 4 and 6 exposed the old clock accumulating multiple successful short taxi
+rescues into a supposed 40-second failure. Waiting still does not advance the clock; changing targets does not
+reset it. The 40-second limit and independent 60-second no-progress rule remain. See `RESCUE-POLISH.md`.
+
 ## Recommendation: a rescue seaplane
 
 Make the airplane a **floatplane** (think a de Havilland Beaver on floats, in rescue livery). It solves the pickup question naturally: a plane cannot hover over an animal, but a seaplane can land on the water next to one. It also fits the game, which is already about pulling animals out of the sea.

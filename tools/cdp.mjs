@@ -54,7 +54,7 @@ export async function openPage(browser, { width = 1280, height = 720 } = {}) {
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
     return r.result.value;
   };
-  const KEYS = { KeyW: ['w', 87], KeyA: ['a', 65], KeyD: ['d', 68], KeyS: ['s', 83], ArrowUp: ['ArrowUp', 38], Escape: ['Escape', 27] };
+  const KEYS = { KeyW: ['w', 87], KeyA: ['a', 65], KeyD: ['d', 68], KeyS: ['s', 83], ArrowUp: ['ArrowUp', 38], ArrowLeft: ['ArrowLeft', 37], Escape: ['Escape', 27], Space: [' ', 32] };
   return {
     errors, logs, evaluate, sessionId,
     async goto(url, ready = '!!window.__game') {
