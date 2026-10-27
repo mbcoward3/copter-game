@@ -15,10 +15,12 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { CHROME, launch, openPage } from './cdp.mjs';
 import { pathToFileURL } from 'node:url';
+import { compareBaseline } from './check-comparison.mjs';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const args = process.argv.slice(2), opt = (name, d) => { const i = args.indexOf('--' + name); return i < 0 ? d : args[i + 1]; };
 const SEEDS = Number(opt('seeds', 3)), FRAME = Number(opt('frame', 1 / 30)), ONLY = opt('only', ''), ACCEPT = args.includes('--accept');
+const PLANE_SEEDS = Number(opt('plane-seeds', SEEDS));
 const WORKERS = Number(opt('workers', 4)), SECONDS = Number(opt('seconds', 360));
 const GAME = pathToFileURL(resolve(opt('game', join(ROOT, 'rescue-squad-3d.html')))).href;      // (--game another build, to compare)
 const CHECKS = readFileSync(join(ROOT, 'tools', 'sim-checks.js'), 'utf8');
@@ -38,7 +40,7 @@ async function openTestPage(browser) {
 
 // ---------------------------------------------------------------- the run
 const jobs = [];
-for (const vehicle of ['heli', 'plane', 'boat']) for (const [zone, fire] of MISSIONS) for (let seed = 1; seed <= SEEDS; seed++) {
+for (const vehicle of ['heli', 'plane', 'boat']) for (const [zone, fire] of MISSIONS) for (let seed = 1; seed <= (vehicle === 'plane' ? PLANE_SEEDS : SEEDS); seed++) {
   if (opt('zone', '') && zone !== opt('zone', '')) continue;
   const key = `${vehicle}:${zone}${fire ? '-fire' : ''}`;
   if (ONLY && !key.startsWith(ONLY) && !`${vehicle}:${zone}`.startsWith(ONLY)) continue;
@@ -46,7 +48,7 @@ for (const vehicle of ['heli', 'plane', 'boat']) for (const [zone, fire] of MISS
 }
 if (!CHROME) { console.error('No Chrome found (set CHROME to its path).'); process.exit(2); }
 if (!existsSync(new URL(GAME))) { console.error('Build the game first: npm run build'); process.exit(2); }
-console.log(`Checking ${jobs.length} runs (${SEEDS} seeds, ${(1 / FRAME).toFixed(0)} frames a second) on ${WORKERS} Chromes...`);
+console.log(`Checking ${jobs.length} runs (${SEEDS} seeds, ${PLANE_SEEDS} for seaplanes, ${(1 / FRAME).toFixed(0)} frames a second) on ${WORKERS} Chromes...`);
 
 const results = [], t0 = Date.now();
 let lint = null;
@@ -63,6 +65,7 @@ async function worker() {
       results.push({ ...j, ...r });
       const bad = Object.keys(r.rules).length || !r.scores.done;
       process.stdout.write(bad ? 'x' : '.');
+      if (bad) console.log(`\n${j.key} seed ${j.seed}: ${JSON.stringify({ rules: r.rules, worst: r.worst, done: r.scores.done })}`);
     }
   } finally { browser.close(); }
 }
@@ -104,22 +107,17 @@ for (const [key, s] of Object.entries(summary)) {
   const b = base && base.summary[key];
   // Additional seeds expand rule coverage; they must not change the population used for a speed/handling
   // regression against a three-seed baseline. Compare the matching seeds, while checking rules on every run.
-  const matching = b && list.filter(r => r.seed <= base.seeds);
-  const comparable = matching && matching.length === base.seeds;
-  if (b) for (const [k, tol] of Object.entries(WORSE_UP)) {
-    const value = comparable ? mean(matching, k) : null;
-    if (value == null || b[k] == null) continue;
-    const slack = Math.max(b[k] * tol, k === 'stuckS' || k === 'goArounds' || k === 'bumps' ? 1 : 0);
-    if (value > b[k] + slack) notes.push(`worse ${k}: ${b[k]} -> ${value} (matching ${base.seeds} seeds)`);
-  }
-  if (b && !comparable) console.log(`note: ${key} has fewer than ${base.seeds} baseline seeds; performance comparison skipped, rules still checked`);
+  const baselineSeeds = b && (b.runs ?? base.seeds);
+  const comparison = b && compareBaseline(byKey[key], b, baselineSeeds, WORSE_UP);
+  if (comparison) notes.push(...comparison.regressions);
+  if (comparison && !comparison.comparable) console.log(`note: ${key} has fewer than ${baselineSeeds} baseline seeds; performance comparison skipped, rules still checked`);
   if (notes.length) failed = true;
   const line = `${notes.length ? 'FAIL' : 'ok  '} ${key.padEnd(20)} finish ${String(s.finishS).padStart(6)} s  turn/rescue ${String(s.turnDegPerRescue).padStart(5)}°  m/rescue ${String(s.metresPerRescue).padStart(5)}  flips/min ${String(s.flipsPerMin).padStart(4)}`;
   console.log(line);
   for (const n of notes) console.log('       ' + n);
 }
 mkdirSync(join(ROOT, 'build', 'check'), { recursive: true });
-writeFileSync(resolve(opt('out', join(ROOT, 'build', 'check', 'results.json'))), JSON.stringify({ frame: FRAME, seeds: SEEDS, lint, summary, results }, null, 2));
+writeFileSync(resolve(opt('out', join(ROOT, 'build', 'check', 'results.json'))), JSON.stringify({ frame: FRAME, seeds: SEEDS, planeSeeds: PLANE_SEEDS, lint, summary, results }, null, 2));
 if (ACCEPT) { writeFileSync(BASELINE, JSON.stringify({ accepted: new Date().toISOString(), frame: FRAME, seeds: SEEDS, summary }, null, 2)); console.log('\nSaved as the new baseline.'); }
 else if (!base) console.log('\n(no baseline yet: run again with --accept to save one)');
 console.log(failed ? '\nSome checks FAILED (details in build/check/results.json).' : '\nAll checks passed.');

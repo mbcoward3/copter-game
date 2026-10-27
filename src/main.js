@@ -925,7 +925,7 @@ function planePilot(p, t, dt, ready, room) {
   if (A.land && Math.hypot(goal.x - A.land.gx, goal.z - A.land.gz) > 30) A.land = null;
   // A lane chosen during climb-out may have no flyable approach yet. Once the terrain-avoiding climb has changed
   // our position and height, compare lanes again instead of committing to the first one and an extra circuit.
-  const retryApproach = game.t - (A.pathFail ?? -9) > 1 || alt > (A.pathFailAlt ?? Infinity) + 4;
+  const retryApproach = game.t - (A.pathFail ?? -9) > 1 || (kind === 'dock' && alt > (A.pathFailAlt ?? Infinity) + 4);
   if (A.land && !A.path && !A.final && retryApproach) A.land = null;
   if (!A.land) {
     const ahead = kind === 'scoop' ? 100 : 0;      // (skim, fill and lift off: about 100 m of water beyond touching down)
@@ -2963,7 +2963,7 @@ function assistedRescueHint(p) {
   if (p.spin < 0.9) return p.vehicle === 'heli' ? 'Hold go · spinning up the rotor…' : 'Hold go · starting the engines…';
   // Presentation reads the decision already made by the vehicle. Asking navigation again here can warm its
   // reachability caches at a different point on a drifting friend's route and change the next rescue decision.
-  if (p.rescueDestination === 'home') return '🏡 Hold go · bringing our friends home';
+  if (p.cargo.length && p.rescueDestination === 'home') return '🏡 Hold go · bringing our friends home';
   if (p.target || p.pickup || p.rescueDestination === 'friend') return '🛟 Hold go · heading to a friend';
   return '🔎 Hold go · looking for friends';
 }

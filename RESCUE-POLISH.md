@@ -14,8 +14,10 @@ The seaplane landing selector previously considered only the 16 cheapest estimat
 near the same point and require a long terrain-clearing circuit, while a different nearby landing lane went unexamined.
 Compare feasible routes using a conservative distance bound rather than a fixed shortlist.
 Reconsider an unworkable lane after climb-out changes the aircraft's height and position, but keep a valid approach
-stable. Reconsider after gaining 4 m as well as after one second: climbing changes approach feasibility before
-the old retry delay expires, and waiting can otherwise carry the aircraft past a shorter safe joining point.
+stable. On a home approach, reconsider after gaining 4 m as well as after one second: climbing changes approach
+feasibility before the old retry delay expires, and waiting can carry the aircraft past a shorter safe joining point.
+Pickups retain the one-second retry interval: in home seed 6 the faster retry switched pickup lanes mid-climb and
+lengthened the flight. The earlier home seed 7 return needs the quicker check for its constrained pier approach.
 
 Home seeds 4 and 6 also exposed a checker error: `neverFlies` accumulated several successful short taxi rescues.
 Restart its 40-second clock on boarding or delivery (not merely a target change); retain all distance and safety
@@ -25,6 +27,9 @@ Expanded runs check safety and completion on every seed, but compare performance
 seeds. Averaging eight different scenarios against a three-seed benchmark otherwise reports scenario variation as a
 handling regression (the forest-fire turning average was 0.9/min over eight versus 0.3/min over the original three).
 Runs with fewer than the baseline's seed count explicitly skip performance comparison; their rules still apply.
+`npm run check -- --plane-seeds 8` covers all vehicles on the original three seeds and the seaplane on eight in one
+run, without replaying the same seaplane cases twice. `npm run play-check` includes six 20-second manual-control
+smoke outings plus one mixed-control pair alongside the existing assisted outings.
 
 Boat and helicopter navigation do not use fixed-wing landing lanes and do not need that algorithm. Both receive the
 same rescue feedback states, adapted to their startup and boarding mechanics.
