@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { geo, look, model, modelInfo, groundTex, heroLods } from './assets.js';
 import { buildReef } from './reef.js';
+import { placeIcebergs } from './icy.js';
 import { sharedResource, uploadInstances, writeInstance } from './render-resources.js';
 
 // ---------------------------------------------------------------- helpers
@@ -119,6 +120,35 @@ export const WRECK = { x: -238, z: 296, yaw: 0.7 };
 export const BREAKWATER = [[446, -214], [404, -204], [389, -182]];
 export const CRATER = { x: 320, z: 390, r: 11 };
 export const LAKE = { x: -424, z: -246, r: 28 };
+// The glacier in the snowy peaks: a tongue of ice from high on the big peak's shoulder down the valley into the cove,
+// ending in an ice cliff over the water. Points along its middle: x, z, the ice's height there, half its width.
+export const GLACIER = [[44, -530, 64, 20], [62, -512, 44, 16], [74, -495, 29, 14], [88, -479, 17.5, 13], [96, -463, 9.5, 12]];
+// (its edges wander in and out along its length, the same in the terrain and in the ground's paint)
+const iceEdge = (s, side) => 1 + 0.13 * Math.sin(s * 0.083 + side * 1.9) + 0.07 * Math.sin(s * 0.21 + side * 4.1);
+// where (x, z) lies against the glacier: d how far out from its middle line, s how far down it, y the ice's height
+// there, hw its half width, over how far past its foot (the ice cliff) and under how far above its head
+export function glacierAt(x, z, out = {}) {
+  let bd = 1e9, acc = 0;
+  for (let i = 0; i < GLACIER.length - 1; i++) {
+    const a = GLACIER[i], b = GLACIER[i + 1], ux = b[0] - a[0], uz = b[1] - a[1], l = Math.hypot(ux, uz);
+    const t = ((x - a[0]) * ux + (z - a[1]) * uz) / (l * l), first = i === 0, last = i === GLACIER.length - 2;
+    const tc = Math.max(first ? -9 : 0, Math.min(last ? 9 : 1, t)), k = Math.max(0, Math.min(1, t));
+    const sd = ((x - a[0]) * uz - (z - a[1]) * ux) / l, d = Math.abs(sd), dd = Math.hypot(x - a[0] - ux * tc, z - a[1] - uz * tc);
+    if (dd < bd) {
+      bd = dd;
+      out.d = d; out.s = acc + k * l; out.y = a[2] + (b[2] - a[2]) * k; out.hw = (a[3] + (b[3] - a[3]) * k) * iceEdge(out.s, sd < 0 ? -1 : 1);
+      out.over = last && t > 1 ? (t - 1) * l : 0; out.under = first && t < 0 ? -t * l : 0;
+    }
+    acc += l;
+  }
+  return out;
+}
+const _gl = {};
+// how much of (x, z) the glacier covers, 0 to 1
+export function iceAt(x, z) {
+  const g = glacierAt(x, z, _gl);
+  return (1 - smooth((g.d - g.hw + 4) / 6)) * (1 - smooth(g.over / 2.5)) * (1 - smooth(g.under / 14));
+}
 function bar(a, b, w, h) {
   const x = (a[0] + b[0]) / 2, z = (a[1] + b[1]) / 2;
   return { x, z, bar: [a[0], a[1], b[0], b[1]], w, h, r: 0, coast: 0, forest: 0, palms: 0, reach: Math.hypot(b[0] - a[0], b[1] - a[1]) / 2 + w + 12 };
@@ -137,8 +167,8 @@ ISLANDS.push(
     flats: [{ x: 492, z: -160, r: 34, y: 5 }, { x: 502, z: -112, r: 9, y: 5, site: 'Town square', pad: true }] }),
   ...BREAKWATER.slice(1).map((b, i) => bar(BREAKWATER[i], b, 3, 2.4)),
   // the snowy peaks: a ridged range with a sheltered cove where the ice floes collect, and a second peak behind
-  lobe(30, -505, 105, 30, { ridge: 70, pow: 1.8, cliff: 10, cliffDir: [0, -1], forest: 0.6, pine: 1, palms: 0, treeLine: 12, dents: [{ x: 96, z: -432, r: 26, y: -6 }],
-    flats: [{ x: 10, z: -550, r: 13, y: 12, site: 'Ski hut', pad: true }] }),
+  lobe(30, -505, 105, 30, { ridge: 70, pow: 1.8, cliff: 10, cliffDir: [0, -1], forest: 0.75, pine: 1, palms: 0, treeLine: 15, dents: [{ x: 96, z: -432, r: 26, y: -6 }], glacier: true,
+    flats: [{ x: 10, z: -550, r: 16, y: 12, site: 'Ski hut', pad: true }] }),
   lobe(128, -548, 52, 22, { ridge: 40, pow: 1.8, forest: 0.5, pine: 1, palms: 0, treeLine: 12 }),
   // the volcano: a cone with a crater on top, black-sand coves and terraces on its slopes
   lobe(CRATER.x, CRATER.z, 82, 5, { cone: { h: 62, crater: CRATER.r, deep: 10 }, coast: 0.2, forest: 0.4, palms: 0.12, treeLine: 13, cliff: 6, cliffDir: [0.8, 0.6],
@@ -249,6 +279,22 @@ function islandHeight(I, x, z, natural) {
   }
   if (I.sub) h += I.sub;
   if (I.dents) for (const D of I.dents) { const w = 1 - smooth((Math.hypot(x - D.x, z - D.z) - D.r) / (D.f || 14)); if (w > 0) h += (D.y - h) * w; }
+  if (I.glacier) {
+    // the glacier's ice fills its valley to a smooth, slightly domed surface with a few long swells in it, merging into
+    // the mountain's snow at its head and standing as a cliff over the water at its foot (moraine rubble along its sides)
+    const g = glacierAt(x, z, _gl);
+    // (up at its head, where the mountain stands well above the ice, the ice thins out over it rather than cutting a
+    // trench: a snowfield feeding the glacier)
+    const w = iceAt(x, z) * (1 - smooth((h - g.y - 3) / 12) * (1 - smooth((g.s - 20) / 25)));
+    if (w > 0) {
+      const dome = 1.8 * Math.max(0, 1 - (g.d / g.hw) ** 2), swell = 0.5 * Math.sin(g.s * 0.21 + fbm(x * 0.05, z * 0.05) * 3);
+      // (ice lies on its bed: never more than a few metres thick up the mountain, deeper down toward its foot)
+      const thick = 3 + 12 * smooth((g.s - 45) / 35);
+      h += (Math.min(g.y + dome + swell, h + thick) - h) * w;
+    }
+    const rim = Math.exp(-(((g.d - g.hw - 1) / 3) ** 2)) * (1 - smooth(g.over / 2)) * (1 - smooth(g.under / 10));
+    h += rim * 1.4 * (0.6 + 0.8 * fbm(x * 0.2, z * 0.2));
+  }
   if (I.flats && !natural) for (const F of I.flats) { const w = 1 - smooth((Math.hypot(x - F.x, z - F.z) - F.r) / 9); if (w > 0) h += (F.y - h) * w; }
   return h;
 }
@@ -516,6 +562,8 @@ uniform float uFogDensity, uSpec, uNight, uSwell;
 uniform sampler2D uHeightTex, uRipple, uNoise;
 uniform vec3 uReef;        // the coral reef: x, z, radius
 uniform vec3 uLake;        // the forest's lake: x, z, radius
+uniform vec3 uSnowZ;       // the snowy peaks: x, z, radius
+uniform vec4 uIce[5];      // the glacier's line, its foot last
 uniform vec4 uHeli[2];     // xyz world position, w strength
 uniform vec4 uLamp[2];     // searchlight spot on water: xz, radius, strength
 uniform vec3 uWakeBox[${WAKE_TRAILS}];
@@ -579,6 +627,13 @@ void main(){
   // the forest lake is fresh water: dark and peaty, tea-green in its shallows, with no surf on its shore
   float lakeW = 1.0 - smoothstep(uLake.z + 8.0, uLake.z + 24.0, length(p - uLake.xy));
   body = mix(body, mix(vec3(0.012, 0.035, 0.026), vec3(0.05, 0.085, 0.045), smoothstep(2.5, 0.0, depth)), lakeW);
+  // the snowy peaks' cold sea: steel blue out deep and a milky glacier green in the shallows, never the tropics' turquoise
+  float coldW = 1.0 - smoothstep(uSnowZ.z - 10.0, uSnowZ.z + 50.0, length(p - uSnowZ.xy));
+  if (coldW > 0.0) {
+    vec3 cd = mix(uDeep, vec3(dot(uDeep, vec3(0.3, 0.5, 0.2))) * vec3(0.55, 1.05, 1.35), 0.7);
+    vec3 cs = vec3(dot(uShallow, vec3(0.3, 0.5, 0.2))) * vec3(0.5, 0.86, 0.92) * 0.8;
+    body = mix(body, mix(cs, cd, smoothstep(0.0, 9.0, depth)), coldW);
+  }
   body *= mix(light, 1.0, 0.35) * (1.0 - 0.55 * uNight);
   body += uShallow * 0.1 * smoothstep(0.5, 0.85, chop) * (1.0 - 0.7 * uNight) / (1.0 + dist * 0.01);   // light through the ripples' crests
 
@@ -645,8 +700,22 @@ void main(){
   float foam = clamp((shore + crest) * (1.0 - 0.85 * lakeW) + wash * 0.85 + wakeFoam * 0.85, 0.0, 1.0);
   vec3 foamCol = mix(vec3(0.95), uHorizon * 0.8 + 0.25, 0.25) * (1.0 - 0.72 * uNight) * (0.75 + 0.25 * light);
   col = mix(col, foamCol, foam);
+  // and ice on it: broken bits adrift, crowded near the glacier's foot where it calves and thinning out across the zone,
+  // and a rim of shore ice wherever the cold sea meets the land
+  float brash = 0.0;
+  if (coldW > 0.0) {
+    float nearFoot = 1.0 - smoothstep(12.0, 80.0, length(p - uIce[4].xy));
+    vec2 q = p + vec2(sin(uTime * 0.031), cos(uTime * 0.023)) * 1.6;
+    float v = texture2D(uNoise, q / 8.0).r * 0.65 + texture2D(uNoise, q / 2.7 + 0.37).g * 0.35;
+    float thr = mix(0.79, 0.6, nearFoot);
+    brash = smoothstep(thr, thr + 0.012, v) * coldW * smoothstep(0.3, 1.2, depth);
+    float rimIce = coldW * smoothstep(0.5, 0.1, depth + (lace - 0.5) * 0.4);
+    vec3 iceCol = mix(vec3(0.5, 0.72, 0.86), vec3(0.88, 0.94, 0.98), smoothstep(thr + 0.01, thr + 0.05, v)) * (1.0 - 0.75 * uNight) * (0.7 + 0.3 * light);
+    col = mix(col, iceCol, max(brash, rimIce));
+    brash = max(brash, rimIce);
+  }
 
-  float alpha = clamp(smoothstep(-0.05, 1.3, depth) * 0.97 + foam, 0.0, 1.0);
+  float alpha = clamp(smoothstep(-0.05, 1.3, depth) * 0.97 + foam + brash, 0.0, 1.0);
   alpha = mix(alpha, clamp(0.28 + depth * 0.085 + foam + fres * 0.6, 0.0, 1.0), reefA);
   float fogF = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
   col = mix(col, uFogColor, fogF);
@@ -659,7 +728,28 @@ void main(){
 const SNOW_AREA = [60, -515, 150], ASH_AREA = [320, 390, 95], PINE_AREA = [-405, -262, 125];
 const zoneUniforms = {
   uSnowZ: { value: new THREE.Vector3(...SNOW_AREA) }, uAshZ: { value: new THREE.Vector3(...ASH_AREA) }, uPineZ: { value: new THREE.Vector3(...PINE_AREA) },
+  uIce: { value: GLACIER.map(g => new THREE.Vector4(...g)) },
 };
+// (the glacier's line for the shaders: how far down it and how far out from its middle a point is, and how much ice)
+const ICE_GLSL = /* glsl */`
+  uniform vec4 uIce[5];
+  float iceW(vec2 p, out float s, out float lat, out float hw, out float over) {
+    float bd = 1e9, acc = 0.0, under = 0.0; s = 0.0; lat = 1e9; hw = 10.0; over = 0.0;
+    for (int i = 0; i < 4; i++) {
+      vec2 a = uIce[i].xy, u = uIce[i + 1].xy - a; float l = length(u);
+      float t = dot(p - a, u) / (l * l), k = clamp(t, 0.0, 1.0);
+      float tc = clamp(t, i == 0 ? -9.0 : 0.0, i == 3 ? 9.0 : 1.0);
+      float dd = length(p - a - u * tc);
+      if (dd < bd) {
+        float sd = ((p.x - a.x) * u.y - (p.y - a.y) * u.x) / l, side = sd < 0.0 ? -1.0 : 1.0;
+        bd = dd; lat = sd; s = acc + k * l;
+        hw = mix(uIce[i].w, uIce[i + 1].w, k) * (1.0 + 0.13 * sin(s * 0.083 + side * 1.9) + 0.07 * sin(s * 0.21 + side * 4.1));
+        over = (i == 3 && t > 1.0) ? (t - 1.0) * l : 0.0; under = (i == 0 && t < 0.0) ? -t * l : 0.0;
+      }
+      acc += l;
+    }
+    return (1.0 - smoothstep(0.0, 1.0, (abs(lat) - hw + 4.0) / 6.0)) * (1.0 - smoothstep(0.0, 1.0, over / 2.5)) * (1.0 - smoothstep(0.0, 1.0, under / 14.0));
+  }`;
 export const snowAt = (x, z) => 1 - smooth((Math.hypot(x - SNOW_AREA[0], z - SNOW_AREA[1]) - SNOW_AREA[2]) / 40);
 // One material for the land and (with rocky set) for every boulder on it: scanned sand, mossy turf and rock, laid by
 // height and steepness in world space, so a rock half buried in the beach takes the beach's wet line and the hill's moss.
@@ -694,6 +784,7 @@ function groundMaterial(noiseTex, rocky) {
       .replace('#include <common>', `#include <common>
         uniform sampler2D tSandC, tSandN, tMossC, tMossN, tRockC, tRockN, tNoise;
         uniform vec3 uSnowZ, uAshZ, uPineZ;
+        ${ICE_GLSL}
         float zoneW(vec3 Z, vec2 p) { return 1.0 - smoothstep(Z.z, Z.z + 40.0, length(p - Z.xy)); }
         varying vec3 vTP; varying vec3 vTN; varying vec3 vTer;
         vec3 twice(sampler2D t, vec2 uv, float n) { return mix(texture2D(t, uv).rgb, texture2D(t, uv * 0.37 + vec2(0.31, 0.17)).rgb, n); }`)
@@ -755,17 +846,40 @@ function groundMaterial(noiseTex, rocky) {
         #endif
         // snow lies above the snow line wherever it is not too steep to hold it (on boulders too)
         // (it drifts deep into the hollows and gullies and is blown off the crests, which stand out dark)
-        float wSnow = wSnowZ * smoothstep(6.0, 11.0, vTP.y + (n2 - 0.5) * 7.0 + (n3 - 0.5) * 1.5 + cav * 6.0)
+        // (in the snowy peaks it lies right down to the shore, with the tundra showing through on the wind-blown knolls)
+        float wSnow = wSnowZ * smoothstep(1.4, 4.2, vTP.y + (n2 - 0.5) * 6.0 + (n3 - 0.5) * 1.5 + cav * 5.0)
           * smoothstep(0.68, 0.42, steep - cav * 0.3 + (n3 - 0.5) * 0.16 + (n2 - 0.5) * 0.1);
         #ifndef ROCKY
           wSnow = smoothstep(0.15, 0.75, wSnow + (n3 - 0.5) * 0.25);
         #endif
-        col = mix(col, vec3(0.78, 0.82, 0.9) * (0.92 + 0.12 * n3), wSnow);
+        vec3 snowC = vec3(0.78, 0.82, 0.9) * (0.92 + 0.12 * n3);
+        col = mix(col, snowC, wSnow);
+        // the glacier: old blue-white ice, crossed by crevasses where it bends and steepens and along its edges, dirty
+        // bands of rock dust curving down it, fresh snow on its head, and its foot a cliff of deep blue ice
+        float iS, iLat, iHW, iOver;
+        float wIce = iceW(gp, iS, iLat, iHW, iOver);
+        #ifdef ROCKY
+          wIce = 0.0;
+        #endif
+        if (wIce > 0.0) {
+          float edge = clamp(abs(iLat) / iHW, 0.0, 1.0), bow = iS + edge * edge * 9.0;
+          vec3 ice = mix(vec3(0.74, 0.84, 0.93), vec3(0.6, 0.76, 0.9), smoothstep(0.3, 0.8, n2)) * (0.94 + 0.1 * n3);
+          ice = mix(ice, ice * vec3(0.8, 0.78, 0.76), smoothstep(0.8, 0.97, sin(bow * 0.27 + n2 * 2.5) * 0.5 + 0.5) * 0.5 * (1.0 - edge));
+          // (crevasses: ragged cracks mostly across the flow, packed where it steepens and toward its sides)
+          float cn = texture2D(tNoise, vec2(iS * 0.035, iLat * 0.011 + 0.3)).r * 0.75 + texture2D(tNoise, vec2(iS * 0.11, iLat * 0.04)).g * 0.25;
+          float crev = (1.0 - smoothstep(0.012, 0.04, abs(fract(cn * 6.0) - 0.5))) * smoothstep(0.25, 0.75, edge * 0.8 + steep * 2.2 + (n3 - 0.5) * 0.4) * (1.0 - smoothstep(26.0, 36.0, vTP.y));
+          ice = mix(ice, vec3(0.08, 0.3, 0.52), crev * 0.85);
+          float face = smoothstep(0.32, 0.6, steep) * (1.0 - smoothstep(13.0, 19.0, vTP.y));
+          vec3 cliffC = mix(vec3(0.16, 0.42, 0.66), vec3(0.5, 0.74, 0.9), texture2D(tNoise, vec2(gp.x * 0.21 + gp.y * 0.21, vTP.y * 0.04)).r);
+          ice = mix(ice, cliffC, face);
+          ice = mix(ice, snowC * 1.03, smoothstep(32.0, 48.0, vTP.y + n2 * 8.0) * (1.0 - face));
+          col = mix(col, ice, wIce);
+        }
         float wet = 1.0 - smoothstep(-0.15, 0.75, vTP.y + (n3 - 0.5) * 0.3);
         col *= mix(1.0, 0.5, wet) * (0.82 + 0.36 * n1);
         diffuseColor.rgb = col;
         vec3 groundN = normalize(gn + vec3(nm.x, 0.0, nm.y) * nmK * gn.y);`)
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(0.93, 0.35, wet);')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(mix(0.93, 0.35, wet), 0.3, wIce);')
       .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(groundN, 0.0)).xyz);');
   };
   mat.customProgramCacheKey = () => 'ground' + (rocky ? 1 : 0);
@@ -819,7 +933,9 @@ function canvasTex(w, h, draw) {
 
 // ================================================================= build
 export function createWorld(scene, renderer) {
-  const rnd = mulberry(20260910);
+  const rndShared = mulberry(20260910);
+  let rndNow = rndShared;
+  const rnd = () => rndNow();
   const world = { piers: PIERS, time: 0, preset: PRESETS[0], nightMats: [], spawn: { sea: [], stacks: [], islets: ISLETS } };
   const noiseTex = noiseTexture();
 
@@ -947,7 +1063,7 @@ export function createWorld(scene, renderer) {
     uSunDir: { value: new THREE.Vector3() }, uSunColor: { value: new THREE.Color() },
     uDeep: { value: new THREE.Color() }, uShallow: { value: new THREE.Color() },
     uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0.001 }, uSpec: { value: 20 }, uNight: { value: 0 },
-    uHeightTex: { value: heightTex }, uRipple: { value: rippleTexture() }, uNoise: { value: noiseTex }, uReef: { value: new THREE.Vector3(-290, 355, 120) }, uLake: { value: new THREE.Vector3(LAKE.x, LAKE.z, LAKE.r) },
+    uHeightTex: { value: heightTex }, uRipple: { value: rippleTexture() }, uNoise: { value: noiseTex }, uReef: { value: new THREE.Vector3(-290, 355, 120) }, uLake: { value: new THREE.Vector3(LAKE.x, LAKE.z, LAKE.r) }, uSnowZ: zoneUniforms.uSnowZ, uIce: zoneUniforms.uIce,
     uHeli: washUniform, uWake: wakeUniform, uWakeBox: wakeBoxUniform, uHull: hullUniform, uHullSize: hullSizeUniform,
     uLamp: { value: [new THREE.Vector4(), new THREE.Vector4()] },
     uReflTex: { value: null }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 },
@@ -1101,16 +1217,38 @@ export function createWorld(scene, renderer) {
     clearCanopy(TOWER.x, TOWER.z, 8);
     world.towerDeck = { x: TOWER.x - 2.4, y: y + 12.1, z: TOWER.z + 2.4 };
   }
-  // the ski hut, on the far side of its landing pad from the slope, its porch toward the pad
+  // the snowy peaks: the ski lodge on the far side of its landing pad from the slope, its porch toward the pad, with a
+  // snowman and a sledge out front and its windows lit at night; a cairn and flag on the summit; and the icebergs
   {
     const s = SITES.find(q => q.name === 'Ski hut');
     let a = 0, best = 1e9;
-    for (let k = 0; k < 16; k++) { const b = k * 0.3927, d = Math.abs(terrainHeight(s.x + Math.cos(b) * 15, s.z + Math.sin(b) * 15) - s.y); if (d < best) { best = d; a = b; } }
-    const hx = s.x + Math.cos(a) * 10.5, hz = s.z + Math.sin(a) * 10.5;
-    zplace('snow', 'World_SkiHut', hx, hz, { y: s.y, yaw: Math.atan2(s.x - hx, s.z - hz) });
-    OBSTACLES.push({ x: hx, z: hz, r: 5, top: s.y + 7.5 });
-    keepOut.push({ x: hx, z: hz, r: 8 });
-    s.block = { x: hx, z: hz, r: 6.5 };
+    for (let k = 0; k < 16; k++) { const b = k * 0.3927, d = Math.abs(terrainHeight(s.x + Math.cos(b) * 16, s.z + Math.sin(b) * 16) - s.y); if (d < best) { best = d; a = b; } }
+    const hx = s.x + Math.cos(a) * 12, hz = s.z + Math.sin(a) * 12, yaw = Math.atan2(s.x - hx, s.z - hz);
+    const lodge = zplace('snow', 'World_SkiHut', hx, hz, { y: s.y, yaw, opts: { own: ['Glass'] } });
+    const glass = lodge.userData.mat('Glass');
+    glass.emissive = new THREE.Color(1.0, 0.7, 0.36); world.nightMats.push({ mat: glass, max: 1.8, min: 0.12 });
+    OBSTACLES.push({ x: hx, z: hz, r: 6, top: s.y + 8.8 });
+    keepOut.push({ x: hx, z: hz, r: 9 });
+    s.block = { x: hx, z: hz, r: 7 };
+    // (a point on the lodge, from its own across, up and forward to the world's)
+    const at = (u, v, w) => ({ x: hx + Math.cos(yaw) * u + Math.sin(yaw) * w, y: s.y + v, z: hz - Math.sin(yaw) * u + Math.cos(yaw) * w });
+    world.lodge = { x: hx, z: hz, yaw, chimney: at(1.7, 8.45, -1.4) };
+    const sm = at(-5.6, 0, 4.2), sl = at(5.2, 0, 3.4);
+    zplace('snow', 'World_Snowman', sm.x, sm.z, { yaw: yaw + 0.5 }).position.y -= 0.15;
+    zplace('snow', 'World_Sled', sl.x, sl.z, { yaw: yaw - 2.2 });
+    keepOut.push({ x: sm.x, z: sm.z, r: 2 }, { x: sl.x, z: sl.z, r: 1.5 });
+    OBSTACLES.push({ x: sm.x, z: sm.z, r: 0.8, top: s.y + 2.5 });
+  }
+  {
+    // the summit of the big peak: its highest point, a cairn on it and a climber's flag
+    let top = { x: 32, z: -514, y: -1e9 };
+    for (let dz = -14; dz <= 14; dz++) for (let dx = -14; dx <= 14; dx++) { const y = terrainHeight(32 + dx, -514 + dz); if (y > top.y) top = { x: 32 + dx, z: -514 + dz, y }; }
+    zplace('snow', 'World_Summit', top.x, top.z, { y: top.y - 0.35, yaw: 0.6 });
+    OBSTACLES.push({ x: top.x, z: top.z, r: 1.2, top: top.y + 3.4 });
+    // (whoever waits up there stands a step down from the cairn, on its sunny side)
+    let w = null;
+    for (let k = 0; k < 12 && !w; k++) { const b = 2.2 + k * 0.52, x = top.x + Math.cos(b) * 1.7, z = top.z + Math.sin(b) * 1.7, y = terrainHeight(x, z); if (y > top.y - 1.2) w = { x, z, y }; }
+    world.summit = { ...(w || { x: top.x + 1.5, z: top.z, y: terrainHeight(top.x + 1.5, top.z) }), cairn: top };
   }
   // harbour town: streets of tall narrow houses on the terrace above the harbour, painted every colour,
   // with the quays, moored boats and a crane down at the water, and a little light on the breakwater's head
@@ -1277,7 +1415,13 @@ export function createWorld(scene, renderer) {
   const blocked = (x, z) => keepOut.some(k => (x - k.x) ** 2 + (z - k.z) ** 2 < k.r * k.r);
   for (const s of ISLETS) keepOut.push({ x: s.x, z: s.z, r: 6.5 });      // (whoever is stranded on a sandbar stands in the middle)
   for (const I of ISLANDS) for (const D of I.dents || []) if (D.r < 10) keepOut.push({ x: D.x, z: D.z, r: D.r + 9 });      // (the atoll's reef channel)
+  // (the snowy peaks' islands draw their plants and rocks from a stream of their own, and the shared stream skips the
+  // draws they took before they were reworked (see ICY-PEAKS.md), so every island and spawn spot made after them keeps
+  // exactly what it had)
+  const OWN = new Map([[ISLANDS.find(I => I.x === 30 && I.z === -505), 15569], [ISLANDS.find(I => I.x === 128 && I.z === -548), 3651]]);
   for (const I of ISLANDS) {
+    rndNow = rndShared;
+    if (OWN.has(I)) { for (let k = OWN.get(I); k > 0; k--) rndShared(); rndNow = mulberry(7700 + OWN.get(I)); }
     const cell = 5.6;
     for (let gx = I.x - I.reach; gx < I.x + I.reach; gx += cell) for (let gz = I.z - I.reach; gz < I.z + I.reach; gz += cell) {
       const x = gx + rnd() * cell, z = gz + rnd() * cell, r = rnd();
@@ -1290,6 +1434,7 @@ export function createWorld(scene, renderer) {
         continue;
       }
       if (blocked(x, z)) continue;
+      if (I.glacier && iceAt(x, z) > 0.05) continue;      // (nothing grows on the glacier)
       if (steep > 0.75) { if (r < 0.1) rock(pick(ROCKS), x, -0.3, z, 0.7 + rnd() * 1.5); continue; }
       if (y < 3.4) {
         // the beach: palms leaning over it, driftwood and scrub along the top of the sand
@@ -1324,6 +1469,7 @@ export function createWorld(scene, renderer) {
       else if (r > 0.975) rock(pick(ROCKS), x, -0.3, z, 0.5 + rnd() * 1.4);
     }
   }
+  rndNow = rndShared;
   // sea stacks: tall rocks standing in the water off the sea cliffs (on the side a cliff faces), clear of the
   // huts, the other islands and sandbars, the patrol boat's beat round the base, the edge of the world and each other
   const stacks = [];
@@ -1363,7 +1509,7 @@ export function createWorld(scene, renderer) {
         let flat = slope(lx, lz) < 0.35;
         for (let q = 0; q < 6 && flat; q++) flat = Math.abs(terrainHeight(lx + Math.cos(q * 1.047) * 1.2, lz + Math.sin(q * 1.047) * 1.2) - ly) < 0.5;
         if (!flat) continue;
-        if (ly > 5 && ly < 18 && !blocked(lx, lz) && terrainHeight(lx + ca * 7, lz + sa * 7) < ly - 3) world.spawn.ledges.push({ x: lx, z: lz, zone: zoneOf(lx, lz).id });
+        if (ly > 5 && ly < 18 && !blocked(lx, lz) && iceAt(lx, lz) < 0.02 && terrainHeight(lx + ca * 7, lz + sa * 7) < ly - 3) world.spawn.ledges.push({ x: lx, z: lz, zone: zoneOf(lx, lz).id });
         break;
       }
       break;
@@ -1531,6 +1677,11 @@ export function createWorld(scene, renderer) {
     }
   };
 
+  // ---------- the snowy peaks' icebergs (before the spawn points, which keep clear of them)
+  world.bergs = placeIcebergs({ group: scene, zone: ZONES.find(Z => Z.id === 'snow'), cove: { x: 96, z: -432 }, foot: { x: GLACIER[GLACIER.length - 1][0], z: GLACIER[GLACIER.length - 1][1] },
+    terrainHeight, zoneOf, worldR: WORLD_R, OBSTACLES, SHOALS });
+  for (const B of world.bergs) B.m.userData.farHide = B.small ? 260 : 700;
+
   // ---------- open-sea spawn points
   let guard = 0;
   while (world.spawn.sea.length < 60 && guard++ < 5000) {
@@ -1546,6 +1697,10 @@ export function createWorld(scene, renderer) {
   world.spawn.zoneSea = {};
   for (const Z of ZONES) if (Z.id !== 'home') {
     const list = world.spawn.zoneSea[Z.id] = [];
+    // (the snowy peaks pick theirs from a stream of their own, round the icebergs, and the shared stream skips the draws
+    // they took before, so the zones after keep the same spots: see the plants above)
+    rndNow = rndShared;
+    if (Z.id === 'snow') { for (let k = 6442; k > 0; k--) rndShared(); rndNow = mulberry(7711); }
     for (let g = 0; list.length < 36 && g < 6000; g++) {
       const a = rnd() * 6.283, d = Math.sqrt(rnd()) * (Z.r + 15), x = Z.x + Math.cos(a) * d, z = Z.z + Math.sin(a) * d;
       if (zoneOf(x, z) !== Z || Math.hypot(x, z) > WORLD_R - 45 || terrainHeight(x, z) > -5) continue;
@@ -1557,6 +1712,8 @@ export function createWorld(scene, renderer) {
       if (ok) list.push({ x, z });
     }
   }
+
+  rndNow = rndShared;
 
   // ---------- the volcano's crater, glowing
   {

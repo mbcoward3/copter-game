@@ -5,7 +5,7 @@ import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER, WAKE_TRAILS, WAKE_PER, wakeUniform, wakeBoxUniform, hullUniform, hullSizeUniform, snowAt } from './world.js';
+import { createWorld, terrainHeight, canopyAt, waveHeight, sea, PRESETS, WORLD_R, HOME_R, BASE_Y, PAD_Y, PADS, SITES, OBSTACLES, SHOALS, ISLETS, HUTS, PLANT_LAYER, MIRROR_LAYER, ZONES, zoneOf, ZONE_ISLETS, LAKE, TOWER, CRATER, WAKE_TRAILS, WAKE_PER, wakeUniform, wakeBoxUniform, hullUniform, hullSizeUniform, snowAt, iceAt } from './world.js';
 import { buildHeli, buildBasket, buildBucket, buildRing, buildRaft, buildAnimal, buildBeam, buildPlane, buildBoat, tickFriends, ANIMAL_TYPES, SKID, HOIST, DOOR_OPEN, BASKET_TOP, PLANE_FLOAT } from './models.js';
 import { model } from './assets.js';
 import { createFx } from './fx.js';
@@ -13,6 +13,7 @@ import { createNav, lookAhead, routeLeft } from './nav.js';
 import { dubins, dubinsLength, samplePath, track, pursuitRate } from './flightpath.mjs';
 import { createLife } from './life.js';
 import { createTraffic } from './traffic.js';
+import { createIcy } from './icy.js';
 import { audio, sfx, animalVoice } from './audio.js';
 import { flightClearance } from './flight-safety.mjs';
 import { createFireField, advanceFire, waterImpact, predictDrop, attackPoint, fireProgress, bombingRun, WATER } from './firefighting.mjs';
@@ -67,6 +68,7 @@ const airChart = nav.air;
 nav.air = (...args) => { const chart = airChart(...args); chart.route = metrics.wrap('airRouting', chart.route); return chart; };
 life.setRoute(nav);
 const traffic = createTraffic(scene, world, nav, fx);
+const icy = createIcy({ scene, world, terrainHeight, waveHeight, fx, zone: ZONES.find(Z => Z.id === 'snow'), cove: { x: 96, z: -432 }, lodge: { chimney: world.lodge.chimney, ice: iceAt } });
 const navMs = performance.now() - navT0;
 
 // ================================================================= players
@@ -1925,7 +1927,8 @@ function zoneChoices(Z) {
   } else if (Z.id === 'harbour') {
     add(2.5, 'perch', () => pickOf(world.roofs), 'heli'); add(2, 'islet', () => world.breakwaterHead); add(1.5, 'dinghy', () => pickOf(sea));
   } else if (Z.id === 'snow') {
-    add(3.5, 'floe', () => pickOf(sea));
+    // penguins adrift on the ice floes, and a climber waiting by the flag on top of the big peak
+    add(3.5, 'floe', () => pickOf(sea)); add(1.6, 'perch', () => world.summit, 'heli');
   } else if (Z.id === 'volcano') {
     add(1.5, 'dinghy', () => pickOf(sea)); add(1, 'ring', () => pickOf(sea));
   }
@@ -2097,6 +2100,8 @@ function coastalFire(Z) {
     if (y < 1 || y > 16 || !nearestWater(x, z, 10, 38, 6, inLake)) continue;
     const fx = x + 7, fz = z + 3, fy = terrainHeight(fx, fz);
     if (fy < 1 || Math.abs(fy - y) > 4) continue;
+    // (nothing burns on the glacier's ice, nor among the penguins)
+    if (iceAt(x, z) > 0.02 || iceAt(fx, fz) > 0.02 || icy.penguins.some(P => Math.hypot(P.home.x - fx, P.home.z - fz) < 14)) continue;
     const F = makeFire(fx, fz, fy + Math.max(0.5, canopyAt(fx, fz) - 2), 4.5, false, { x, z });
     if (F) { F.label = 'Shoreline fire'; return { kind: 'perch', x, z, extra: { perchY: y + 0.2, fire: F } }; }
   }
@@ -3327,6 +3332,16 @@ const flakeGeo = new THREE.BufferGeometry(), flakePos = new Float32Array(FLAKE_N
 for (let i = 0; i < FLAKE_N * 4; i++) flakeSeed[i] = Math.random();
 flakeGeo.setAttribute('position', new THREE.BufferAttribute(flakePos, 3).setUsage(THREE.DynamicDrawUsage));
 const flakeTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 32; const g = c.getContext('2d'), gr = g.createRadialGradient(16, 16, 0, 16, 16, 16); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.45, 'rgba(255,255,255,0.8)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 32, 32); return new THREE.CanvasTexture(c); })();
+// (a snowflake: six soft arms with little branches, rather than a ball)
+const starTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  g.translate(32, 32); g.strokeStyle = 'rgba(255,255,255,1)'; g.lineCap = 'round'; g.shadowColor = 'white'; g.shadowBlur = 4;
+  for (let k = 0; k < 6; k++) {
+    g.rotate(Math.PI / 3); g.lineWidth = 4.5; g.beginPath(); g.moveTo(0, 0); g.lineTo(0, -25); g.stroke();
+    g.lineWidth = 3; g.beginPath(); g.moveTo(0, -13); g.lineTo(-7, -20); g.moveTo(0, -13); g.lineTo(7, -20); g.stroke();
+  }
+  return new THREE.CanvasTexture(c);
+})();
 const flakeMat = new THREE.PointsMaterial({ map: flakeTex, size: 0.32, transparent: true, depthWrite: false, opacity: 0, color: 0xffffff });
 const flakes = new THREE.Points(flakeGeo, flakeMat);
 flakes.frustumCulled = false; flakes.visible = false; flakes.renderOrder = 4;
@@ -3339,7 +3354,7 @@ function placeFlakes(at, t) {
   const isSnow = snow >= ash;
   flakeMat.opacity = (isSnow ? 0.8 : 0.55) * k * (1 - 0.5 * world.preset.night);
   flakeMat.color.set(isSnow ? 0xffffff : 0x6e6a66);
-  flakeMat.size = isSnow ? 0.5 : 0.26;
+  flakeMat.size = isSnow ? 0.3 : 0.26; flakeMat.map = isSnow ? starTex : flakeTex;
   windAt(at.x, at.z, t, WIND);
   const fall = isSnow ? 1.6 + weather.now * 1.5 : 0.7, n = Math.round(FLAKE_N * (isSnow ? 0.45 + 0.55 * weather.now : 0.5));
   flakeGeo.setDrawRange(0, n);
@@ -3525,16 +3540,40 @@ const debug = {
     p.pos.set(Z.x - Z.x / l * (Z.r + d), p.vehicle === 'heli' ? 30 : p.pos.y, Z.z - Z.z / l * (Z.r + d));
     p.vel.set(0, 0, 0); p.yaw = Math.atan2(Z.x - p.pos.x, Z.z - p.pos.z);
     p.parked = p.landed = p.grounded = false; p.camPos.set(p.pos.x - Math.sin(p.yaw) * 20, p.pos.y + 8, p.pos.z - Math.cos(p.yaw) * 20);
+    if (p.bpos) { p.bpos.copy(p.pos); p.bvel.set(0, 0, 0); }      // (the basket comes along, rather than trailing in from the base)
   },
   add(kind, i = 0) {
     if (kind === 'tower') return addWaiting('perch', world.towerDeck.x, world.towerDeck.z, { perchY: world.towerDeck.y });
     if (kind === 'roof') { const r = world.roofs[i]; return addWaiting('perch', r.x, r.z, { perchY: r.y }); }
+    if (kind === 'summit') return addWaiting('perch', world.summit.x, world.summit.z, { perchY: world.summit.y });
     if (kind === 'floe') { const f = world.spawn.zoneSea.snow[i]; return addWaiting('floe', f.x, f.z, { prefer: 'penguin' }); }
     if (kind === 'lake') return addWaiting('kayak', LAKE.x, LAKE.z, { landlocked: true });
     const c = kind === 'hut' ? HUTS[i].porch : kind === 'ledge' ? world.spawn.ledges[i] : world.spawn.sea[i];
     return addWaiting(kind, c.x, c.z);
   },
   camp(i) { const site = SITES[i], c = campSpot(site); site.busy = true; return addWaiting('camp', c.x, c.z, { site }); },
+  // the snowy peaks' acceptance checks that need the real world (ICY-PEAKS.md): a list of what is wrong, empty if nothing
+  icyCheck() {
+    const bad = [], snowSea = world.spawn.zoneSea.snow || [];
+    for (const B of world.bergs) {
+      if (terrainHeight(B.x, B.z) > (B.small ? -1.5 : -5)) bad.push(`berg at ${B.x | 0},${B.z | 0} stands in water only ${terrainHeight(B.x, B.z).toFixed(1)} m deep`);
+      if (!(B.small ? SHOALS : OBSTACLES).some(o => o.x === B.x && o.z === B.z)) bad.push(`berg at ${B.x | 0},${B.z | 0} is not charted`);
+      const near = snowSea.find(q => Math.hypot(q.x - B.x, q.z - B.z) < B.wr + (B.small ? 10 : 14));
+      if (near) bad.push(`a rescue spot at ${near.x | 0},${near.z | 0} is within ${(Math.hypot(near.x - B.x, near.z - B.z) - B.wr).toFixed(1)} m of a berg`);
+    }
+    for (const P of icy.penguins) if (P.state === 'stand' || P.state === 'walk') { const y = terrainHeight(P.x, P.z); if (Math.abs(P.m.position.y - y) > 0.4 || y < 0) bad.push(`penguin at ${P.x | 0},${P.z | 0} is ${(P.m.position.y - y).toFixed(2)} m off the ground ${y < 0 ? '(in the sea)' : ''}`); }
+    const L = world.lodge, s = SITES.find(q => q.name === 'Ski hut');
+    for (const [u, w] of [[-4, -3.5], [4, -3.5], [-4, 3.5], [4, 3.5]]) {
+      const x = L.x + Math.cos(L.yaw) * u + Math.sin(L.yaw) * w, z = L.z - Math.sin(L.yaw) * u + Math.cos(L.yaw) * w, d = terrainHeight(x, z) - s.y;
+      if (d > 0.9 || d < -1.6) bad.push(`the lodge's footing ${d > 0 ? 'is buried' : 'hangs'} ${Math.abs(d).toFixed(1)} m at its corner ${u},${w}`);
+    }
+    // (and every spot afloat in the zone can be reached by boat from the home pier: ice once sealed the cove)
+    for (const q of snowSea) if (!nav.water.route({ x: DOCK.x, z: DOCK.z }, q, 5.5)) bad.push(`no boat route to the rescue spot at ${q.x | 0},${q.z | 0}`);
+    const S = world.summit;
+    if (Math.abs(terrainHeight(S.x, S.z) - S.y) > 0.3) bad.push('the summit spot is off the ground');
+    if (S.y < 70) bad.push('the summit spot is not on the summit');
+    return bad;
+  },
   // a fire in a zone ('home', 'forest', 'harbour', ...)
   fire(id = 'home') { return spawnFire(ZONES.find(Z => Z.id === id)); },
   // (frame: how long each frame takes, in seconds: 1/30 by default; 0.1 plays it as a slow laptop would)
@@ -3638,7 +3677,7 @@ function simulate(dt) {
     updateHoppers(dt, t);
     updateResidents(dt, t);
     metrics.measure('ambientLife', () => life.update(dt, t, activePlayers()));
-    metrics.measure('traffic', () => traffic.update(dt, t, activePlayers()));
+    metrics.measure('traffic', () => { traffic.update(dt, t, activePlayers()); icy.update(dt, t, activePlayers(), world.bergs); });
 
     // celebration
     if (game.celebrate > 0) {
@@ -3706,7 +3745,10 @@ function simulate(dt) {
     // the sea, louder the lower the pilots are; wind and rain with the weather; the fire's crackle close to one
     let low = 1e9;
     for (const p of activePlayers()) low = Math.min(low, p.vehicle === 'boat' ? 0 : Math.max(0, p.pos.y - 2));
-    audio.setAmbient(playing ? clamp(1.1 - low / 60, 0.3, 1) : 0.5, weather.now, clamp((weather.now - 0.6) / 0.35, 0, 1), playing ? clamp(1 - fireNear / 110, 0, 1) : 0);
+    // (up in the snowy peaks a cold wind always blows, even on a still day)
+    let cold = 0;
+    for (const p of activePlayers()) cold = Math.max(cold, snowAt(p.pos.x, p.pos.z));
+    audio.setAmbient(playing ? clamp(1.1 - low / 60, 0.3, 1) : 0.5, Math.max(weather.now, 0.6 * cold), clamp((weather.now - 0.6) / 0.35, 0, 1), playing ? clamp(1 - fireNear / 110, 0, 1) : 0);
   }
 }
 // A wake: every 0.4 s something going along on the water drops a point of churned water at its stern, kept 6 s; the
@@ -3785,4 +3827,4 @@ warmUp.catch(() => {}).then(() => {
 }
 
 // tiny debug handle (also handy for automated checks)
-window.__game = { TEST, PLANE_FLOAT, DOCK, HOME_PIER, hoppers, nav, navMs, life, traffic, terrainHeight, waveHeight, sea, ISLETS, HUTS, PADS, WORLD_R, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, setRenderScale, metrics, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };
+window.__game = { TEST, PLANE_FLOAT, icy, DOCK, HOME_PIER, hoppers, nav, navMs, life, traffic, terrainHeight, waveHeight, sea, ISLETS, HUTS, PADS, WORLD_R, canopyAt, SITES, OBSTACLES, SHOALS, ZONES, quality, setQuality, setRenderScale, metrics, weather, setWeather, gfx, game, players, waiting, residents, scene, world, renderer, composer, keys, fx, debug, setPreset };

@@ -2,6 +2,9 @@
 # file the web game can carry inside its single HTML page: src/assets/models.bin, plus each model's baked shading as a
 # small greyscale JPEG (src/assets/ao/<name>.jpg).
 # Run with:  blender --background --python tools/pack_models.py -- <folder of FBX files> <src/assets>
+# or, to add or replace a few models in the models.bin already there and keep every other model in it as it is
+# (the Unreal folder the first packs read from is not kept), with --add first:
+#            blender --background --python tools/pack_models.py -- --add <folder of just those FBX files> <src/assets>
 #
 # models.bin is zlib-deflated: a uint32 length, that many bytes of JSON, then the vertex data the JSON points into.
 # Positions are 16-bit within each model's bounding box, normals 8-bit, UVs 16-bit. Axes are turned to the game's:
@@ -18,7 +21,9 @@ import random
 from mathutils import Vector
 
 # (more source folders may follow the output folder: tools/build_vehicles.py writes the game's own models to another)
-SRC, OUT, *MORE = (os.path.abspath(p) for p in sys.argv[sys.argv.index('--') + 1:])
+ARGS = sys.argv[sys.argv.index('--') + 1:]
+ADD = ARGS[0] == '--add'
+SRC, OUT, *MORE = (os.path.abspath(p) for p in ARGS[ADD:])
 with open(os.path.join(os.path.dirname(__file__), '..', 'src', 'assets', 'model-contracts.json')) as contracts_file:
     CONTRACTS = json.load(contracts_file)
 AO_SIZE = {'Jayhawk_Body': 1024}       # the rest are 512
@@ -31,7 +36,7 @@ THIN = {'World_Tree': (4, 16), 'World_Tree2': (4, 16), 'World_Tree3': (5, 16), '
 CARDS = {'World_Tree3': (0.55, 0.85), 'World_Tree4': (0.55, 0.85), 'World_Tree5': (0.55, 0.85)}
 SKIP = ('World_Flowers',)
 # smooth lumps that carry far more triangles than a browser needs: the share to keep
-DECIMATE = {'Friend_': 0.4, 'World_Rock': 0.12, 'Jayhawk_Raft': 0.5, 'World_Whale': 0.5, 'World_PadLights': 0.4}
+DECIMATE = {'World_Penguin': 0.5, 'Friend_': 0.4, 'World_Rock': 0.12, 'Jayhawk_Raft': 0.5, 'World_Whale': 0.5, 'World_PadLights': 0.4}
 HERO_LOD = {'Jayhawk_Body': .38, 'Vehicle_Plane': .45, 'Vehicle_Boat': .4}
 
 blob = bytearray()
@@ -225,6 +230,23 @@ for folder in [SRC] + MORE:
             if len(meshes) != 1:
                 raise ValueError('%s must export one packed mesh (found %d); export animated parts separately' % (stem, len(meshes)))
             pack(stem, meshes[0], stem + ('_far' if far else ''), every, folder)
+
+if ADD:
+    # every model already packed that was not just packed again comes along unchanged
+    with open(os.path.join(OUT, 'models.bin'), 'rb') as f:
+        old = zlib.decompress(f.read())
+    n = struct.unpack('<I', old[:4])[0]
+    old_index, old_data = json.loads(old[4:4 + n]), old[4 + n:]
+    fresh = set(index)
+    for name, e in old_index.items():
+        if name in index:
+            continue
+        sizes = {'pos': e['nv'] * 6, 'nor': e['nv'] * 4, 'idx': e['ni'] * (4 if e['wide'] else 2), 'uv': e['nv'] * 4}
+        for key, size in sizes.items():
+            if key in e:
+                e[key] = push(np.frombuffer(old_data[e[key]:e[key] + size], np.uint8))
+        index[name] = e
+    print('PACK kept %d models from the old pack and added or replaced %d' % (len(index) - len(fresh), len(fresh)))
 
 head = json.dumps(index, separators=(',', ':')).encode()
 while len(head) % 4:

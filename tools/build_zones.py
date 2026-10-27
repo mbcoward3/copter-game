@@ -14,7 +14,7 @@ exec(_src[:_src.index('# =======================================================
 exec(_src[_src.index('# ================================================================= baked shading'):_src.index('made = [')])
 
 # (the conifers' needles have a darker green of their own)
-for _n in ('Leaf2', 'Leaf3', 'FlagB', 'Dolphin'):
+for _n in ('Leaf2', 'Leaf3', 'FlagB', 'Dolphin', 'Snow', 'Ice'):
     MATS[_n] = bpy.data.materials.new(_n)
     ORDER.append(_n)
 rnd = random.Random(7)
@@ -160,36 +160,153 @@ def tower():
     return join('World_FireTower', bits)
 
 
-# ================================================================= the ski hut
-# A mountain refuge: a stone footing, a timber body with red shutters, a steep roof to shed the snow, a chimney and a
-# little porch facing the landing pad (+X).
+# ================================================================= the ski lodge
+# A snug log lodge for the snowy peaks: a stone footing, walls of stacked logs crossing at the corners, a steep slate
+# roof with a thick blanket of snow on it and icicles hanging from its eaves, a gable front with a porch, a red door,
+# windows with red shutters (the game lights them at night), a stone chimney, a woodpile, and skis by the door.
+# The porch faces the landing pad (+X); the ridge runs front to back.
 def skihut():
-    L, W, H = 6.0, 5.0, 3.2
-    bits = [slab('Footing', (0, 0, 0.1), (L + 0.3, W + 0.3, 1.4), 'Concrete', 0.05),
-            slab('Body', (0, 0, 0.8 + H / 2), (L, W, H), 'Deck', 0.03)]
+    r = random.Random(17)
+    L, W, Z0, H = 3.2, 3.6, 0.9, 3.0          # half length, half width, top of the footing, height of the walls
+    ridge, oy, ox = Z0 + H + 2.6, W + 0.8, L + 0.9
+    slope = (ridge - (Z0 + H)) / W
+    eave = ridge - oy * slope
+    bits = [slab('Footing', (0, 0, Z0 / 2 - 0.8), (2 * L + 0.5, 2 * W + 0.5, Z0 + 1.6), 'Rock', 0.08)]
+    # the logs: side walls' and gable walls' courses interleaved, so they cross over one another at the corners
+    lr = 0.165
+    for i in range(10):
+        z = Z0 + lr + i * 0.3
+        for s in (-1, 1):
+            bits.append(rod('Log', (-L - 0.42, s * W, z), (L + 0.42, s * W, z), lr, 'Bark' if i % 3 else 'Deck', 8))
+            bits.append(rod('Log', (s * L, -W - 0.42, z + 0.15), (s * L, W + 0.42, z + 0.15), lr, 'Deck' if i % 3 else 'Bark', 8))
+    bits.append(slab('Core', (0, 0, Z0 + H / 2), (2 * L - 0.2, 2 * W - 0.2, H), 'Deck', 0.0))
+    # gables of upright boards, with a little window up in the front one
     for s in (-1, 1):
-        bits.append(box('Roof', [(-L / 2 - 0.6, 0, 0.8 + H + 2.9), (L / 2 + 0.6, 0, 0.8 + H + 2.9), (L / 2 + 0.6, s * (W / 2 + 0.7), 0.8 + H - 0.2), (-L / 2 - 0.6, s * (W / 2 + 0.7), 0.8 + H - 0.2)],
-                        [(-L / 2 - 0.6, 0, 0.8 + H + 3.15), (L / 2 + 0.6, 0, 0.8 + H + 3.15), (L / 2 + 0.6, s * (W / 2 + 0.7), 0.8 + H + 0.05), (-L / 2 - 0.6, s * (W / 2 + 0.7), 0.8 + H + 0.05)], 'Roof', 0.04))
+        bits.append(box('Gable', [(s * L, -W, Z0 + H), (s * L, W, Z0 + H), (s * L, 0.02, ridge), (s * L, -0.02, ridge)],
+                        [(s * (L - 0.15), -W, Z0 + H), (s * (L - 0.15), W, Z0 + H), (s * (L - 0.15), 0.02, ridge), (s * (L - 0.15), -0.02, ridge)], 'Deck', 0.0))
+        for k in range(-5, 6):
+            y = k * 0.6
+            top = ridge - abs(y) * slope
+            if top - (Z0 + H) > 0.3:
+                bits.append(slab('Batten', (s * (L + 0.03), y, (Z0 + H + top) / 2), (0.06, 0.09, top - (Z0 + H) - 0.1), 'Bark', 0.0))
+    bits += [slab('Frame', (L + 0.07, 0, Z0 + H + 1.05), (0.08, 0.95, 0.95), 'Paint', 0.02), slab('Win', (L + 0.1, 0, Z0 + H + 1.05), (0.06, 0.72, 0.72), 'Glass', 0.0)]
+    # the roof: slate on rafters, a deep layer of snow on top rolling over at the eaves, and icicles along them
     for s in (-1, 1):
-        # gable ends
-        bits.append(box('Gable', [(s * L / 2, -W / 2, 0.8 + H), (s * L / 2, W / 2, 0.8 + H), (s * L / 2, 0.01, 0.8 + H + 2.85), (s * L / 2, -0.01, 0.8 + H + 2.85)],
-                        [(s * (L / 2 - 0.12), -W / 2, 0.8 + H), (s * (L / 2 - 0.12), W / 2, 0.8 + H), (s * (L / 2 - 0.12), 0.01, 0.8 + H + 2.85), (s * (L / 2 - 0.12), -0.01, 0.8 + H + 2.85)], 'Deck', 0.0))
-        for y in (-1.4, 1.4):
-            bits += [slab('Window', (y * 0.9, s * (W / 2 + 0.02), 2.6), (0.9, 0.05, 1.0), 'Glass', 0.0),
-                     slab('Shutter', (y * 0.9 - 0.7, s * (W / 2 + 0.06), 2.6), (0.4, 0.05, 1.1), 'Accent', 0.01),
-                     slab('Shutter', (y * 0.9 + 0.7, s * (W / 2 + 0.06), 2.6), (0.4, 0.05, 1.1), 'Accent', 0.01)]
-    bits += [slab('Door', (L / 2 + 0.03, 0, 1.9), (0.06, 1.1, 2.1), 'Dark', 0.01),
-             slab('Porch', (L / 2 + 1.1, 0, 0.75), (2.2, 3.4, 0.18), 'Deck', 0.02),
-             rod('PorchPost', (L / 2 + 2.1, -1.6, 0.75), (L / 2 + 2.1, -1.6, 3.4), 0.1, 'Bark', 6),
-             rod('PorchPost', (L / 2 + 2.1, 1.6, 0.75), (L / 2 + 2.1, 1.6, 3.4), 0.1, 'Bark', 6),
-             box('PorchRoof', [(L / 2, -1.9, 4.0), (L / 2, 1.9, 4.0), (L / 2 + 2.4, 1.9, 3.3), (L / 2 + 2.4, -1.9, 3.3)],
-                 [(L / 2, -1.9, 4.15), (L / 2, 1.9, 4.15), (L / 2 + 2.4, 1.9, 3.45), (L / 2 + 2.4, -1.9, 3.45)], 'Roof', 0.03),
-             slab('Chimney', (-1.6, 1.0, 0.8 + H + 2.6), (0.8, 0.8, 2.6), 'Concrete', 0.03),
-             ball('Lamp', (L / 2 + 0.1, 0.9, 3.2), (0.12, 0.12, 0.16), 'Glow'),
-             slab('Woodpile', (-L / 2 - 0.6, 0, 1.2), (0.9, 3.2, 1.4), 'Bark', 0.05),
-             rod('Skis', (L / 2 + 0.2, -2.0, 0.9), (L / 2 + 0.35, -2.1, 2.7), 0.05, 'Tip', 4),
-             rod('Skis', (L / 2 + 0.2, -2.25, 0.9), (L / 2 + 0.35, -2.35, 2.7), 0.05, 'Tip', 4)]
+        bits.append(box('Roof', [(-ox, 0, ridge + 0.02), (ox, 0, ridge + 0.02), (ox, s * oy, eave), (-ox, s * oy, eave)],
+                        [(-ox, 0, ridge + 0.24), (ox, 0, ridge + 0.24), (ox, s * oy, eave + 0.22), (-ox, s * oy, eave + 0.22)], 'Roof', 0.03))
+        bits.append(box('Snow', [(-ox + 0.12, 0, ridge + 0.22), (ox - 0.12, 0, ridge + 0.22), (ox - 0.12, s * (oy - 0.05), eave + 0.2), (-ox + 0.12, s * (oy - 0.05), eave + 0.2)],
+                        [(-ox + 0.05, 0, ridge + 0.62), (ox - 0.05, 0, ridge + 0.62), (ox - 0.05, s * (oy + 0.02), eave + 0.52), (-ox + 0.05, s * (oy + 0.02), eave + 0.52)], 'Snow', 0.14))
+        bits.append(rod('SnowRoll', (-ox + 0.05, s * (oy + 0.02), eave + 0.36), (ox - 0.05, s * (oy + 0.02), eave + 0.36), 0.2, 'Snow', 10))
+        bits.append(slab('Fascia', (0, s * oy, eave + 0.05), (2 * ox, 0.08, 0.32), 'Accent', 0.01))
+        x = -ox + 0.25
+        while x < ox - 0.2:
+            n = r.uniform(0.18, 0.85) * (0.5 if abs(x) > L + 0.4 else 1)
+            bits.append(cone('Icicle', (x, s * (oy - 0.02), eave - 0.08), (x + r.uniform(-0.02, 0.02), s * (oy - 0.02), eave - 0.08 - n), 0.05 + n * 0.04, 0.004, 'Ice', 6))
+            x += r.uniform(0.22, 0.5)
+    bits.append(slab('Ridge', (0, 0, ridge + 0.62), (2 * ox - 0.1, 0.5, 0.18), 'Snow', 0.08))
+
+    # windows, two down each side and either side of the door, each in a white frame with red shutters and a sill of snow
+    def window(x, y, z, nx, ny):
+        thin = lambda a, b: (a if nx else b, a if ny else b)
+        out = [slab('Frame', (x + nx * 0.19, y + ny * 0.19, z), (*thin(0.08, 1.05), 1.2), 'Paint', 0.02),
+               slab('Win', (x + nx * 0.22, y + ny * 0.22, z), (*thin(0.06, 0.84), 0.98), 'Glass', 0.0),
+               slab('Bar', (x + nx * 0.25, y + ny * 0.25, z), (*thin(0.03, 0.06), 0.98), 'Paint', 0.0),
+               slab('Sill', (x + nx * 0.28, y + ny * 0.28, z - 0.66), (*thin(0.22, 1.15), 0.1), 'Paint', 0.02),
+               slab('SillSnow', (x + nx * 0.3, y + ny * 0.3, z - 0.56), (*thin(0.2, 1.05), 0.1), 'Snow', 0.04)]
+        for k in (-1, 1):
+            out.append(slab('Shutter', (x + nx * 0.22 + abs(ny) * k * 0.78, y + ny * 0.22 + abs(nx) * k * 0.78, z), (*thin(0.05, 0.44), 1.18), 'Accent', 0.01))
+        return out
+    for s in (-1, 1):
+        for x in (-1.5, 1.5):
+            bits += window(x, s * W, Z0 + 1.55, 0, s)
+    for y in (-2.0, 2.0):
+        bits += window(L, y, Z0 + 1.55, 1, 0)
+    # the door and its porch: a deck of boards up three steps, a rail each side, a lantern by the door
+    bits += [slab('DoorFrame', (L + 0.2, 0, Z0 + 1.1), (0.1, 1.3, 2.3), 'Paint', 0.02), slab('Door', (L + 0.24, 0, Z0 + 1.05), (0.08, 1.05, 2.1), 'Accent', 0.02),
+             ball('Knob', (L + 0.3, -0.35, Z0 + 1.0), (0.05, 0.05, 0.05), 'Tip'),
+             slab('Porch', (L + 1.0, 0, Z0 - 0.06), (2.0, 4.6, 0.16), 'Deck', 0.02), slab('PorchSnow', (L + 1.55, 0, Z0 + 0.04), (0.9, 4.4, 0.08), 'Snow', 0.03)]
+    for k in range(3):
+        bits.append(slab('Step', (L + 2.2 + k * 0.38, 0, Z0 - 0.3 - k * 0.3), (0.4, 1.6, 0.14), 'Deck', 0.02))
+    for y in (-2.25, 2.25):
+        bits += [rod('Post', (L + 1.9, y, Z0), (L + 1.9, y, Z0 + 1.05), 0.07, 'Bark', 6), rod('Post', (L + 0.3, y, Z0), (L + 0.3, y, Z0 + 1.05), 0.07, 'Bark', 6),
+                 rod('Rail', (L + 0.3, y, Z0 + 1.0), (L + 1.9, y, Z0 + 1.0), 0.05, 'Bark', 6), rod('RailSnow', (L + 0.3, y, Z0 + 1.08), (L + 1.9, y, Z0 + 1.08), 0.06, 'Snow', 6)]
+    bits += [slab('LampArm', (L + 0.3, 0.95, Z0 + 2.2), (0.3, 0.05, 0.05), 'Dark', 0.0), ball('Lamp', (L + 0.45, 0.95, Z0 + 2.1), (0.12, 0.12, 0.16), 'Glow')]
+    # the chimney, stone, with a cap of snow
+    cx, cy = -1.4, 1.7
+    bits += [slab('Chimney', (cx, cy, (Z0 + H + ridge + 1.6) / 2), (0.85, 0.85, ridge + 1.6 - (Z0 + H)), 'Rock', 0.04),
+             slab('Pot', (cx, cy, ridge + 1.7), (0.95, 0.95, 0.2), 'Concrete', 0.03), slab('ChimSnow', (cx, cy, ridge + 1.84), (0.7, 0.7, 0.12), 'Snow', 0.05)]
+    # a woodpile against the back wall under the eaves, sawn ends out
+    for row in range(4):
+        for k in range(7):
+            y = -1.9 + k * 0.36 + (row % 2) * 0.18
+            bits.append(rod('Billet', (-L - 0.25, y, Z0 + 0.18 + row * 0.32), (-L - 1.05, y, Z0 + 0.18 + row * 0.32), 0.16, 'Bark' if (k + row) % 3 else 'Deck', 7))
+    bits.append(slab('PileSnow', (-L - 0.65, -0.72, Z0 + 1.42), (0.85, 2.7, 0.12), 'Snow', 0.05))
+    # skis and poles leaning by the door
+    for k, c in ((0, 'Tip'), (1, 'Tip'), (2, 'Accent'), (3, 'Accent')):
+        bits.append(slab('Ski', (L + 0.38, -2.7 - k * 0.14, Z0 + 0.95), (0.06, 0.09, 1.9), c, 0.01))
+    bits += [rod('Pole', (L + 0.55, -3.35, Z0), (L + 0.32, -3.4, Z0 + 1.4), 0.025, 'Metal', 5), rod('Pole', (L + 0.6, -3.5, Z0), (L + 0.35, -3.5, Z0 + 1.4), 0.025, 'Metal', 5)]
     return join('World_SkiHut', bits)
+
+
+# A snowman by the lodge: three balls of snow, coal eyes, smile and buttons, a carrot nose, stick arms (one waving),
+# a red scarf and a top hat. Faces +X.
+def snowman():
+    bits = [ball('Base', (0, 0, 0.5), (0.62, 0.62, 0.56), 'Snow'), ball('Middle', (0, 0, 1.26), (0.44, 0.44, 0.4), 'Snow'),
+            ball('Head', (0, 0, 1.86), (0.3, 0.3, 0.29), 'Snow'),
+            ball('Eye', (0.25, 0.1, 1.95), (0.04, 0.04, 0.04), 'Dark'), ball('Eye', (0.25, -0.1, 1.95), (0.04, 0.04, 0.04), 'Dark'),
+            cone('Nose', (0.27, 0, 1.86), (0.62, 0.03, 1.83), 0.055, 0.005, 'Tip', 8)]
+    for k, z in enumerate((1.12, 1.3, 1.48)):
+        bits.append(ball('Button', (0.41 - abs(k - 1) * 0.02, 0, z), (0.04, 0.04, 0.04), 'Dark'))
+    for k in range(-2, 3):
+        a = k * 0.22
+        bits.append(ball('Smile', (0.27 * math.cos(a), 0.27 * math.sin(a), 1.76 + 0.018 * abs(k)), (0.022, 0.022, 0.022), 'Dark'))
+    ring = [(0.3 * math.cos(t / 12 * 2 * math.pi), 0.3 * math.sin(t / 12 * 2 * math.pi), 1.6) for t in range(12)]
+    bits += [tube('Scarf', ring, 0.07, 'Accent', 8, True), slab('ScarfEnd', (0.26, -0.14, 1.38), (0.06, 0.16, 0.42), 'Accent', 0.02),
+             rod('Arm', (0, 0.38, 1.35), (0.15, 0.95, 1.72), 0.025, 'Bark', 5), rod('Twig', (0.12, 0.83, 1.64), (0.05, 0.98, 1.85), 0.015, 'Bark', 4),
+             rod('Arm', (0, -0.38, 1.35), (0.1, -0.92, 1.18), 0.025, 'Bark', 5), rod('Twig', (0.08, -0.8, 1.21), (0.2, -0.95, 1.1), 0.015, 'Bark', 4),
+             rod('Brim', (0, 0, 2.08), (0, 0, 2.12), 0.32, 'Dark', 16), rod('Hat', (0, 0, 2.1), (0, 0, 2.45), 0.21, 'Dark', 16),
+             rod('Band', (0, 0, 2.13), (0, 0, 2.2), 0.215, 'Accent', 16)]
+    return join('World_Snowman', bits)
+
+
+# A wooden sledge with red runners curling up at the front. Front +X, about 1.4 m long.
+def sled():
+    bits = []
+    for s in (-1, 1):
+        bits.append(tube('Runner', [(-0.7, s * 0.25, 0.04), (0.45, s * 0.25, 0.04), (0.62, s * 0.25, 0.1), (0.7, s * 0.25, 0.24), (0.62, s * 0.25, 0.34)], 0.03, 'Accent', 6))
+        for x in (-0.45, 0.0, 0.4):
+            bits.append(rod('Strut', (x, s * 0.25, 0.04), (x, s * 0.25, 0.24), 0.025, 'Accent', 5))
+    for k in range(5):
+        bits.append(slab('Slat', (-0.55 + k * 0.25, 0, 0.27), (0.2, 0.66, 0.04), 'Deck', 0.01))
+    bits.append(tube('Rope', [(0.62, -0.25, 0.34), (0.85, -0.1, 0.12), (0.95, 0.15, 0.04), (0.62, 0.25, 0.34)], 0.012, 'Tip', 5))
+    return join('World_Sled', bits)
+
+
+# A penguin standing up, a gentoo about 0.8 m tall: black back and head, white front and a white flash over each eye,
+# an orange bill and feet, flippers held a little out. Front +X, standing on z = 0.
+def penguin():
+    bits = [ball('Body', (0, 0, 0.36), (0.19, 0.17, 0.33), 'Dark'), ball('Belly', (0.055, 0, 0.34), (0.155, 0.145, 0.29), 'Snow'),
+            ball('Neck', (0.01, 0, 0.6), (0.12, 0.115, 0.12), 'Dark'), ball('Head', (0.02, 0, 0.72), (0.115, 0.1, 0.105), 'Dark'),
+            ball('Throat', (0.07, 0, 0.6), (0.075, 0.09, 0.09), 'Snow'),
+            cone('Bill', (0.1, 0, 0.71), (0.24, 0, 0.69), 0.032, 0.006, 'Tip', 8),
+            cone('Tail', (-0.14, 0, 0.1), (-0.28, 0, 0.03), 0.06, 0.01, 'Dark', 6)]
+    for s in (-1, 1):
+        bits += [ball('Flash', (0.04, s * 0.075, 0.77), (0.05, 0.03, 0.022), 'Snow'), ball('Eye', (0.085, s * 0.072, 0.735), (0.016, 0.016, 0.016), 'Dark'),
+                 ball('Flipper', (-0.02, s * 0.175, 0.37), (0.06, 0.03, 0.18), 'Dark'),
+                 ball('Foot', (0.07, s * 0.07, 0.02), (0.09, 0.05, 0.025), 'Tip')]
+    return join('World_Penguin', bits)
+
+
+# The summit: a cairn of stones with a pole and a red pennant on it.
+def summit_flag():
+    r = random.Random(5)
+    bits = []
+    for x, y, z, s in [(0, 0, 0.2, 0.55), (0.45, 0.2, 0.15, 0.4), (-0.4, 0.25, 0.15, 0.42), (0.05, -0.45, 0.14, 0.4), (0.1, 0.05, 0.62, 0.38), (-0.05, -0.05, 0.95, 0.26)]:
+        bits.append(ball('Stone', (x, y, z), (s * r.uniform(0.9, 1.2), s * r.uniform(0.9, 1.2), s * 0.7), 'Rock'))
+    bits += [rod('Pole', (0, 0, 0.5), (0, 0, 3.6), 0.04, 'Metal', 8), ball('Knob', (0, 0, 3.63), (0.06, 0.06, 0.06), 'Tip'),
+             box('Pennant', [(0.04, 0, 3.5), (0.04, 0, 2.9), (0.04, 0.02, 2.9), (0.04, 0.02, 3.5)],
+                 [(0.0, 1.2, 3.25), (0.0, 1.2, 3.19), (0.0, 1.22, 3.19), (0.0, 1.22, 3.25)], 'Accent', 0.0)]
+    return join('World_Summit', bits)
 
 
 # ================================================================= harbour town's houses
@@ -382,7 +499,8 @@ made = [pine('World_Pine', 13.0, 2.9, 11, 13, 13), pine('World_Pine_far', 13.0, 
         snag('World_Snag', 9.0, 5), snag('World_Snag_far', 9.0, 5),
         tower(), skihut(), crane(),
         *town_house('World_HouseA', 6.0, 4.4, 3, 'x', 2.6, seed=3), *town_house('World_HouseB', 6.0, 5.9, 2, 'y', 2.1, balcony=True, dormer=True, seed=5),
-        *town_house('World_HouseC', 6.5, 7.2, 2, 'y', 1.9, shop=True, seed=7), sailboat(), seal(), turtle()]
+        *town_house('World_HouseC', 6.5, 7.2, 2, 'y', 1.9, shop=True, seed=7), sailboat(), seal(), turtle(),
+        snowman(), sled(), penguin(), summit_flag()]
 for ob in made:
     bpy.ops.object.select_all(action='DESELECT')
     ob.select_set(True)
@@ -410,7 +528,7 @@ scene.display.shading.light, scene.display.shading.color_type = 'STUDIO', 'MATER
 scene.display.shading.show_cavity = True
 for n, c in (('Paint', (0.9, 0.9, 0.88)), ('Accent', (0.9, 0.2, 0.05)), ('Dark', (0.05, 0.05, 0.06)), ('Glass', (0.1, 0.15, 0.2)), ('Metal', (0.5, 0.5, 0.55)),
              ('Deck', (0.4, 0.25, 0.12)), ('Tip', (0.95, 0.7, 0.05)), ('Bark', (0.3, 0.22, 0.15)), ('Leaf2', (0.1, 0.3, 0.12)), ('Roof', (0.3, 0.35, 0.4)),
-             ('Concrete', (0.6, 0.6, 0.58)), ('Seam', (0.3, 0.3, 0.3))):
+             ('Concrete', (0.6, 0.6, 0.58)), ('Seam', (0.3, 0.3, 0.3)), ('Snow', (0.9, 0.93, 0.97)), ('Ice', (0.5, 0.75, 0.9))):
     MATS[n].diffuse_color = (*c, 1)
 scene.render.resolution_x, scene.render.resolution_y = 1600, 600
 scene.render.filepath = OUT + '/preview.png'

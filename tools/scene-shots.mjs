@@ -34,6 +34,11 @@ try {
     const T = G.world.towerDeck; if (T) v.push(['prop-tower', T.x + 14, T.z + 12, 3, T.x, T.z, 8]);
     const H = G.HUTS[0]; if (H) v.push(['prop-huts', H.x + 16, H.z + 14, 3, H.x, H.z, 3]);
     const W = G.world.wreck; if (W) v.push(['prop-wreck', W.x + 16, W.z + 14, 4, W.x, W.z, 2]);
+    // the snowy peaks: the lodge from its pad, the glacier's foot over the cove, an iceberg, the penguins
+    const L = G.world.lodge; if (L) v.push(['prop-lodge', L.x + Math.sin(L.yaw) * 15 + Math.cos(L.yaw) * 7, L.z + Math.cos(L.yaw) * 15 - Math.sin(L.yaw) * 7, 4, L.x, L.z, 3]);
+    v.push(['prop-glacier', 120, -400, 14, 96, -450, 3]);
+    const B = (G.world.bergs || []).find(b => !b.small); if (B) v.push(['prop-berg', B.x + 30, B.z + 25, 6, B.x, B.z, 4]);
+    const P = G.icy && G.icy.penguins[0]; if (P) v.push(['prop-penguins', P.x + 5, P.z + 6, 2.5, P.x, P.z, 0.4]);
     return v; })()`);
   for (const light of lights) {
     await page.evaluate(`(() => { const G = __game; G.setPreset(${light === 'dusk' ? 1 : light === 'night' ? 2 : 0}); G.setWeather(${light === 'storm' ? 2 : 0}); G.weather.now = ${light === 'storm' ? 1 : 0.1}; })()`);
