@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { fireProgressNote } from './fire-progress.mjs';
+const filled = { vehicle: 'plane', water: 1, drop: 0, missionDone: false, seconds: 75 };
+assert.match(fireProgressNote(filled), /never dropped/, 'an unfinished fire outing must still catch a filled aircraft that never attacks');
+assert.equal(fireProgressNote({ ...filled, missionDone: true }), null, 'the recorded mixed-crew completion is success even with the aircraft tank still full');
+assert.equal(fireProgressNote({ ...filled, drop: 1 }), null, 'an observed drop remains valid progress');
+assert.match(fireProgressNote({ ...filled, vehicle: 'heli', water: 0 }), /never took on water/, 'an unfinished outing must still catch a helicopter that never refills');
+assert.equal(fireProgressNote({ ...filled, vehicle: 'heli', water: 0, missionDone: true }), null, 'team completion also retains the existing refill exception');
+assert.equal(fireProgressNote({ ...filled, vehicle: 'boat', water: 0 }), null, 'continuous seawater pumps do not require aircraft tank evidence');
+console.log('Completed shared fire outings and unfinished refill/drop failures passed');

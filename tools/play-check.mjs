@@ -20,6 +20,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CHROME, launch, openPage } from './cdp.mjs';
 import { observeMissionTransition } from './mission-transition.mjs';
+import { fireProgressNote } from './fire-progress.mjs';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const args = process.argv.slice(2), opt = (n, d) => { const i = args.indexOf('--' + n); return i < 0 ? d : args[i + 1]; };
@@ -165,8 +166,10 @@ async function play(job, page) {
     const fire = first.fire;
     if (!fire && !seen.cargo[i] && !seen.missionDone) notes.push(`NO PROGRESS: ${v} picked up nobody in ${SECONDS} s`);
     // (a crewmate may put the fire out first; idleInFire catches a pilot left with nothing to do)
-    if (fire && !seen.water[i] && v !== 'boat' && !seen.missionDone) notes.push(`NO PROGRESS: ${v} never took on water in ${SECONDS} s`);
-    if (fire && seen.water[i] >= 0.8 && !seen.drop[i] && v !== 'boat') notes.push(`NO PROGRESS: ${v} filled up but never dropped in ${SECONDS} s`);
+    if (fire) {
+      const note = fireProgressNote({ vehicle: v, water: seen.water[i], drop: seen.drop[i], missionDone: seen.missionDone, seconds: SECONDS });
+      if (note) notes.push(note);
+    }
   });
   if (job.manual) {
     const positions = await page.evaluate('__game.players.filter(p => p.active).map(p => p.pos.toArray())');

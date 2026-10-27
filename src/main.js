@@ -23,7 +23,7 @@ import { createPortraits } from './portraits.js';
 import { retireObject, sharedResource } from './render-resources.js';
 import { createRenderMetrics } from './render-metrics.js';
 import { pilotReadout, ratedFeedback } from './pilot-feedback.mjs';
-import { showRescueFor } from './rescue-guidance.mjs';
+import { showRescueFor, manualRescueHint } from './rescue-guidance.mjs';
 import { celebrationBurst } from './celebration.mjs';
 import { manualAxis } from './manual-controls.mjs';
 
@@ -2988,27 +2988,23 @@ function hintFor(p) {
   if (p.flashT > 0) return p.flash;
   if (!p.pro) return game.fire ? (p.fireJob || p.spray ? ((p.spray || p.fireJob).fire.phase === 'checking' ? '✅ Checking the ground · nearly safe' : 'Hold go · ' + fireStatusFor(p)) : '🔥 Looking for the next fire') : assistedRescueHint(p);
   const key = (a, b) => (p.idx && !solo ? b : a);
-  const full = p.cargo.length >= MAX_CARGO || (p.cargo.length && !waiting.length);
   if (p.fireJob || p.spray) {
     if ((p.spray || p.fireJob).fire.phase === 'checking' || p.spray || p.attack) return fireStatusFor(p);
-    if (p.vehicle === 'heli') return !waterReady(p) ? 'Hover low at the blue ring · hold ' + key('R', 'Ctrl') + ' to fill the bucket' : 'Fly over the fire — the bucket empties itself';
+    if (p.vehicle === 'heli') return !waterReady(p) ? 'Hover low at the blue ring · hold ' + key('R', 'Right Ctrl') + ' to fill the bucket' : 'Fly over the fire — the bucket empties itself';
     if (p.vehicle === 'plane') return !waterReady(p) ? 'Skim through the blue ring to scoop up water' : 'Fly low over the fire to drop it';
     return 'Stop at the blue ring near shore · the cannon sprays automatically';
   }
-  if (p.vehicle === 'heli') {
-    if (p.grounded) return p.incoming ? 'Climbing aboard…' : 'Hold ' + key('Space', 'Enter') + ' to lift off';
-    if (full) return 'Full — land at the base, or winch them down by the paddock';
-    return 'Hover over a friend and hold ' + key('R', 'Ctrl') + ' to winch';
+  // Equipment and geometric range only: guidance must not run or warm navigation planners.
+  let nearest = Infinity, hasFriends = false;
+  for (const an of waiting) if (!an.fire && showRescueFor(p.vehicle, an, game.t)) {
+    hasFriends = true; nearest = Math.min(nearest, Math.hypot(p.pos.x - an.pos.x, p.pos.z - an.pos.z));
   }
-  if (p.vehicle === 'boat') {
-    if (p.incoming) return 'Coming aboard…';
-    if (full) return 'Full — bring them in to the jetty and stop';
-    return 'Stop beside a friend to throw the ring';
-  }
-  if (p.incoming) return 'Swimming to the float…';
-  if (p.afloat && p.fs < 3 && !p.cargo.length) return key('W', '↑') + ' to speed up, ' + key('Space', 'Enter') + ' to lift off';
-  if (full) return 'Full — land and taxi in to the jetty';
-  return 'Fly down onto the water near a friend and taxi up to them';
+  const home = p.vehicle === 'heli' ? HOME_SPOT : DOCK;
+  return manualRescueHint(p, {
+    nearHome: Math.hypot(p.pos.x - home.x, p.pos.z - home.z) < (p.vehicle === 'heli' ? 60 : 90),
+    atBase: Math.hypot(p.pos.x, p.pos.z) < 42, hasFriends, nearFriend: nearest <= 120, capacity: MAX_CARGO,
+    liftKey: key('Space', 'Enter'), descendKey: key('Left Shift', 'Right Shift'), winchKey: key('R', 'Right Ctrl'), goKey: key('W', '↑'),
+  });
 }
 function drawRadar(p) {
   const g = p.ui.radar, S = 336, c = S / 2, R = c - 14, range = 210;
