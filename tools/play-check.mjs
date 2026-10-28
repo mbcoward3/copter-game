@@ -27,7 +27,7 @@ const args = process.argv.slice(2), opt = (n, d) => { const i = args.indexOf('--
 const LOCATION = opt('location', '');
 const SECONDS = Number(opt('seconds', 75)), ONLY = opt('only', ''), WORKERS = Number(opt('workers', 4));
 const GAME = pathToFileURL(resolve(opt('game', join(ROOT, 'rescue-squad-3d.html')))).href;
-const OUT = join(ROOT, 'build', LOCATION ? 'play-' + LOCATION : 'play');
+const OUT = resolve(opt('outdir', join(ROOT, 'build', LOCATION ? 'play-' + LOCATION : 'play')));
 mkdirSync(OUT, { recursive: true });
 
 const jobs = [];
@@ -36,6 +36,7 @@ jobs.push({ name: 'heli+plane-rescue', pilots: ['heli', 'plane'], mode: 'rescue'
 jobs.push({ name: 'heli-summit-night', pilots: ['heli'], mode: 'rescue', stage: 'summit' });
 for (const v of ['heli', 'plane', 'boat']) for (const mode of ['rescue', 'fire']) jobs.push({ name: `${v}-manual-${mode}`, pilots: [v], mode, manual: true });
 jobs.push({ name: 'heli+boat-mixed-controls-rescue', pilots: ['heli', 'boat'], mode: 'rescue', manual: true, mixedControls: true });
+jobs.push({name:'plane+plane-harbour-recovery',pilots:['plane','plane'],mode:'rescue',location:'harbour',seed:8,complete:180});
 const todo = jobs.filter(j => !ONLY || j.name.includes(ONLY));
 
 // what the page reports twice a second (kept small: it crosses the pipe)
@@ -84,17 +85,19 @@ const SAMPLE = `(() => {
 async function play(job, page) {
   const notes = [], shots = [];
   // Manual outings exercise real startup, throttle and steering; mission completion still needs a human pilot.
-  const seconds = job.manual ? Math.min(SECONDS, 20) : SECONDS;
-  await page.goto(GAME, "!!(window.__game && document.querySelector('canvas.ready'))");
+  const seconds = job.complete || (job.manual ? Math.min(SECONDS, 20) : SECONDS);
+  const location = job.location || LOCATION;
+  let observedSeconds = seconds;
+  await page.goto(GAME + (job.seed ? '?seed=' + job.seed : ''), "!!(window.__game && document.querySelector('canvas.ready'))");
   // the menu, as a person uses it
   await page.click('#setup > summary');
   await page.click(`[data-mode="${job.mode}"]`);
-  if (LOCATION) await page.evaluate(`(() => { const s=document.querySelector('#location'); s.value=${JSON.stringify(LOCATION)}; s.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  if (location) await page.evaluate(`(() => { const s=document.querySelector('#location'); s.value=${JSON.stringify(location)}; s.dispatchEvent(new Event('change',{bubbles:true})); })()`);
   for (let i = 0; i < job.pilots.length; i++) { await page.click(`.veh[data-p="${i}"][data-v="${job.pilots[i]}"]`); await page.click(`.flt[data-p="${i}"][data-m="${job.manual && (!job.mixedControls || i === 1) ? 'pro' : 'easy'}"]`); }
   await page.click(job.pilots.length > 1 ? '#start2' : '#start1');
   await new Promise(r => setTimeout(r, 1500));
   const first = await page.evaluate(SAMPLE);
-  if (LOCATION && await page.evaluate('__game.game.zone.id') !== LOCATION) notes.push('doing: starting a fixed-location outing; wrong zone');
+  if (location && await page.evaluate('__game.game.zone.id') !== location) notes.push('doing: starting a fixed-location outing; wrong zone');
   for (const q of first.pilots) { const d = Math.hypot(q.pos[0], q.pos[2]); if (d > 120) notes.push(`${q.v} started ${Math.round(d)} m from the home base (at ${q.pos[0]},${q.pos[2]})`); }
   for (const b of await page.evaluate('__game.debug.icyCheck()')) notes.push('BROKE icyScenery: ' + b);
   // (the summit outing: at night, on a snowy-peaks mission, 60 m out from the zone, with a climber waiting up top)
@@ -139,7 +142,13 @@ async function play(job, page) {
     if (job.manual && s === 12) await page.key(job.mixedControls ? 'ArrowLeft' : 'KeyA', true);
     if (job.manual && s === 16) await page.key(job.mixedControls ? 'ArrowLeft' : 'KeyA', false);
     if (s === 10 || s === seconds || s === seconds * 2 - 1) { const f = join(OUT, `${job.name}-${Math.round(s / 2)}s.jpg`); writeFileSync(f, await page.screenshot()); shots.push(f); }
+    if (job.complete && seen.missionDone) {
+      observedSeconds = (s + 1) / 2;
+      const f = join(OUT, job.name + '-completed.jpg');
+      writeFileSync(f, await page.screenshot()); shots.push(f); break;
+    }
   }
+  if (job.complete && !seen.missionDone) notes.push('doing loaded multiplayer return: mission did not finish within ' + job.complete + ' s');
   if (summit) {
     if (summit.picked === null || summit.picked > 90) notes.push(`NO PROGRESS: the summit climber was not picked up within ${Math.min(SECONDS, 90)} s`);
     const now = await page.evaluate('__game.renderer.info.programs.length');
@@ -153,7 +162,7 @@ async function play(job, page) {
   if (job.pilots.length > 1) await page.key('ArrowUp', false);
   if (job.manual) await page.key(job.mixedControls ? 'ArrowLeft' : 'KeyA', false);
   // (how much game time really passed: a game crawling along cannot be judged on progress)
-  const tEnd = await page.evaluate('__game.game.t'), rate = (tEnd - first.t) / (seconds + (job.manual && !job.mixedControls && job.pilots[0] === 'heli' ? 6 : 0));
+  const tEnd = await page.evaluate('__game.game.t'), rate = (tEnd - first.t) / (observedSeconds + (job.manual && !job.mixedControls && job.pilots[0] === 'heli' ? 6 : 0));
   if (rate < 0.8) notes.push(`TOO SLOW TO JUDGE: only ${rate.toFixed(2)} game seconds per real second`);
   const problems = await page.evaluate('window.__gameProblems || []');
   for (const p of problems.slice(0, 4)) notes.push('game problem: ' + (p.message || p.what) + (p.kind ? ` (${p.kind})` : ''));
@@ -198,5 +207,5 @@ for (const r of results.sort((a, b) => a.name.localeCompare(b.name))) {
   for (const n of r.notes) console.log('       ' + n);
 }
 writeFileSync(join(OUT, 'results.json'), JSON.stringify(results, null, 2));
-console.log(`\nScreenshots in build/play/. ${failed ? 'Some outings FAILED.' : 'All outings played cleanly.'}`);
+console.log(`\nScreenshots in ${OUT}. ${failed ? 'Some outings FAILED.' : 'All outings played cleanly.'}`);
 process.exit(failed ? 1 : 0);

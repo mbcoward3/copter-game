@@ -112,6 +112,9 @@ Use [`HOW-WE-CHECK.md`](HOW-WE-CHECK.md) for the development/checking workflow a
 `tools/sim-checks.js`, run by `npm run check`, is the maintained source of simulation rules and benchmark metrics.
 `npm run assisted-hint-check` checks assisted startup and wrapping fixtures across all vehicles, rescue/fire,
 solo/two-player and narrow/wide views. It verifies readable HUD geometry, not mission completion.
+`npm run crew-trip-check -- --seeds 8` records per-pilot pickup and homeward distance, time and turns for
+helicopter/seaplane, two-seaplane and seaplane/boat crews, with focused efficiency regressions. It advances
+a deterministic test page; `play-check` separately requires the Harbour Town two-seaplane recovery mission to finish.
 
 Pushing `main` builds the game and updates the production content in the private `talos-cluster` GitOps repository.
 
