@@ -18,7 +18,8 @@
     "render-check": "node tools/render-check.mjs",
     "profile": "node tools/profile-render.mjs",
     "build:hosted": "node build.mjs --hosted",
-    "assisted-hint-check": "node tools/assisted-hint-check.mjs"
+    "assisted-hint-check": "node tools/assisted-hint-check.mjs",
+    "crew-trip-check": "node tools/crew-trip-check.mjs"
   },
   "license": "ISC",
   "devDependencies": {

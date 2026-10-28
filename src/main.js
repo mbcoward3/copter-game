@@ -798,6 +798,9 @@ function planePilot(p, t, dt, ready, room) {
   } else { kind = 'free'; goal = null; key = 'free'; }
   p.rescueDestination = kind === 'dock' ? 'home' : kind === 'pickup' ? 'friend' : '';
   if (p.input.f > 0 || (p.afloat && p.fs < 6)) A.park = null;          // (kept through the splash and roll-out)
+  // A new rescue or homeward leg gets its own taxi allowance; boarding time on the previous
+  // trip must not force a short safe water hop into a takeoff-and-landing circuit.
+  if (key !== A.key && (kind === 'pickup' || kind === 'dock')) p.wetT = 0;
   if (key !== A.key) { A.key = key; A.land = null; A.final = false; A.air = null; A.path = null; A.bomb = null; A.arrived = false; A.stallT = null; A.stallAt = null; A.reverseUntil = 0; A.tried = null; A.goes = 0; A.tkSpot = null; A.pre = undefined; }
   // (setting off from its berth: first round, slowly and nearly on the spot, to face away from the pier, so the wing
   // and its float swing clear of the deck)
@@ -833,7 +836,10 @@ function planePilot(p, t, dt, ready, room) {
     }
     if (game.t - A.stallT > 5) {
       A.reverseUntil = game.t + 2.5; A.stallT = null; A.stallAt = null;
-      if (A.tkSpot) (A.badSpots ||= []).push({ x: A.tkSpot.x, z: A.tkSpot.z });
+      // tkSpot is cleared once the run begins; retain its origin so recovery avoids that run too.
+      const failed = A.tkSpot || A.runSpot;
+      if (failed) (A.badSpots ||= []).push({ x: failed.x, z: failed.z });
+      A.runSpot = null;
       A.run = null; A.final = false; A.land = null; A.air = null; A.tkSpot = null;
       out.aim = null; out.cap = -4; out.alt = 0; return out;
     }
@@ -917,7 +923,7 @@ function planePilot(p, t, dt, ready, room) {
   // (just off the water: straight on along the take-off run until it has some height, and only then turn for where it is
   // going; a low turn just after lifting off is how a plane meets the trees on the shore)
   // (a skim that bounces off a wave for a moment is still the skim, not a take-off)
-  if (A.run !== null && !(kind === 'scoop' && A.final && !waterReady(p))) A.climbH = A.run;
+  if (A.run !== null && !(kind === 'scoop' && A.final && !waterReady(p))) { A.climbH = A.run; A.runSpot = null; }
   A.run = null;
   if (A.climbH != null) {
     if (alt < 14) { out.aim = { x: p.pos.x + Math.sin(A.climbH) * 80, z: p.pos.z + Math.cos(A.climbH) * 80 }; out.alt = PL.cruise; return out; }
@@ -1110,7 +1116,7 @@ function takeoff(p, A, out, to) {
   if (A.run === null) {
     if (!A.tkSpot || game.t - A.tkSpot.t > 20) { A.tkSpot = takeoffSpot(p, to, A.badSpots); if (A.tkSpot) A.tkSpot.t = game.t; }
     const S = A.tkSpot;
-    if (S && (S.r === 0 || Math.hypot(S.x - p.pos.x, S.z - p.pos.z) < 8)) { A.run = S.h; A.runT = game.t; A.tkSpot = null; }
+    if (S && (S.r === 0 || Math.hypot(S.x - p.pos.x, S.z - p.pos.z) < 8)) { A.run = S.h; A.runT = game.t; A.runSpot = { x: S.x, z: S.z }; A.tkSpot = null; }
     else {
       // (taxi out to it; with nowhere to go at all, wait)
       A.tk = !!S;
