@@ -4,7 +4,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY build.mjs ./
 COPY src/ ./src/
-COPY tools/test-*.mjs ./tools/
+COPY tools/ ./tools/
 RUN npm test && npm run build:hosted
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine
