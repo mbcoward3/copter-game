@@ -54,7 +54,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           GIT_SSH_COMMAND: ssh -i ~/.ssh/copter-game-gitops -o IdentitiesOnly=yes
         run: |
-          git clone git@github.com:mbcoward3/talos-cluster.git gitops
+          git clone git@github.com:mbcoward3/homelab.git gitops
           cd gitops
           python3 - "$IMAGE_DIGEST" <<'PY'
           import pathlib, re, sys
