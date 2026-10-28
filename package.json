@@ -17,7 +17,8 @@
     "manual-guidance-check": "node tools/manual-guidance-check.mjs",
     "render-check": "node tools/render-check.mjs",
     "profile": "node tools/profile-render.mjs",
-    "build:hosted": "node build.mjs --hosted"
+    "build:hosted": "node build.mjs --hosted",
+    "assisted-hint-check": "node tools/assisted-hint-check.mjs"
   },
   "license": "ISC",
   "devDependencies": {

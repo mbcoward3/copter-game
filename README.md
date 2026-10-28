@@ -110,6 +110,8 @@ go, including at home: `soak('heli', 300)`. It does not steer on the pilot's beh
 Use [`HOW-WE-CHECK.md`](HOW-WE-CHECK.md) for the development/checking workflow and
 [`AIRPLANE-SPEC.md`](AIRPLANE-SPEC.md) for the seaplane's current acceptance criteria.
 `tools/sim-checks.js`, run by `npm run check`, is the maintained source of simulation rules and benchmark metrics.
+`npm run assisted-hint-check` checks assisted startup and wrapping fixtures across all vehicles, rescue/fire,
+solo/two-player and narrow/wide views. It verifies readable HUD geometry, not mission completion.
 
 Pushing `main` builds the game and updates the production content in the private `talos-cluster` GitOps repository.
 
