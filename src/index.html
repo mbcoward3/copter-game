@@ -99,7 +99,7 @@
   .go-tip .control-summary{display:block;font-size:16px;font-weight:500;}
   #togetherGuide{max-width:650px;text-align:center;font-size:14px;line-height:1.5;color:#d8e6f0;}
   #loading{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);padding:8px 16px;border-radius:20px;background:#0e1826e8;font-size:14px;z-index:5;}
-  @media(max-width:1100px){#mission{top:118px!important;max-width:calc(100% - 28px);padding:8px 12px;gap:8px;}#banner{top:37%;}}
+  @media(max-width:1100px){.pane .water{top:184px;}#mission{top:118px!important;max-width:calc(100% - 28px);padding:8px 12px;gap:8px;}#banner{top:37%;}}
   @media(max-width:600px){#menu{padding:20px 12px;gap:14px;}#menu h1{font-size:44px;}#menu h1 span{letter-spacing:.15em;font-size:.28em;}#stickers{gap:6px;font-size:28px;}.big{padding:14px 22px;font-size:22px;}#mSlots{gap:4px;}#mSlots span{width:25px;height:25px;font-size:20px;}#mIcon{font-size:25px;}#mission{font-size:14px;}.pane .tag{font-size:13px;padding:7px 9px;gap:6px;}.pane .slot{width:34px;height:34px;font-size:23px;}.pane .radar{width:112px;height:112px;}.pane .hint{bottom:140px;font-size:13px;padding:8px 12px;}.pane .alt{bottom:132px;}.pane .water{top:174px;font-size:19px;}#hud.two .pane .tag{top:66px;font-size:12px;gap:4px;}.pane .score{display:none;}#hud.two .pane .cargo{top:108px;gap:3px;}#hud.two .pane .slot{width:30px;height:30px;}#hud.two #mission{top:162px!important;}#hud.two #controls{top:14px;}#hud.two .pane .water{top:216px;}#hud.two #banner{top:44%;}.btn{padding:0 10px;}.pick{gap:5px;}.veh{font-size:12px;padding:9px 3px;}.flt{font-size:12px;white-space:normal;}}
   @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;}}
   .pane.pilot .alt{display:grid;gap:4px;bottom:14px;min-width:136px;max-width:calc(100% - 28px);font-size:13px;line-height:1.35;}
@@ -108,7 +108,7 @@
   .instrument-value{white-space:nowrap;}
   .instrument-value small{font-size:11px;font-weight:500;color:#d8e6f0;}
   @media(max-width:600px){.pane{--radar-size:112px;}}
-  @container(max-width:800px){.pane.pilot .hint{bottom:calc(var(--radar-size) + 28px);}}
+  @container(max-width:800px){.pane .hint{bottom:calc(var(--radar-size) + 28px);width:max-content;}}
   kbd{display:inline-block;min-width:28px;padding:3px 7px;border-radius:7px;background:#fff;color:var(--ink);font:700 13px "Segoe UI",system-ui,sans-serif;text-align:center;box-shadow:0 2px 0 #9fb0c4;margin:1px;}
   #menu .tip{font-size:16px;opacity:.9;text-align:center;max-width:720px;line-height:1.5;}
   #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:30px;text-align:center;font-size:20px;background:#0b1622;}
