@@ -116,7 +116,12 @@ solo/two-player and narrow/wide views. It verifies readable HUD geometry, not mi
 helicopter/seaplane, two-seaplane and seaplane/boat crews, with focused efficiency regressions. It advances
 a deterministic test page; `play-check` separately requires the Harbour Town two-seaplane recovery mission to finish.
 
-Pushing `main` builds the game and updates the production content in the private `talos-cluster` GitOps repository.
+Pushing `main` tests/builds the game, publishes and signs its container image and
+[app-owned Helm chart](charts/copter-game/README.md), then promotes the signed OCI
+chart to `ghcr.io/mbcoward3/charts/copter-game:latest`. Each chart embeds its image
+by digest. Homelab Flux can follow that chart automatically; this workflow no
+longer needs write access or a deploy key to the homelab repository. The consumer
+must complete its existing-resource ownership handoff before enabling Helm.
 
 For a second local checkout, set `COPTER_PORT` before serving (PowerShell: `$env:COPTER_PORT=5174`).
 The development server listens on this machine only.
