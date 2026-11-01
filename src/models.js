@@ -12,7 +12,7 @@ function mesh(geo, mat, x = 0, y = 0, z = 0, parent) {
 }
 
 // ================================================================= helicopter
-// A Coast Guard MH-60T Jayhawk (modelled in Blender, see tools/pack_models.py).
+// A Coast Guard MH-60T Jayhawk (modelled in Blender, see tools/assets/pack_models.py).
 // Model space: nose toward +Z, up +Y, wheels touch the ground at y = -SKID.
 export const SKID = contracts.Jayhawk_Body.groundOffset;
 // where the cable leaves the hoist, over the starboard cabin door
@@ -227,7 +227,7 @@ export function buildBeam() {
 
 
 // ================================================================= rescue flying boat
-// A Coast Guard rescue amphibian after the Grumman HU-16 Albatross (tools/build_vehicles.py): a boat hull that sits
+// A Coast Guard rescue amphibian after the Grumman HU-16 Albatross (tools/assets/build_vehicles.py): a boat hull that sits
 // in the water, two engines on a high wing, wingtip floats, and a big door open in the port side where rescued friends
 // sit and look out. Nose toward +Z; the keel is at y = -1.85.
 // (the hull floats with its keel 0.4 m down in the water: its origin is this far above the calm sea)
@@ -287,7 +287,7 @@ export function buildPlane(accent) {
 
 
 // ================================================================= fast rescue boat
-// A Coast Guard response boat (tools/build_vehicles.py): foam collar in the pilot's colour, cabin amidships, twin
+// A Coast Guard response boat (tools/assets/build_vehicles.py): foam collar in the pilot's colour, cabin amidships, twin
 // outboards. Bow toward +Z, origin on the waterline; friends ride on the open aft deck.
 export function buildBoat(accent) {
   const g = new THREE.Group();

@@ -26,7 +26,7 @@ on floes, a climber by the summit flag (helicopter), the lodge pad.
 
 | What the player sees | Number | Check |
 |---|---|---|
-| Water isn't turquoise | shallow green channel at most 1.15× blue, less saturated than Home Bay | `node tools/scene-shots.mjs --only snow` |
+| Water isn't turquoise | shallow green channel at most 1.15× blue, less saturated than Home Bay | `node tools/review/scene-shots.mjs --only snow` |
 | Icebergs never block a rescue or route | no sea spawn within 14 m of a berg's waterline or 10 m of a growler; every berg in `OBSTACLES`, every growler in `SHOALS` | `__game.debug.icyCheck()` (every play-check outing) |
 | Every afloat rescue is reachable by boat | water route from the home pier to every open-water rescue spot in the zone | `icyCheck()` |
 | Nothing floats or sinks | bergs in at least 5 m of water (growlers 1.5 m), penguins within 0.4 m of the ground, lodge footing meets the ground at all corners, summit spot above 70 m | `icyCheck()` |
@@ -34,7 +34,7 @@ on floes, a climber by the summit flag (helicopter), the lodge pad.
 | No hitch flying in at night | no shader program built after the first 10 s | `heli-summit-night` |
 | It looks right | overview, mid, shore, lodge, cove, icebergs and night views reviewed | `scene-shots --only snow,prop-lodge`, `build/play/` |
 
-The snow helicopter's baseline (`heli:snow` in `tools/check-baseline.json`) was refreshed for the summit and iceberg
+The snow helicopter's baseline (`heli:snow` in `tools/checks/check-baseline.json`) was refreshed for the summit and iceberg
 geography; no other mission's baseline changed with it.
 
 ## Volcano Isle
@@ -50,13 +50,13 @@ inland helipad and a seaplane can't land on it, and those differences stay.
 
 | Requirement | Rule | Check |
 |---|---|---|
-| Distinct shore geology | at least 36 dry-land basalt columns | `volcanoLint` in sim-checks, `node tools/volcano-check.mjs` |
+| Distinct shore geology | at least 36 dry-land basalt columns | `volcanoLint` in sim-checks, `node tools/checks/volcano-check.mjs` |
 | Hot summit readable from several sides | 3 seams, 77 samples each, every centre sample 0.16 m above terrain | `volcanoLint`, day/dusk/night review |
 | Both named places are inhabited | exactly 2 equipped sites | `volcanoLint` |
 | Equipment leaves rescue space open | footprint radius 3.6 m, outside each 9 m clearing | `volcanoLint`, normal missions |
 | Detail stays bounded | fewer than 32 direct draw objects (10 now) | `volcanoLint` |
 | The plume starts at the summit | crater emitter above 20 m | `volcanoLint` |
-| All controls and crews draw correctly | 24 views: 3 solo + 3 pairs × 2 modes × 2 mission types; finite positions; pane at least 300 px | `node tools/volcano-controls.mjs` |
+| All controls and crews draw correctly | 24 views: 3 solo + 3 pairs × 2 modes × 2 mission types; finite positions; pane at least 300 px | `node tools/checks/volcano-controls.mjs` |
 | Trips still work | all vehicles, rescue/fire/mixed, 75 s of real key input | `npm run play-check -- --location volcano` |
 
 Review captures cover overview, opposite side, mid, shore, crater, basalt, lookout and camp, in day, dusk and night.

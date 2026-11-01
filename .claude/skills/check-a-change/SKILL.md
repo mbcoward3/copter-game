@@ -18,8 +18,8 @@ These rules exist because of that.
 2. **Apply it to every vehicle where it fits** (see `AGENTS.md`). Add rows for each vehicle, or note in
    `docs/design/vehicles.md` why one is left out.
 3. **Encode each row as a rule.** Pure logic gets a `tools/test-*.mjs` unit test. Simulation behaviour goes in
-   `tools/sim-checks.js`. Anything only visible on the real page (cables, menus, start position, piers, HUD geometry)
-   goes in `tools/play-check.mjs` or a focused `tools/*-check.mjs`. Give every failure a "doing" note: what the
+   `tools/checks/sim-checks.js`. Anything only visible on the real page (cables, menus, start position, piers, HUD geometry)
+   goes in `tools/checks/play-check.mjs` or a focused `tools/checks/*-check.mjs`. Give every failure a "doing" note: what the
    machine was trying to do at that moment.
 4. **Check the checker against what is broken.** Run the new rules on the current game before changing it. If they
    don't flag the bug a player reported, the rule is wrong, not the game.
@@ -31,7 +31,7 @@ These rules exist because of that.
 6. **A seed must replay the same everywhere.** If a seed plays differently in the checker and the browser, fix that
    first, or no failure can be trusted.
 7. **Change a rule only when the rule is wrong**, never to make a failure go away. Record why in the design page.
-8. **Never edit `tools/check-baseline.json` to pass.** `--accept` only after showing the new scores are better or
+8. **Never edit `tools/checks/check-baseline.json` to pass.** `--accept` only after showing the new scores are better or
    that the change of geography explains them, and say so in the PR.
 
 ## Before calling it done
@@ -58,9 +58,9 @@ Always: `npm test`, `npm run build`. Docs or skills: `npm run test:docs`. Then b
 | Start menu or remembered settings | `npm run menu-check` |
 | Mission completion or celebration | `npm run celebration-check` |
 | Manual controls or gamepad | `npm run analog-check`, `npm run pilot-check` |
-| One zone's scenery | `npm run check -- --zone <id> --seeds 8`, `npm run play-check -- --location <id>`, `node tools/scene-shots.mjs --only <id>`; volcano: `node tools/volcano-check.mjs`, `node tools/volcano-controls.mjs` |
-| Rendering, shaders, models | `npm run render-check` (alone, serially), `node tools/vehicle-shots.mjs` / `scene-shots.mjs` |
-| Hosted build, nginx, caching | `npm run build:hosted`, `node tools/hosted-check.mjs` |
+| One zone's scenery | `npm run check -- --zone <id> --seeds 8`, `npm run play-check -- --location <id>`, `node tools/review/scene-shots.mjs --only <id>`; volcano: `node tools/checks/volcano-check.mjs`, `node tools/checks/volcano-controls.mjs` |
+| Rendering, shaders, models | `npm run render-check` (alone, serially), `node tools/review/vehicle-shots.mjs` / `scene-shots.mjs` |
+| Hosted build, nginx, caching | `npm run build:hosted`, `node tools/checks/hosted-check.mjs` |
 
 Details of each tool, its options and its output folder are in [references/checks.md](references/checks.md).
 

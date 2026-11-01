@@ -17,7 +17,7 @@ water stream).
 
 | Requirement | Acceptance | Check |
 |---|---|---|
-| Changing missions keeps every vehicle where it is | at most 15 m between consecutive rendered frames spanning the change | `movedBetweenMissions` in `play-check` (`tools/mission-transition.mjs`) |
+| Changing missions keeps every vehicle where it is | at most 15 m between consecutive rendered frames spanning the change | `movedBetweenMissions` in `play-check` (`tools/checks/mission-transition.mjs`) |
 | A fresh outing starts at home | every pilot at the base or pier | `play-check` |
 
 Sample consecutive animation frames inside the page, not positions read by separate DevTools calls: browser latency
@@ -57,8 +57,8 @@ Per vehicle:
 
 ### Checker rules for fire
 
-`tools/fire-progress.mjs` reports an aircraft that never takes on water, or fills but never drops, during an
+`tools/checks/fire-progress.mjs` reports an aircraft that never takes on water, or fills but never drops, during an
 unfinished outing. A shared mission may finish before a filled aircraft gets its turn to drop; that exception
 applies to both the refill rule and the drop rule. The idle and no-compatible-work checks and the 75-second
-observation window are unchanged. `test-fire-progress` covers the completed-full-tank case and the unfinished
+observation window are unchanged. `tools/test/fire-progress.mjs` covers the completed-full-tank case and the unfinished
 counterexamples.

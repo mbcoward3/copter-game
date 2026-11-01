@@ -5,7 +5,7 @@ import { AO, GROUND } from './assets/pictures.js';
 import { sharedResource } from './render-resources.js';
 import contracts from './assets/model-contracts.json';
 
-// ================================================================= packed models (see tools/pack_models.py)
+// ================================================================= packed models (see tools/assets/pack_models.py)
 const raw = unzlibSync(packed);
 const headLen = new DataView(raw.buffer, raw.byteOffset, 4).getUint32(0, true);
 const INDEX = JSON.parse(new TextDecoder().decode(raw.subarray(4, 4 + headLen)));
@@ -84,7 +84,7 @@ const LOOKS = {
   FlagD: [[1.0, 0.4, 0.015], 0.8, 0], FlagE: [[0.02, 0.1, 0.36], 0.8, 0],
   Snow: [[0.8, 0.84, 0.9], 0.75, 0], Ice: [[0.42, 0.66, 0.84], 0.08, 0],
 };
-// Baked shade (see tools/pack_models.py): dark in the creases, seams and underneath, and a little grimy there too.
+// Baked shade (see tools/assets/pack_models.py): dark in the creases, seams and underneath, and a little grimy there too.
 // It rides in the material's "map" slot, so it also dims the surface colour instead of only the ambient light.
 function wearBake(mat, tex, dirt) {
   mat.map = tex; mat.aoMap = tex; mat.aoMapIntensity = 0.6;

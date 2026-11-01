@@ -55,7 +55,7 @@ Alternatively, open **`rescue-squad-3d.html`** after building (no server or inte
 
 ## Sounds
 Vehicle engines, ambience, animal calls and effects use real recordings, cut into loops and one-shots by
-`tools/pack_audio.py` (sources listed at its top). A soft synthesized thud accompanies touchdown; animals without a
+`tools/assets/pack_audio.py` (sources listed at its top). A soft synthesized thud accompanies touchdown; animals without a
 recorded call use a quiet chime acknowledgment. Sources:
 recordings from [BigSoundBank](https://bigsoundbank.com) (CC0); the jingles between missions from Kenney's
 [Music Jingles](https://kenney.nl/assets/music-jingles) (CC0); and "Propeller-plane-flying-steady-01" by Versatile Virtuoso,
@@ -80,6 +80,6 @@ for the code map and working rules (written for coding agents, and just as usefu
 - [`.agents/skills/`](.agents/skills/) for step-by-step procedures: checking a change, debugging a seed, rebuilding
   assets, shipping a PR.
 
-Pushing `main` tests and builds the game, publishes and signs its container image and
+Every pull request and push to `main` runs the unit tests and the full simulation check. Pushing `main` also builds the game, publishes and signs its container image and
 [app-owned Helm chart](charts/copter-game/README.md), and promotes the signed chart to
 `ghcr.io/mbcoward3/charts/copter-game:latest`, which the homelab's Flux follows.

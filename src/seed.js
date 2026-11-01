@@ -1,4 +1,4 @@
-// Repeatable play for the automated checks (tools/check.mjs). Opened with ?seed=N in the address, every random choice
+// Repeatable play for the automated checks (tools/checks/check.mjs). Opened with ?seed=N in the address, every random choice
 // the game makes (where friends appear, what they are, the gusts, the splashes) comes from one seeded sequence instead
 // of the browser's, so the same seed plays out the same way every time. Without it nothing changes.
 // This module is imported first, so it is in place before anything else draws a random number.

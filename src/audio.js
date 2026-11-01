@@ -1,4 +1,4 @@
-// Every sound is a real recording (tools/pack_audio.py), carried in the page: seamless loops for the engines and the
+// Every sound is a real recording (tools/assets/pack_audio.py), carried in the page: seamless loops for the engines and the
 // sea, wind, rain and fire, and one-shots for everything else (splashes, horns, gulls, the animals' calls).
 import LOOPS from './assets/sfx.js';
 let actx = null, master = null, out = null, transport = null, engineBus = null;
@@ -134,7 +134,7 @@ export const audio = {
   },
 };
 
-// ---- one-shots, cut from real recordings (tools/pack_audio.py): `name_1`, `name_2`... are takes of the same sound,
+// ---- one-shots, cut from real recordings (tools/assets/pack_audio.py): `name_1`, `name_2`... are takes of the same sound,
 // and each play picks one and nudges its pitch a little, so nothing ever sounds like the same sample twice.
 const TAKES = {};
 for (const key of Object.keys(LOOPS)) { const m = /^(.*)_(\d+)$/.exec(key); if (m) (TAKES[m[1]] ||= []).push(key); }

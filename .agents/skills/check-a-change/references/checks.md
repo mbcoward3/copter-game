@@ -1,22 +1,25 @@
 # Check tools
 
-All browser checks drive headless Chrome over `--remote-debugging-pipe` (`tools/cdp.mjs`), so nothing else needs
+All browser checks drive headless Chrome over `--remote-debugging-pipe` (`tools/lib/cdp.mjs`), so nothing else needs
 installing. Build first (`npm run build`). Exit code 1 means a failure.
 
 ## Unit tests: `npm test`
 
-The game's `tools/test-*.mjs` tests (Node `assert`, no browser), listed in `package.json`. A new test file must be
-added there. CI and the Docker build both run it.
+Every `.mjs` file in `tools/test/` (Node `assert`, no browser), each in its own process, via `tools/lib/run-tests.mjs`.
+A new test only needs to be dropped in that folder. `npm test -- flightpath` runs the tests whose names match. CI and
+the Docker build both run it.
 
-`npm run test:docs` (`tools/test-agent-docs.mjs`) is separate because the Docker build has no docs: skills follow the
+`npm run test:docs` (`tools/agent-docs/test.mjs`) is separate because the Docker build has no docs: skills follow the
 Agent Skills spec, the `.claude/skills` mirror matches, Markdown links and anchors resolve, and no new top-level
 Markdown files. CI runs it too.
 
-## Simulation: `npm run check` (`tools/check.mjs`)
+## Simulation: `npm run check` (`tools/checks/check.mjs`)
 
 Plays each machine through each mission from fixed seeds with nothing drawn, holding only go, and checks
-`tools/sim-checks.js` rules every 0.1 s. It also lints the map (every spawn in water) and compares finish time,
-turning and stuck time with `tools/check-baseline.json`, failing on anything clearly worse. About 2 minutes for 72 runs.
+`tools/checks/sim-checks.js` rules every 0.1 s. It also lints the map (every spawn in water) and compares finish time,
+turning and stuck time with `tools/checks/check-baseline.json`, failing on anything clearly worse. About 2 minutes for 72 runs
+on 4 workers. CI runs it on every pull request and push to `main` (the `simulate` job), and publishing waits for it;
+on failure the job uploads `build/check/` as the `check-results` artifact.
 
 Rules include: a hull on land, the seaplane into a hill or onto a beach, landing far away, slow takeoff, never
 flying, no progress, roundabout routes, the basket jerked faster than the winch, a helicopter inside a tower, any boat
@@ -35,7 +38,7 @@ npm run check -- --accept              # save as the new baseline (only after sh
 
 Runs with fewer seeds than the baseline skip the performance comparison; their rules still apply.
 
-## Real page: `npm run play-check` (`tools/play-check.mjs`)
+## Real page: `npm run play-check` (`tools/checks/play-check.mjs`)
 
 Loads the ordinary page with drawing and sound on the real GPU (`--use-angle=d3d11 --enable-gpu
 --ignore-gpu-blocklist`), clicks through the start menu, holds W with real key presses in real time, and fails on:
@@ -69,9 +72,9 @@ Each stages scenes with normal menus and fixed seeds and checks geometry or stat
 | `npm run menu-check` | 24 menu combinations incl. remembered choices and mixed controls at 600 and 1280 px |
 | `npm run celebration-check` | 24 celebration cases: placement, particle budget, hints |
 | `npm run analog-check` | stick dead zone mapping, slow seaplane taxi, reverse, full-power takeoff, synthetic gamepads |
-| `node tools/volcano-check.mjs` | Volcano Isle authored scenery, page and shader errors |
-| `node tools/volcano-controls.mjs` | 24 volcano views across controls, crews and missions |
-| `node tools/hosted-check.mjs` | hosted build: asset count, first-load and reload size, caching |
+| `node tools/checks/volcano-check.mjs` | Volcano Isle authored scenery, page and shader errors |
+| `node tools/checks/volcano-controls.mjs` | 24 volcano views across controls, crews and missions |
+| `node tools/checks/hosted-check.mjs` | hosted build: asset count, first-load and reload size, caching |
 
 ## Renderer and art
 
@@ -79,10 +82,10 @@ Each stages scenes with normal menus and fixed seeds and checks geometry or stat
 |---|---|
 | `npm run render-check` | shadow parity with reflections on/off and resource lifetime; run alone |
 | `npm run profile -- --seconds 20` | CPU/GPU percentiles and screenshots for every combination; `--only`, `--dpr`, `--out`; run alone |
-| `node tools/vehicle-shots.mjs --vehicle plane --light day,dusk,storm` | vehicle close-ups (`--views door,cockpit`), to `build/shots/` |
-| `node tools/scene-shots.mjs --light day,dusk --only snow` | each zone from above, mid range and shore |
+| `node tools/review/vehicle-shots.mjs --vehicle plane --light day,dusk,storm` | vehicle close-ups (`--views door,cockpit`), to `build/shots/` |
+| `node tools/review/scene-shots.mjs --light day,dusk --only snow` | each zone from above, mid range and shore |
 
 ## In the page
 
-`tools/soak.js` and `tools/sim-checks.js` are fetched from the dev server and evaluated in the page; see the
+`tools/checks/soak.js` and `tools/checks/sim-checks.js` are fetched from the dev server and evaluated in the page; see the
 `debug-a-seed` skill.

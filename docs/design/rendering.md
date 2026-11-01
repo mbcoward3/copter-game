@@ -29,10 +29,10 @@ considered and set aside in October 2026.
 | Area | Required outcome | Check |
 |---|---|---|
 | Shadows | same camera and quality: reflections on/off give the same set of main-view shadow casters; each viewport updates once | `npm run render-check` |
-| Lifetime | repeated retirement releases private resources, preserves shared ones; programs stay flat | `npm run render-check`, `test-render-resources` |
+| Lifetime | repeated retirement releases private resources, preserves shared ones; programs stay flat | `npm run render-check`, `tools/test/render-resources.mjs` |
 | Uploads | unchanged instances skip upload; changed ones upload only the active prefix | `npm test` |
 | Measurement | serial, seeded real-page captures with CPU/GPU percentiles, full-frame counters, screenshots and memory | `npm run profile` |
-| Pipeline | every build writes `build/asset-report.json` (budgets and contracts); hosted and offline builds share one source | `npm run build`, `node tools/hosted-check.mjs` |
+| Pipeline | every build writes `build/asset-report.json` (budgets and contracts); hosted and offline builds share one source | `npm run build`, `node tools/checks/hosted-check.mjs` |
 
 Reference numbers (24 October 2026, Chrome/ANGLE D3D11, RX 6950 XT, 1440×900, DPR 1, Best): every-frame p95
 7.0–7.1 ms at the display cap; GPU p95 5.9–9.8 ms solo and 8.0–10.9 ms split; CPU submission p95 at most 2.6 ms solo
@@ -66,8 +66,8 @@ performance by structure (passes, draws, programs) first, and run profiling alon
   fire, so check positions and screenshots before blaming firefighting for a cost.
 - Memory investigations: warm every animal type first and record the plateau, then repeat mission changes, rescues
   and retirement. New cached textures on first use are expected; private animal materials and props must retire.
-- `node tools/vehicle-shots.mjs --vehicle plane --light day,dusk,storm` (also `--views door,cockpit`) and
-  `node tools/scene-shots.mjs --light day,dusk` write review captures to `build/shots/`.
+- `node tools/review/vehicle-shots.mjs --vehicle plane --light day,dusk,storm` (also `--views door,cockpit`) and
+  `node tools/review/scene-shots.mjs --light day,dusk` write review captures to `build/shots/`.
 - `__game.debug.pick(x, y)` names the object and material under a pixel of the menu camera.
 
 ## Model notes
@@ -76,7 +76,7 @@ performance by structure (passes, draws, programs) first, and run profiling alon
   portholes, a real cabin behind the door, and separate rudder and elevators (`Vehicle_PlaneRudder`,
   `Vehicle_PlaneElevator`) on contract sockets that move with turns and climbs.
 - Foliage: see-through texels keep the foliage colour (`bleedTex`), so distant trees don't go black.
-- `tools/build_models.py` writes its baked shading to the absolute output folder; before that, Blender saved it
+- `tools/assets/build_models.py` writes its baked shading to the absolute output folder; before that, Blender saved it
   elsewhere and models kept stale shading after shape changes.
 
 ## Not verified on this machine
