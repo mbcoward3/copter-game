@@ -351,6 +351,6 @@
     }
   },
   "acceptanceNotes": {
-    "heli:snow": "Refreshed for the previously merged summit and iceberg scenery. Original game and polish build both complete in 131.2 s with 1.8 turn-direction changes/min and no rule failures; see RESCUE-POLISH.md."
+    "heli:snow": "Refreshed for the previously merged summit and iceberg scenery. Original game and polish build both complete in 131.2 s with 1.8 turn-direction changes/min and no rule failures; see docs/design/zones.md."
   }
 }

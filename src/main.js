@@ -687,7 +687,7 @@ function blockedAt(p, fx_, fz_, dist, pad = 3) {
   return shallow(x, z) || rockNear(x, z, pad);
 }
 // ================================================================= the easy seaplane's autopilot
-// What it should visibly do is written down, as numbers, in AIRPLANE-SPEC.md ("Acceptance checks"), and checked by
+// What it should visibly do is written down, as numbers, in docs/design/vehicles.md ("Seaplane acceptance"), and checked by
 // npm run check and npm run play-check. In short: it comes down on open water as near as it safely can to whoever (or
 // whatever fire) it is going to, flown in from a lead-in point well back so it is lined up before it descends (if not,
 // it goes round, and after twice round it picks another spot). Then it taxis the rest. It takes off from where it is,
@@ -3650,7 +3650,7 @@ const debug = {
     return addWaiting(kind, c.x, c.z);
   },
   camp(i) { const site = SITES[i], c = campSpot(site); site.busy = true; return addWaiting('camp', c.x, c.z, { site }); },
-  // the snowy peaks' acceptance checks that need the real world (ICY-PEAKS.md): a list of what is wrong, empty if nothing
+  // the snowy peaks' acceptance checks that need the real world (docs/design/zones.md): a list of what is wrong, empty if nothing
   icyCheck() {
     const bad = [], snowSea = world.spawn.zoneSea.snow || [];
     for (const B of world.bergs) {

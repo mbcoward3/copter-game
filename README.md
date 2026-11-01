@@ -62,72 +62,24 @@ recordings from [BigSoundBank](https://bigsoundbank.com) (CC0); the jingles betw
 [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Propeller-plane-flying-steady-01.wav), CC BY-SA 4.0.
 
 ## Changing the game
-Source is in `src/`. The current game is the only maintained implementation.
-Models, ground pictures, and sounds are in `src/assets/`; `npm run build` bundles them directly.
-Blender generators and asset packers live in `tools/` and are only needed when changing those assets.
-After editing:
 
     npm install        # first time only
     npm run build      # rebuilds rescue-squad-3d.html
-    npm test           # flight-clearance, audio-lifecycle and firefighting regressions
-    npm run check      # plays every machine through every mission, checks the rules, compares with the baseline
-    npm run play-check # plays the real page, drawn, in real time with real key presses, and saves screenshots
-    npm run serve      # optional dev server on http://localhost:5173
+    npm test           # unit tests
+    npm run check      # plays every machine through every mission in a headless simulation (needs Google Chrome)
+    npm run play-check # plays the real page with real key presses and saves screenshots to build/play/
+    npm run serve      # dev server on http://localhost:5173 (set COPTER_PORT for a second checkout)
 
-`npm run check` (`tools/check.mjs`, needs Google Chrome) plays each machine through each mission from fixed seeds in a
-headless browser with nothing drawn, holding only go, and checks every tenth of a second that nothing breaks a rule:
-a hull on land, the seaplane flown into a hill, landing on a beach or far from where it is going, slow to take off or
-making no progress, the helicopter's basket jerked faster than the winch winds, a helicopter inside a tower, the patrol
-boat or a sailing boat aground, anything flung off (the seaplane's rules are listed in AIRPLANE-SPEC.md). It also checks
-the map (every spawn point in water) and compares finish times, turning and stuck time with `tools/check-baseline.json`, failing on anything clearly worse.
-A seed (`rescue-squad-3d.html?test&seed=N`) always plays out the same way, so a failure can be replayed exactly; see the
-top of `tools/check.mjs` for options (`--only plane`, `--seeds 5`, `--frame 0.1` for a slow laptop, `--accept`).
-A seed plays the same in the dev page as in the check: test mode fixes the graphics detail and ignores saved settings.
+Source is in `src/`; models, ground pictures and sounds are in `src/assets/`. Start with [`AGENTS.md`](AGENTS.md)
+for the code map and working rules (written for coding agents, and just as useful for people), then:
 
-`npm run play-check` (`tools/play-check.mjs`) is the other half: it opens the ordinary page on the real graphics card,
-clicks through the start menu, holds go for each machine and mission (and two pilots together), and fails on any error,
-a number gone bad, a fresh outing not starting at home, no progress, a cable not joined to its basket or bucket, or a
-boat in a pier. Look at the screenshots it saves in `build/play/`: passing checks are not the same as looking right.
+- [`docs/design/`](docs/design/) for what each part of the game should do, with its acceptance numbers:
+  [vehicles](docs/design/vehicles.md), [guidance and HUD](docs/design/guidance-and-hud.md),
+  [missions](docs/design/missions.md), [zones](docs/design/zones.md), [rendering](docs/design/rendering.md).
+- [`docs/backlog.md`](docs/backlog.md) for agreed future work and known gaps.
+- [`.agents/skills/`](.agents/skills/) for step-by-step procedures: checking a change, debugging a seed, rebuilding
+  assets, shipping a PR.
 
-To rebuild models with Blender, run:
-
-    blender --background --python tools/build_models.py -- build/models
-    blender --background --python tools/build_vehicles.py -- build/vehicles
-    blender --background --python tools/build_zones.py -- build/zones
-    blender --background --python tools/pack_models.py -- build/models src/assets build/vehicles build/zones
-
-`build_models.py` makes the helicopter, animals, and home scenery; `build_vehicles.py` makes the boat, seaplane,
-sea arch, stilt hut, and kayak; `build_zones.py` makes regional buildings, trees, and wildlife.
-The local model exports and baked shading are in `build/models/`. Ground-photo inputs are in `build/photos/`;
-run `blender --background --python tools/pack_textures.py -- build/photos src/assets` to repack them.
-These ignored working inputs are not required to build or play the game; model exports can be regenerated with
-the commands above. For a fresh checkout, ground-photo inputs must be supplied separately (Poly Haven CC0;
-the filenames are listed in `tools/pack_textures.py`), as must the audio inputs listed in `tools/pack_audio.py`.
-
-`tools/soak.js` plays the game unattended in the browser and reports rescues and stuck time. Its default test holds only
-go, including at home: `soak('heli', 300)`. It does not steer on the pilot's behalf. See the comment at its top for options.
-
-Use [`HOW-WE-CHECK.md`](HOW-WE-CHECK.md) for the development/checking workflow and
-[`AIRPLANE-SPEC.md`](AIRPLANE-SPEC.md) for the seaplane's current acceptance criteria.
-`tools/sim-checks.js`, run by `npm run check`, is the maintained source of simulation rules and benchmark metrics.
-`npm run assisted-hint-check` checks assisted startup and wrapping fixtures across all vehicles, rescue/fire,
-solo/two-player and narrow/wide views. It verifies readable HUD geometry, not mission completion.
-`npm run crew-trip-check -- --seeds 8` records per-pilot pickup and homeward distance, time and turns for
-helicopter/seaplane, two-seaplane and seaplane/boat crews, with focused efficiency regressions. It advances
-a deterministic test page; `play-check` separately requires the Harbour Town two-seaplane recovery mission to finish.
-
-Pushing `main` tests/builds the game, publishes and signs its container image and
-[app-owned Helm chart](charts/copter-game/README.md), then promotes the signed OCI
-chart to `ghcr.io/mbcoward3/charts/copter-game:latest`. Each chart embeds its image
-by digest. Homelab Flux can follow that chart automatically; this workflow no
-longer needs write access or a deploy key to the homelab repository. The consumer
-must complete its existing-resource ownership handoff before enabling Helm.
-
-For a second local checkout, set `COPTER_PORT` before serving (PowerShell: `$env:COPTER_PORT=5174`).
-The development server listens on this machine only.
-
-Rendering and model development are documented in [`MODEL-PIPELINE.md`](MODEL-PIPELINE.md).
-`npm run render-check` verifies shadow consistency and resource ownership on the real renderer;
-`npm run profile` captures serial live CPU/GPU measurements and screenshots. Run profiling separately
-from other browser checks. Each build writes `build/asset-report.json` with model budgets and contracts.
-`npm run build:hosted` produces the cacheable hosted build in `build/site/` alongside the offline HTML.
+Pushing `main` tests and builds the game, publishes and signs its container image and
+[app-owned Helm chart](charts/copter-game/README.md), and promotes the signed chart to
+`ghcr.io/mbcoward3/charts/copter-game:latest`, which the homelab's Flux follows.

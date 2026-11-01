@@ -2,7 +2,8 @@ node_modules/
 rescue-squad-3d.html
 shots/
 
-.claude/
+.claude/*
+!.claude/skills/
 .mcp.json
 src/assets/pictures.js
 src/assets/sfx.js

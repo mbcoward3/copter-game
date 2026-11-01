@@ -1417,7 +1417,7 @@ export function createWorld(scene, renderer) {
   for (const s of ISLETS) keepOut.push({ x: s.x, z: s.z, r: 6.5 });      // (whoever is stranded on a sandbar stands in the middle)
   for (const I of ISLANDS) for (const D of I.dents || []) if (D.r < 10) keepOut.push({ x: D.x, z: D.z, r: D.r + 9 });      // (the atoll's reef channel)
   // (the snowy peaks' islands draw their plants and rocks from a stream of their own, and the shared stream skips the
-  // draws they took before they were reworked (see ICY-PEAKS.md), so every island and spawn spot made after them keeps
+  // draws they took before they were reworked (see docs/design/zones.md), so every island and spawn spot made after them keeps
   // exactly what it had)
   const OWN = new Map([[ISLANDS.find(I => I.x === 30 && I.z === -505), 15569], [ISLANDS.find(I => I.x === 128 && I.z === -548), 3651]]);
   for (const I of ISLANDS) {
