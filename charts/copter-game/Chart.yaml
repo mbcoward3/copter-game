@@ -1,0 +1,6 @@
+apiVersion: v2
+name: copter-game
+description: Little Rescue Squad 3D web application
+type: application
+version: 0.1.0
+appVersion: development
