@@ -1260,7 +1260,7 @@ export function createWorld(scene, renderer) {
     const ROOFS = ['#c8553d', '#a8442f', '#5d6b78', '#3f5f7a', '#b4613f'].map(c => new THREE.Color(c).multiplyScalar(2.6));
     // The town is laid out on streets: a high street running up from the harbour, two cross streets, and terraces of
     // houses shoulder to shoulder along both sides of each, their fronts to the street. Three kinds of house (see
-    // tools/build_zones.py), each painted its own colour; only the walls' and roofs' paint takes the colour, so the
+    // tools/assets/build_zones.py), each painted its own colour; only the walls' and roofs' paint takes the colour, so the
     // window frames stay white and the shutters dark.
     const STREETS = [[[462, -160], [526, -160]], [[480, -192], [480, -128]], [[506, -192], [506, -128]]];
     keepOut.push({ x: T.x, z: T.z, r: T.r + 2 });      // (no trees in the middle of town)
@@ -1272,7 +1272,7 @@ export function createWorld(scene, renderer) {
       return { name, W: w.size[0] - 0.4, L: w.size[2] - 1.0, top: r.min[1] + r.size[1], ridge: w.min[1] + w.size[1] + 0.2, list: [] };
     });
     const placed = [];
-    // where each kind's chimney pot is, from tools/build_zones.py (front x, left y, up z there; the game's x = y, z = x)
+    // where each kind's chimney pot is, from tools/assets/build_zones.py (front x, left y, up z there; the game's x = y, z = x)
     const CHIMNEY = { World_HouseA: [-1.5, 1.1, 11.6], World_HouseB: [-1.2, 1.89, 9.0], World_HouseC: [-1.3, 2.3, 8.8] };
     world.chimneys = [];
     const inRect = (x, z, R, pad) => { const dx = x - R.x, dz = z - R.z, a = dx * R.fx + dz * R.fz, b = dx * R.fz - dz * R.fx; return Math.abs(a) < R.L / 2 + pad && Math.abs(b) < R.W / 2 + pad; };
@@ -1817,7 +1817,7 @@ export function createWorld(scene, renderer) {
 // and stir in the wind; the higher up the plant, the more it moves.
 const windUniform = { value: 0 }, gustUniform = { value: 1 };
 const foliageCache = new Map();
-// a spray of leaves on a twig, painted once and worn by every card of the broad-leaved trees (see CARDS in tools/pack_models.py)
+// a spray of leaves on a twig, painted once and worn by every card of the broad-leaved trees (see CARDS in tools/assets/pack_models.py)
 let sprayTex;
 function leafSpray() {
   if (sprayTex) return sprayTex;

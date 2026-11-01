@@ -42,7 +42,7 @@ the gauge at 600 px; the 601–1100 px band has its own rule.
 | A grounded helicopter knows how to leave a remote pickup | names Space (solo/Red) or Enter (Blue) before the trip home |
 | Partly filled crews keep the choice | away from home, acknowledges passengers and offers another rescue or home |
 
-Checked by `test-manual-guidance` and `npm run manual-guidance-check` (44 staged phases across six layouts). Rating
+Checked by `tools/test/manual-guidance.mjs` and `npm run manual-guidance-check` (44 staged phases across six layouts). Rating
 flashes and fire guidance keep their priority over these hints.
 
 ## Manual instruments
@@ -52,11 +52,11 @@ The compact instrument panel, per pilot, separate from the fire equipment gauge.
 | Requirement | Acceptance | Check |
 |---|---|---|
 | Instruments appear for manual pilots | visible within 0.3 s of starting or resuming manual; hidden for each assisted pilot | `pilot-check`, `play-check` |
-| Speed is real | km/h within 1 km/h of ground speed; boat reversing reads Astern | `pilot-check`, `test-pilot-feedback` |
+| Speed is real | km/h within 1 km/h of ground speed; boat reversing reads Astern | `pilot-check`, `tools/test/pilot-feedback.mjs` |
 | Aircraft can judge clearance | height in m within 1 m; climb/descent in m/s within 0.2 m/s | `pilot-check` |
 | Boats get boating readouts | speed and friend/home/pier distance, no altitude | `pilot-check` |
 | Range helps the approach | nearest eligible friend within 120 m while seats remain; otherwise home distance with passengers; pier gap within 90 m for boat and afloat seaplane | rendered readouts |
-| Feedback teaches the scoring | one- and two-star landings, pickups and berthing include one actionable target; three stars stay a celebration | `test-pilot-feedback` |
+| Feedback teaches the scoring | one- and two-star landings, pickups and berthing include one actionable target; three stars stay a celebration | `tools/test/pilot-feedback.mjs` |
 | The HUD works in mixed-age play | instruments, hint and radar don't overlap or leave the pane at 1280×720 and 600×720 | `pilot-check` |
 
 Instruments update with the rendered frame (reusing row nodes, changing only values that moved). The rest of the
@@ -72,7 +72,7 @@ HUD refreshes every 0.2 s. A 0.2 s refresh lagged the boat's sharp deceleration.
 | Returning pilots read the destination | helicopter shows Home range; boat and seaplane show Jetty range, then Pier gap when close and afloat |
 
 Gold friends, orange fires, blue fill points and the other pilot keep their visual language. Checked by
-`npm run radar-check` (12 staged scenes) and pure eligibility cases in `test-rescue-guidance`.
+`npm run radar-check` (12 staged scenes) and pure eligibility cases in `tools/test/rescue-guidance.mjs`.
 
 ## Menu guidance
 
@@ -111,5 +111,5 @@ cards.
 | Mission flow is unchanged | same eight-second celebration, sticker, sound cadence and next mission; no teleport |
 
 Placement uses each camera's view and local terrain, and never a route planner or the gameplay random stream.
-Checked by `npm run celebration-check` (24 cases) and `test-celebration`. Staged crews use the world's charted
+Checked by `npm run celebration-check` (24 cases) and `tools/test/celebration.mjs`. Staged crews use the world's charted
 water rescue positions in forest and reef: a generic zone-edge position once put the boat on land.

@@ -35,10 +35,35 @@ jobs:
       - run: npm test
       - run: npm run test:docs
       - run: npm run build:hosted
-      - run: python3 tools/test-chart.py
+      - run: python3 tools/deploy/test-chart.py
+
+  # Plays every vehicle through every mission from fixed seeds in headless Chrome (nothing drawn) and fails on a
+  # broken rule, an unfinished mission or a score worse than tools/checks/check-baseline.json.
+  simulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      # Ubuntu 24.04 blocks the unprivileged user namespaces Chrome's sandbox needs.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: npm ci
+      - run: npm run build
+      - run: npm run check
+        env:
+          CHROME: /usr/bin/google-chrome
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-results
+          path: build/check/
+          if-no-files-found: ignore
 
   publish:
-    needs: validate
+    needs: [validate, simulate]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 25

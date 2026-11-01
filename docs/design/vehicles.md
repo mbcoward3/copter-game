@@ -6,7 +6,7 @@ differ on purpose and the acceptance rules each one must keep.
 
 Code: vehicle state and physics in `src/main.js` (sections `flight`, `seaplane`, `the easy seaplane's autopilot`
 with `planePilot`, `fast rescue boat`, `winch + basket`); seaplane paths in `src/flightpath.mjs`; water/air clearance charts and A*
-routes in `src/nav.js`; models in `src/models.js` and `tools/build_vehicles.py`.
+routes in `src/nav.js`; models in `src/models.js` and `tools/assets/build_vehicles.py`.
 
 ## How they differ, and why
 
@@ -47,8 +47,8 @@ fail states: nothing crashes, sinks or runs out.
 
 ### Seaplane acceptance (assisted, holding only go)
 
-Each rule is in `tools/sim-checks.js` (run by `npm run check`) and, where it needs the real page, in
-`tools/play-check.mjs`.
+Each rule is in `tools/checks/sim-checks.js` (run by `npm run check`) and, where it needs the real page, in
+`tools/checks/play-check.mjs`.
 
 | What you would see | Limit | Check |
 |---|---|---|
@@ -112,7 +112,7 @@ Per pilot, under "Choose vehicles and controls". Keys are in `README.md`.
 
 | Requirement | Acceptance | Evidence |
 |---|---|---|
-| Fine motion starts smoothly beyond the stick dead zone | inputs through ±0.18 give zero; ±0.1801 gives below 0.001; full travel reaches ±1 | `test-manual-controls`, `analog-check` |
+| Fine motion starts smoothly beyond the stick dead zone | inputs through ±0.18 give zero; ±0.1801 gives below 0.001; full travel reaches ±1 | `tools/test/manual-controls.mjs`, `analog-check` |
 | Small throttle gives a controlled water taxi | raw forward stick 0.35: seaplane stays afloat, below 7 m/s after 6 s | `analog-check` (synthetic gamepad) |
 | Reverse taxi respects analog magnitude | raw reverse 0.35 settles below 1 m/s astern | `analog-check` |
 | Full takeoff power remains | full keyboard W after the slow taxi gets airborne | real key check |

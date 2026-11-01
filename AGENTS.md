@@ -16,9 +16,12 @@ This file is the shared instructions for every coding agent (Codex reads it dire
 | `src/*.mjs` | Pure logic with no three.js or DOM, unit-tested in Node: flight paths, firefighting, missions, guidance, feedback, controls. |
 | `src/*.js` (others) | three.js/DOM modules: models, assets, audio, fx, nav (A* routes), life, traffic, seeded random (`seed.js`). |
 | `src/assets/` | Packed models, AO and ground pictures, sounds. Committed; the build bundles them. |
-| `tools/test-*.mjs` | Unit tests (`npm test`). |
-| `tools/*-check.mjs`, `tools/sim-checks.js` | Browser checks: simulation rules, the real page, HUD/menu/radar fixtures. |
-| `tools/*.py` | Blender model generators and asset packers. |
+| `tools/test/` | Unit tests, one `.mjs` per module; `npm test` runs every file in the folder. |
+| `tools/checks/` | Browser checks: `check.mjs` + `sim-checks.js` (simulation rules, `check-baseline.json`), `play-check.mjs` (the real page) and focused `*-check.mjs` fixtures. `soak.js` runs in the page. |
+| `tools/review/` | Screenshot and profiling tools for art and performance review. |
+| `tools/assets/` | Blender model generators and asset packers (Python). |
+| `tools/lib/` | Shared helpers: `cdp.mjs` (headless Chrome driver), `run-tests.mjs`. |
+| `tools/agent-docs/`, `tools/deploy/` | Skill mirror and docs test; Helm chart test. |
 | `docs/design/` | What each area should do, as acceptance tables: vehicles, guidance and HUD, missions, zones, rendering. |
 | `docs/backlog.md` | Agreed future work, known gaps and open questions. |
 | `.agents/skills/` | Repo skills (Agent Skills format). `.claude/skills/` is a generated mirror. |
@@ -31,7 +34,7 @@ npm install          # first time
 npm run build        # offline HTML; build:hosted also writes build/site/
 npm test             # unit tests (also run inside the Docker build)
 npm run test:docs    # skills follow the spec, mirror matches, doc links resolve
-npm run check        # headless simulation of every vehicle x mission x seed (needs Chrome)
+npm run check        # headless simulation of every vehicle x mission x seed (needs Chrome; CI gates on it)
 npm run play-check   # the real page, drawn, real key presses; screenshots in build/play/
 npm run serve        # dev server on http://localhost:5173 (COPTER_PORT to change)
 npm run sync-skills  # after editing .agents/skills/
@@ -90,7 +93,7 @@ rescue and firefighting missions.
 - **Presentation reads state; it never plans.** HUD, radar, hints and celebrations read live state and known geometry,
   never route planners or reachability caches. Radar, range and hints share one eligibility rule.
 - **Gameplay is independent of graphics quality**, LOD and resolution.
-- **Pure logic goes in `src/*.mjs`** with a `tools/test-*.mjs` test, so it is checkable without a browser.
+- **Pure logic goes in `src/*.mjs`** with a test in `tools/test/`, so it is checkable without a browser.
 - **Assisted play never fails.** No crash, sink, timeout or blocking toddler action, for either pilot.
 
 # Docs

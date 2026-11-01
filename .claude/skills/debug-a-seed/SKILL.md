@@ -17,7 +17,7 @@ A seed always plays out the same way, so a failure from `npm run check` can be r
 3. Load the rules into the page and play the failing mission:
 
    ```js
-   eval(await (await fetch('/tools/sim-checks.js')).text());
+   eval(await (await fetch('/tools/checks/sim-checks.js')).text());
    simCheck({ vehicle: 'plane', zone: 'home', fire: false, seconds: 120 })
    ```
 
@@ -42,7 +42,7 @@ A seed always plays out the same way, so a failure from `npm run check` can be r
 
 ## Unattended play
 
-`eval(await (await fetch('/tools/soak.js')).text()); soak('heli', 300)` plays with drawing off and reports rescues
+`eval(await (await fetch('/tools/checks/soak.js')).text()); soak('heli', 300)` plays with drawing off and reports rescues
 and stuck time. By default it holds only go. `{ steer: true }` adds exploratory steering, `{ pro: true }` uses manual
 controls. Use it after any change to autopilots, spawns or obstacles: it has found boats wedged where no screenshot
 showed it.

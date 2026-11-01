@@ -15,22 +15,22 @@ The procedural Blender scripts are the editable source:
 
 | Script | Makes | Output |
 |---|---|---|
-| `tools/build_models.py` | helicopter, animals, home scenery | `build/models` |
-| `tools/build_vehicles.py` | boat, seaplane (incl. rudder/elevator parts), stilt hut, kayak | `build/vehicles` |
-| `tools/build_zones.py` | regional buildings, trees, wildlife, zone props | `build/zones` |
+| `tools/assets/build_models.py` | helicopter, animals, home scenery | `build/models` |
+| `tools/assets/build_vehicles.py` | boat, seaplane (incl. rudder/elevator parts), stilt hut, kayak | `build/vehicles` |
+| `tools/assets/build_zones.py` | regional buildings, trees, wildlife, zone props | `build/zones` |
 
 PowerShell (`blender` is `C:/Program Files/Blender Foundation/Blender 5.2/blender.exe` on this machine):
 
 ```powershell
 $blender = 'C:/Program Files/Blender Foundation/Blender 5.2/blender.exe'
-& $blender --background --python tools/build_zones.py -- build/zones
+& $blender --background --python tools/assets/build_zones.py -- build/zones
 ```
 
 Then pack. **Prefer `--add` with a folder of only the changed FBX files:** some models in `src/assets/models.bin`
 were first packed from an Unreal export folder that no longer exists, so a full repack can silently drop them.
 
 ```powershell
-& $blender --background --python tools/pack_models.py -- --add build/changed src/assets
+& $blender --background --python tools/assets/pack_models.py -- --add build/changed src/assets
 ```
 
 A full repack (`-- build/models src/assets build/vehicles build/zones`) is safe only after confirming every model
@@ -41,7 +41,7 @@ After packing:
 1. `git diff --stat src/assets` and revert AO pictures you didn't mean to change (a repack re-bakes some with noise,
    e.g. `ao/World_SkiHut.jpg`).
 2. `npm run build`, then read `build/asset-report.json` for triangle, material and size budgets.
-3. Review with `node tools/vehicle-shots.mjs` or `node tools/scene-shots.mjs`, and run the checks from the
+3. Review with `node tools/review/vehicle-shots.mjs` or `node tools/review/scene-shots.mjs`, and run the checks from the
    `check-a-change` skill.
 
 Contract rules (details in `docs/design/rendering.md`):
@@ -56,16 +56,16 @@ Contract rules (details in `docs/design/rendering.md`):
 
 ## Ground pictures
 
-Poly Haven CC0 photos (file names listed in `tools/pack_textures.py`), in `build/photos`:
+Poly Haven CC0 photos (file names listed in `tools/assets/pack_textures.py`), in `build/photos`:
 
 ```powershell
-& $blender --background --python tools/pack_textures.py -- build/photos src/assets
+& $blender --background --python tools/assets/pack_textures.py -- build/photos src/assets
 ```
 
 ## Sounds
 
-Recordings go in `build/audio-src` (sources and numbers listed at the top of `tools/pack_audio.py`), then
-`python tools/pack_audio.py` cuts loops and one-shots into `src/assets/sfx/`. `python tools/audio_scan.py
+Recordings go in `build/audio-src` (sources and numbers listed at the top of `tools/assets/pack_audio.py`), then
+`python tools/assets/pack_audio.py` cuts loops and one-shots into `src/assets/sfx/`. `python tools/assets/audio_scan.py
 build/audio-src/*.mp3` prints loudness and brightness per second to pick steady stretches.
 
 The bar for sound: real recordings only, no narrator; level each one, make it quieter with distance and check for
