@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "test": "node tools/test-flight-safety.mjs && node tools/test-flightpath.mjs && node tools/test-audio.mjs && node tools/test-firefighting.mjs && node tools/test-fire-scene.mjs && node tools/test-render-resources.mjs && node tools/test-mission-transition.mjs && node tools/test-check-comparison.mjs && node tools/test-pilot-feedback.mjs && node tools/test-rescue-guidance.mjs && node tools/test-celebration.mjs && node tools/test-manual-controls.mjs && node tools/test-manual-guidance.mjs && node tools/test-fire-progress.mjs",
+    "test:docs": "node tools/test-agent-docs.mjs",
     "build": "node build.mjs",
     "serve": "node serve.mjs",
     "check": "node tools/check.mjs",
@@ -19,7 +20,8 @@
     "profile": "node tools/profile-render.mjs",
     "build:hosted": "node build.mjs --hosted",
     "assisted-hint-check": "node tools/assisted-hint-check.mjs",
-    "crew-trip-check": "node tools/crew-trip-check.mjs"
+    "crew-trip-check": "node tools/crew-trip-check.mjs",
+    "sync-skills": "node tools/sync-skills.mjs"
   },
   "license": "ISC",
   "devDependencies": {

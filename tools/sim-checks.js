@@ -24,7 +24,7 @@
     let dist = 0, turn = 0, flips = 0, lastSign = 0, overs = 0, overNear = false, stuck = 0, still = 0, landings = 0, wasAfloat = p.afloat, firstAt = null, done = null;
     let lastYaw = p.yaw;
     const last = p.pos.clone(), sec0 = p.pos.clone();
-    // the seaplane's acceptance checks (AIRPLANE-SPEC.md): where it is going now, and how it is getting on
+    // the seaplane's acceptance checks (docs/design/vehicles.md): where it is going now, and how it is getting on
     const goalOf = () => {
       const F = p.fireJob && p.fireJob.fire;
       if (F) return F;      // (scooping or dropping, it works near the fire)

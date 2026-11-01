@@ -8,3 +8,5 @@ shots
 .mcp.json
 *.html
 *.md
+.agents
+CLAUDE.md

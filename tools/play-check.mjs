@@ -10,7 +10,7 @@
 //   - moving on to the next mission leaves everyone where they are (only a fresh outing starts at home)
 //   - the snowy peaks' scenery is in place (__game.debug.icyCheck: icebergs charted and clear of rescue spots, penguins
 //     and the lodge on the ground), and in its own outing at night the easy helicopter, holding only go, fetches the
-//     climber off the summit without any new shaders being built on the way (see ICY-PEAKS.md)
+//     climber off the summit without any new shaders being built on the way (see docs/design/zones.md)
 // and saves screenshots along the way (build/play/) to look at.
 //
 //   npm run play-check                      every machine x Rescue / Firefighting / Surprise me, solo, plus two together

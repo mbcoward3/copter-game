@@ -1,4 +1,4 @@
-// The snowy peaks' own things (see ICY-PEAKS.md): icebergs standing offshore and bits of ice bobbing round the glacier's
+// The snowy peaks' own things (see docs/design/zones.md): icebergs standing offshore and bits of ice bobbing round the glacier's
 // foot, a colony of penguins by the cove that waddle about and now and then belly-slide into the sea for a swim, smoke
 // from the lodge's chimney, and the northern lights over the peaks at night.
 import * as THREE from 'three';
