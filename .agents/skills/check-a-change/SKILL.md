@@ -51,6 +51,7 @@ Always: `npm test`, `npm run build`. Docs or skills: `npm run test:docs`. Then b
 | Change touches | Also run |
 |---|---|
 | Any gameplay, autopilot, physics, spawn or obstacle | `npm run check` and `npm run play-check` |
+| Moving or refactoring code with no intended behaviour change | `npm run check` on main and on the change (`--game`, see Gotchas) with identical score lines; for vehicle code also `--only <vehicle> --seeds 8` and `crew-trip-check` identical; then `play-check` |
 | Seaplane routing, takeoff or landing | `npm run check -- --plane-seeds 8`, `npm run crew-trip-check` |
 | Two-player behaviour | `npm run crew-trip-check`, play-check (includes paired outings) |
 | HUD, hints or instruments | `npm run assisted-hint-check`, `npm run manual-guidance-check`, `npm run pilot-check` |

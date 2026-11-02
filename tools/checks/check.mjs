@@ -70,6 +70,9 @@ async function worker() {
   } finally { browser.close(); }
 }
 await Promise.all(Array.from({ length: Math.min(WORKERS, jobs.length) }, worker));
+// (workers finish in any order; sort so the averages add up in the same order every run: a mean exactly on a rounding
+// boundary, like 7.6 / 8 = 0.95, otherwise prints as 0.9 one run and 1 the next)
+results.sort((a, b) => a.key.localeCompare(b.key) || a.seed - b.seed);
 // (the two-player crew check starts a two-player outing, so it gets a page of its own)
 {
   const browser = launch();
