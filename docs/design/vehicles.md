@@ -4,9 +4,11 @@ The three machines: helicopter, seaplane (a Coast Guard flying boat) and fast re
 players can mix. Per `AGENTS.md`, an improvement to one is assessed for all three. This page records how they
 differ on purpose and the acceptance rules each one must keep.
 
-Code: vehicle state and physics in `src/main.js` (sections `flight`, `seaplane`, `fast rescue boat`, `winch + basket`);
-the seaplane's autopilot (`planePilot`, landing choice, approaches, takeoff runs) in `src/vehicles/seaplane-autopilot.js`; seaplane paths in `src/flightpath.mjs`; water/air clearance charts and A*
-routes in `src/nav.js`; models in `src/models.js` and `tools/assets/build_vehicles.py`.
+Code: shared vehicle state, the helicopter and the hull helpers in `src/main.js` (sections `flight`, `winch + basket`);
+the seaplane's flight model (`updatePlane`, `PL`) in `src/vehicles/seaplane.js` and its autopilot (`planePilot`, landing
+choice, approaches, takeoff runs) in `src/vehicles/seaplane-autopilot.js`; the boat (`updateBoat`, `BT`) in
+`src/vehicles/boat.js`; seaplane paths in `src/flightpath.mjs`; water/air clearance charts and A* routes in
+`src/nav.js`; models in `src/models.js` and `tools/assets/build_vehicles.py`.
 
 ## How they differ, and why
 

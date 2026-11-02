@@ -11,8 +11,8 @@ This file is the shared instructions for every coding agent (Codex reads it dire
 
 | Path | What it is |
 |---|---|
-| `src/main.js` | Game: renderer, players, input, vehicle physics, the helicopter and boat autopilots, winch, camera, animals, fires, missions, HUD, main loop. Exposes `window.__game` for tools. Being split up one section at a time (see below). |
-| `src/vehicles/` | Code moved out of `main.js`, one module per piece: `seaplane-autopilot.js` (landing choice, approaches, takeoff runs, `planePilot`). |
+| `src/main.js` | Game: renderer, players, input, shared vehicle state, the helicopter, winch, camera, animals, fires, missions, HUD, main loop. Exposes `window.__game` for tools. Being split up one section at a time (see below). |
+| `src/vehicles/` | Code moved out of `main.js`, one module per piece: `seaplane.js` (flight model, `updatePlane`), `seaplane-autopilot.js` (landing choice, approaches, takeoff runs, `planePilot`), `boat.js` (`updateBoat`, assisted steering included). |
 | `src/world.js` | Terrain, sea, zones, scenery, shaders. Zone modules: `icy.js`, `volcano.js`, `reef.js`. |
 | `src/*.mjs` | Pure logic with no three.js or DOM, unit-tested in Node: flight paths, firefighting, missions, guidance, feedback, controls, `math.mjs` helpers. |
 | `src/*.js` (others) | three.js/DOM modules: models, assets, audio, fx, nav (A* routes), life, traffic, seeded random (`seed.js`). |
