@@ -11,9 +11,10 @@ This file is the shared instructions for every coding agent (Codex reads it dire
 
 | Path | What it is |
 |---|---|
-| `src/main.js` | Game: renderer, players, input, vehicles and autopilots, winch, camera, animals, fires, missions, HUD, main loop. Exposes `window.__game` for tools. |
+| `src/main.js` | Game: renderer, players, input, vehicle physics, the helicopter and boat autopilots, winch, camera, animals, fires, missions, HUD, main loop. Exposes `window.__game` for tools. Being split up one section at a time (see below). |
+| `src/vehicles/` | Code moved out of `main.js`, one module per piece: `seaplane-autopilot.js` (landing choice, approaches, takeoff runs, `planePilot`). |
 | `src/world.js` | Terrain, sea, zones, scenery, shaders. Zone modules: `icy.js`, `volcano.js`, `reef.js`. |
-| `src/*.mjs` | Pure logic with no three.js or DOM, unit-tested in Node: flight paths, firefighting, missions, guidance, feedback, controls. |
+| `src/*.mjs` | Pure logic with no three.js or DOM, unit-tested in Node: flight paths, firefighting, missions, guidance, feedback, controls, `math.mjs` helpers. |
 | `src/*.js` (others) | three.js/DOM modules: models, assets, audio, fx, nav (A* routes), life, traffic, seeded random (`seed.js`). |
 | `src/assets/` | Packed models, AO and ground pictures, sounds. Committed; the build bundles them. |
 | `tools/test/` | Unit tests, one `.mjs` per module; `npm test` runs every file in the folder. |
@@ -93,6 +94,9 @@ rescue and firefighting missions.
 - **Presentation reads state; it never plans.** HUD, radar, hints and celebrations read live state and known geometry,
   never route planners or reachability caches. Radar, range and hints share one eligibility rule.
 - **Gameplay is independent of graphics quality**, LOD and resolution.
+- **Splitting `main.js`:** move one section per PR into a module that exports a `create...(deps)` factory, taking the
+  game state it reads as arguments and returning what the rest of the game calls (see `src/vehicles/seaplane-autopilot.js`).
+  Move the code unchanged; the proof is `npm run check` reproducing main's mission scores exactly, plus play-check.
 - **Pure logic goes in `src/*.mjs`** with a test in `tools/test/`, so it is checkable without a browser.
 - **Assisted play never fails.** No crash, sink, timeout or blocking toddler action, for either pilot.
 
