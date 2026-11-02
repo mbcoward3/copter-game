@@ -39,6 +39,9 @@ async function work() {
   }
 }
 await Promise.all([work(), work()]);
+// (the two workers finish in either order; sort so the saved results compare line for line between runs and builds)
+results.sort((a, b) => a.crew.join("+").localeCompare(b.crew.join("+")) || a.zone.localeCompare(b.zone) || a.seed - b.seed);
+writeFileSync(out, JSON.stringify(results, null, 2));
 const failures = [];
 for (const r of results) {
   if(r.zone==='harbour'&&r.seed===8&&r.crew.join(',')==='plane,plane'&&(!r.done||r.seconds>180))failures.push('doing blocked takeoff recovery: two-plane Harbour seed 8 did not finish within 180 seconds');

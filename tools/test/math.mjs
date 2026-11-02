@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { MathUtils } from 'three';
-import { angDiff, clamp } from '../../src/math.mjs';
+import { angDiff, clamp, damp } from '../../src/math.mjs';
 
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-12, `${a} != ${b}`);
 close(angDiff(0.5, 0.2), 0.3);
@@ -15,4 +15,6 @@ for (let a = -10; a <= 10; a += 0.37) for (let b = -10; b <= 10; b += 0.53) {
 for (const [v, lo, hi] of [[5, 0, 1], [-5, 0, 1], [0.5, 0, 1], [3, 3, 3], [NaN, 0, 1]]) {
   assert.ok(Object.is(clamp(v, lo, hi), MathUtils.clamp(v, lo, hi)), `clamp(${v}, ${lo}, ${hi}) matches three.js`);
 }
-console.log('Heading difference wrapping and clamp (identical to three.js) passed');
+for (const [r, dt] of [[3, 1 / 30], [0.5, 0.1], [12, 0], [5, 2]]) assert.equal(damp(r, dt), 1 - Math.exp(-r * dt));
+close(damp(4, 0.25) + damp(4, 0.25) * (1 - damp(4, 0.25)), damp(4, 0.5));    // two half steps close the same gap as one whole one
+console.log('Heading difference wrapping, clamp (identical to three.js) and frame-rate independent damping passed');
